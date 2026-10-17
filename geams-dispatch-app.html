@@ -1387,27 +1387,101 @@ const DispatchData=((  )=>{
     const s=Math.sin(dLat/2)**2+Math.cos(aLat*toR)*Math.cos(bLat*toR)*Math.sin(dLng/2)**2;
     return 2*R*Math.atan2(Math.sqrt(s),Math.sqrt(1-s));
   }
+  // Navigation target: the civilian's LIVE position when a real civilian device
+  // is sharing it (they may have moved since the alert), else the recorded scene.
+  function target(){
+    const j=currentJob;
+    if(j._syncSource==='civilian-app' && !j.civilianCancelled && typeof j.civilianLat==='number' && typeof j.civilianLng==='number')
+      return {lat:j.civilianLat,lng:j.civilianLng,live:true};
+    return {lat:j.lat,lng:j.lng,live:false};
+  }
+  // ── ROAD ROUTE (OSRM) ── real road geometry, distance and duration from the
+  // officer's real GPS position to the target. If the routing service cannot be
+  // reached the app falls back to a straight line and says so (routeSource()).
+  const roadRoute={pts:[],distM:null,durS:null,at:0,fromLat:null,fromLng:null,toLat:null,toLng:null,pending:false,failAt:0};
+  const routeListeners=[];
+  function onRoute(cb){routeListeners.push(cb);}
+  function roadValid(){
+    if(roadRoute.distM==null||!roadRoute.pts.length)return false;
+    if(Date.now()-roadRoute.at>60000)return false;
+    const t=target();
+    return distM(roadRoute.toLat,roadRoute.toLng,t.lat,t.lng)<80;
+  }
+  function routeSource(){return roadValid()?'road':'straight';}
+  async function fetchRoadRoute(force){
+    if(roadRoute.pending||!officer.gpsFix||currentJob.status==='idle'||currentJob.status==='case_closed')return;
+    const t=target(); if(t.lat==null)return;
+    const now=Date.now();
+    if(now-roadRoute.failAt<30000)return;
+    const movedOfficer=roadRoute.fromLat==null?1e9:distM(roadRoute.fromLat,roadRoute.fromLng,officer.lat,officer.lng);
+    const movedTarget=roadRoute.toLat==null?1e9:distM(roadRoute.toLat,roadRoute.toLng,t.lat,t.lng);
+    if(!force&&now-roadRoute.at<12000)return;
+    if(!force&&movedOfficer<25&&movedTarget<25&&now-roadRoute.at<45000)return;
+    roadRoute.pending=true;
+    const ctl=new AbortController(); const to=setTimeout(()=>ctl.abort(),7000);
+    try{
+      const url=`https://router.project-osrm.org/route/v1/driving/${officer.lng},${officer.lat};${t.lng},${t.lat}?overview=full&geometries=geojson`;
+      const r=await fetch(url,{signal:ctl.signal});
+      const j=await r.json();
+      if(!j.routes||!j.routes[0])throw new Error('no route');
+      const rt=j.routes[0];
+      roadRoute.pts=rt.geometry.coordinates.map(c=>[c[1],c[0]]);
+      roadRoute.distM=rt.distance; roadRoute.durS=rt.duration; roadRoute.at=Date.now();
+      roadRoute.fromLat=officer.lat; roadRoute.fromLng=officer.lng; roadRoute.toLat=t.lat; roadRoute.toLng=t.lng;
+      roadRoute.failAt=0;
+      refreshRoute();
+      routeListeners.forEach(cb=>{try{cb();}catch(e){}});
+    }catch(e){ roadRoute.failAt=Date.now(); }
+    finally{ clearTimeout(to); roadRoute.pending=false; }
+  }
   function refreshRoute(){
     route.length=0;
-    if(currentJob.lat!=null&&currentJob.status!=='idle'&&currentJob.status!=='case_closed')
-      route.push([officer.lat,officer.lng],[currentJob.lat,currentJob.lng]);
+    if(currentJob.lat==null||currentJob.status==='idle'||currentJob.status==='case_closed')return;
+    const t=target();
+    if(roadValid()){
+      route.push([officer.lat,officer.lng]);
+      roadRoute.pts.forEach(p=>route.push(p));
+      route.push([t.lat,t.lng]);
+    } else route.push([officer.lat,officer.lng],[t.lat,t.lng]);
   }
   function setOfficerFix(lat,lng,speedMps,acc){
     officer.lat=lat;officer.lng=lng;officer.gpsFix=true;
     officer.speedMps=(typeof speedMps==='number'&&speedMps>=0)?speedMps:null;
     officer.accuracy=acc||null;officer.fixAt=Date.now();
     refreshRoute();
+    fetchRoadRoute(false);
   }
-  function distToJobM(){ return distM(officer.lat,officer.lng,currentJob.lat,currentJob.lng); }
+  function distToJobM(){
+    const t=target();
+    const straight=distM(officer.lat,officer.lng,t.lat,t.lng);
+    if(roadValid()){
+      const sinceFetch=distM(roadRoute.fromLat,roadRoute.fromLng,officer.lat,officer.lng);
+      return Math.max(straight,roadRoute.distM-sinceFetch);
+    }
+    return straight*1.3; // no road data: straight line plus a typical detour allowance
+  }
   function etaMinutes(){
     if(!officer.gpsFix||currentJob.lat==null)return null;
-    const v=(officer.speedMps&&officer.speedMps>2)?officer.speedMps:(30/3.6);
-    return Math.max(0,Math.round(distToJobM()/v/60));
+    const rem=distToJobM();
+    let v=30/3.6;
+    if(roadValid()&&roadRoute.durS>0) v=roadRoute.distM/roadRoute.durS;
+    if(officer.speedMps&&officer.speedMps>2) v=(v+officer.speedMps)/2;
+    return Math.max(0,Math.round(rem/v/60));
   }
   function etaText(){
     const m=etaMinutes();
     if(m==null)return 'Waiting for GPS…';
-    return m>0?`ETA ~${m} min · ${(distToJobM()/1000).toFixed(1)} km`:'Arriving…';
+    const km=(distToJobM()/1000).toFixed(1);
+    const tag=roadValid()?'':' (est.)';
+    return m>0?`ETA ~${m} min · ${km} km${tag}`:'Arriving…';
+  }
+  // Compact road geometry (<=80 points) for publishing to the Civilian / LCR apps.
+  function routeForShare(){
+    if(!roadValid())return null;
+    const p=roadRoute.pts; const step=Math.max(1,Math.ceil(p.length/80)); const out=[];
+    for(let i=0;i<p.length;i+=step)out.push([+p[i][0].toFixed(5),+p[i][1].toFixed(5)]);
+    const l=p[p.length-1]; out.push([+l[0].toFixed(5),+l[1].toFixed(5)]);
+    return {pts:out,distM:Math.round(roadRoute.distM),at:roadRoute.at};
   }
   function advanceRoute(){return[officer.lat,officer.lng];}
   function getRouteProgress(){return{step:0,total:1,pct:0};}
@@ -1451,7 +1525,7 @@ const DispatchData=((  )=>{
   }
 
   return{officer,currentJob,jobQueue,chatHistory,evidence,activityLog,arrivalChecklist,route,
-    rnd,rndInt,fmt,makeJob,advanceRoute,getRouteProgress,onUpdate,emit,startSim,pullNextPendingJob,setOfficerFix,etaMinutes,etaText,distToJobM,distM,refreshRoute,resetCurrentJob,
+    rnd,rndInt,fmt,makeJob,advanceRoute,getRouteProgress,onUpdate,emit,startSim,pullNextPendingJob,setOfficerFix,etaMinutes,etaText,distToJobM,distM,refreshRoute,resetCurrentJob,target,onRoute,routeSource,routeForShare,fetchRoadRoute,
     setActiveOfficer,LCR_REGISTRY,HOME_CONTROL_ROOM,
     getJurisdictionBounds,clampToBounds,getActivityLog,
     isInsideBounds,resolveJurisdictionFromCoords,isOwnJurisdiction,syncLcrId};
@@ -1503,7 +1577,7 @@ const GeamsDispatchSync = (() => {
     GeamsSync.mergeShared(key, {}, (m) => {
       m = m || {};
       if (!m[incId]) return m;
-      Object.assign(m[incId], patch);
+      Object.keys(patch).forEach(k=>{ if(patch[k]!==undefined) m[incId][k]=patch[k]; });
       return m;
     });
   }
@@ -1575,15 +1649,20 @@ const GeamsOfficerSync = (() => {
 
   function goOffDuty() {
     if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
-    if (!activeCred) return;
+    if (!activeCred) return Promise.resolve(false);
     const cred = activeCred;
     activeCred = null;
-    GeamsSync.mergeShared(rosterKey(cred), {}, (m) => {
+    return GeamsSync.mergeShared(rosterKey(cred), {}, (m) => {
       m = m || {};
-      if (m[cred.officerId]) { m[cred.officerId].status = 'off-duty'; m[cred.officerId].loggedOutAt = Date.now(); }
+      delete m[cred.officerId]; // off duty = gone from the live roster immediately
       return m;
     });
   }
+
+  // Closing the tab / app without ending the shift: best-effort removal.
+  // (If the browser is killed before this runs, the LCR drops the officer on
+  // its own once heartbeats stop for 30 s.)
+  window.addEventListener('pagehide', () => { try { goOffDuty(); } catch (e) {} });
 
   return { goOnDuty, goOffDuty };
 })();
@@ -1616,6 +1695,21 @@ const DispatchApp = (() => {
         if (!DispatchData.currentJob || DispatchData.currentJob.status === 'idle' || DispatchData.currentJob.status === 'case_closed') return;
         const rec = map[DispatchData.currentJob._syncIncId];
         if (!rec) return;
+        // Civilian cancelled while this officer is assigned. The incident is NOT
+        // closed automatically — a person at the Control Room decides whether to
+        // stand the officer down. Warn the officer and keep the job open.
+        if ((rec.civilianCancelled || rec.status === 'cancelled') && rec.status !== 'resolved') {
+          const job = DispatchData.currentJob;
+          if (!job.civilianCancelled) {
+            job.civilianCancelled = true;
+            job.civilianCancelReason = rec.cancelReason || 'No reason given';
+            DispatchData.activityLog.unshift({time:DispatchData.fmt(new Date()),lcrId:DispatchData.officer.controlRoomId,text:`<strong>Civilian cancelled the alert</strong> (${job.civilianCancelReason}) — continue to scene until the Control Room stands you down`});
+            showToast('warning','⚠ Civilian Cancelled Alert', `Reason: ${job.civilianCancelReason}. Stay on task — the Control Room will confirm whether to stand down.`, 30000);
+            if (currentScreen === 'job') ScreenJob.render();
+            DispatchData.refreshRoute();
+          }
+          return;
+        }
         if (rec.status === 'resolved' || rec.status === 'cancelled') {
           // The LCR/HQ closed this case (independently of this officer's own
           // Close Case flow — e.g. HQ resolving a Police Harassment report,
@@ -1891,7 +1985,9 @@ const DispatchApp = (() => {
       DispatchData.currentJob.civilianLng = DispatchData.currentJob.civilianLng ?? DispatchData.currentJob.lng;
       GeamsDispatchSync.pushUpdate(DispatchData.currentJob._syncIncId, {
         officerStatus: 'en_route', officerLat: DispatchData.officer.lat, officerLng: DispatchData.officer.lng,
+        officerETA: DispatchData.officer.gpsFix ? DispatchData.etaMinutes() : null,
       });
+      DispatchData.fetchRoadRoute(true);
     } else {
       // Locally-created job: the civilian's position is unknown, so none is shown.
     }
@@ -2991,10 +3087,10 @@ const DispatchApp = (() => {
     stopOfficerTracking('officer went off-duty — operation complete');
     closeSketch();
     if(clockTimer){clearInterval(clockTimer);clockTimer=null;}
-    GeamsOfficerSync.goOffDuty();
+    const offDutyDone=GeamsOfficerSync.goOffDuty();
     DispatchData.activityLog.unshift({time:DispatchData.fmt(new Date()),lcrId:DispatchData.officer.controlRoomId,text:'<strong>Shift ended</strong> — logged out · session closed'});
     showToast('success','Shift Ended — Logging Out','Session closed · GPS stopped · Returning to login',3500);
-    setTimeout(()=>performLogout(), 1800);
+    Promise.race([offDutyDone,new Promise(r=>setTimeout(r,4000))]).then(()=>setTimeout(()=>performLogout(),1200));
   }
 
   // Hard logout — tears down the session and returns to the login screen.
@@ -3038,7 +3134,7 @@ const DispatchApp = (() => {
   }
 
   // ── GPS ──
-  let gpsWatchId=null, reportEnRoute=false, gpsErrShown=false;
+  let gpsWatchId=null, reportEnRoute=false, gpsErrShown=false, lastSharedRouteAt=0;
   function onGpsFix(pos){
     const c=pos.coords;
     DispatchData.setOfficerFix(c.latitude,c.longitude,c.speed,c.accuracy);
@@ -3051,18 +3147,29 @@ const DispatchApp = (() => {
     });
     syncSceneFromMap();
     const job=DispatchData.currentJob;
-    if(reportEnRoute && job._syncSource==='civilian-app'){
-      GeamsDispatchSync.pushUpdate(job._syncIncId,{
-        officerLat:c.latitude, officerLng:c.longitude, officerETA:DispatchData.etaMinutes(),
-        officerStatus: jobState==='arrived'||jobState==='secured' ? 'arrived' : 'en_route',
-      });
-    }
-    if(reportEnRoute && jobState==='en_route' && DispatchData.distToJobM()<50){
+    pushNavState();
+    {const t=DispatchData.target();
+    if(reportEnRoute && jobState==='en_route' && DispatchData.distM(c.latitude,c.longitude,t.lat,t.lng)<50){
       reportEnRoute=false;
       showToast('info','Approaching Scene','You are within 50 m of the incident — confirm arrival');
       if(currentScreen==='job')ScreenJob.render();
     }
+    }
   }
+  // Publishes the officer's real position, road distance, ETA and road geometry
+  // to the shared incident so the Civilian app, LCR and HQ all show the same thing.
+  function pushNavState(){
+    const job=DispatchData.currentJob;
+    if(!reportEnRoute || job._syncSource!=='civilian-app' || !DispatchData.officer.gpsFix) return;
+    const o=DispatchData.officer;
+    GeamsDispatchSync.pushUpdate(job._syncIncId,{
+      officerLat:o.lat, officerLng:o.lng, officerETA:DispatchData.etaMinutes(),
+      officerDistM:Math.round(DispatchData.distToJobM()), officerRouteSrc:DispatchData.routeSource(),
+      officerRoute:(()=>{const r=DispatchData.routeForShare();return r&&r.at!==lastSharedRouteAt?(lastSharedRouteAt=r.at,r.pts):undefined;})(),
+      officerStatus: jobState==='arrived'||jobState==='secured' ? 'arrived' : 'en_route',
+    });
+  }
+  setInterval(()=>{ try{ if(reportEnRoute) { DispatchData.fetchRoadRoute(false); pushNavState(); } }catch(e){} },10000);
   function onGpsErr(err){
     if(gpsErrShown)return; gpsErrShown=true;
     const msg=err&&err.code===1?'Location permission is blocked. Allow location for this page so the Control Room can see your real position.':'Could not get a GPS fix yet — still trying.';
@@ -3088,6 +3195,7 @@ const DispatchApp = (() => {
 
   // ── LIVE ──
   function bindLive(){
+    DispatchData.onRoute(()=>{ if(typeof DispatchMap!=='undefined') DispatchMap.refreshRouteLines(); pushNavState(); });
     DispatchData.onUpdate((event,data)=>{
       if(event==='new_job'){
         // JURISDICTION GATE — enforce in both directions:
@@ -3477,6 +3585,15 @@ const DispatchMap = (() => {
     map.panTo(pos,{animate:true,duration:0.8});
   }
 
+  function refreshRouteLines(){
+    if(!map)return;
+    if(routeRemain)routeRemain.setLatLngs(DispatchData.route);
+    if(routeFull)routeFull.setLatLngs(DispatchData.route);
+    document.querySelectorAll('#eta-display').forEach(el=>{
+      if(DispatchData.currentJob.status==='idle'||DispatchData.currentJob.status==='case_closed')return;
+      el.textContent=DispatchData.etaText();
+    });
+  }
   function updateCivilianPosition(pos){
     if(!map)return;
     if(civilianMarker){
@@ -3548,7 +3665,7 @@ const DispatchMap = (() => {
   function calcDist(a,b){const R=6371,dLat=(b[0]-a[0])*Math.PI/180,dLng=(b[1]-a[1])*Math.PI/180,s=Math.sin(dLat/2)**2+Math.cos(a[0]*Math.PI/180)*Math.cos(b[0]*Math.PI/180)*Math.sin(dLng/2)**2;return R*2*Math.atan2(Math.sqrt(s),Math.sqrt(1-s));}
   function destroy(){if(centreTimer){clearInterval(centreTimer);centreTimer=null;}if(map){try{map.remove();}catch(e){}map=null;}officerMarker=null;incidentMarker=null;civilianMarker=null;routeFull=null;routeRemain=null;}
 
-  return{init,destroy,reattach,updateOfficerPosition,updateCivilianPosition,removeCivilianMarker,removeIncidentMarker,setOfficerTrackingState,centreOnMe,centreOnIncident,fitBoth};
+  return{init,destroy,reattach,refreshRouteLines,updateOfficerPosition,updateCivilianPosition,removeCivilianMarker,removeIncidentMarker,setOfficerTrackingState,centreOnMe,centreOnIncident,fitBoth};
 })();
 /* GEAMS DISPATCH — pages.js */
 
@@ -3559,7 +3676,8 @@ const ScreenJob = (() => {
     if(!el)return;
     const job=DispatchData.currentJob,state=job.status;
     const pc=job.priority==='critical'?'var(--red)':job.priority==='high'?'var(--primary)':job.priority==='medium'?'var(--gold)':'var(--cyan)';
-    el.innerHTML=renderBanner(state,job,pc)+renderJobCard(job,state)+renderEvidencePanel(job,state)+renderActions(state,job)+renderChecklist(state)+renderLog();
+    const cancelBanner=(job.civilianCancelled&&state!=='idle'&&state!=='case_closed')?`<div style="margin:10px 16px 0;padding:10px 12px;border-radius:var(--r-md);background:rgba(251,146,60,.12);border:1px solid var(--orange,#fb923c);color:var(--orange,#fb923c);font-size:0.78rem;line-height:1.5"><b>⚠ Civilian cancelled this alert</b> — ${job.civilianCancelReason||'no reason given'}.<br>Keep going until the Control Room confirms you can stand down.</div>`:'';
+    el.innerHTML=cancelBanner+renderBanner(state,job,pc)+renderJobCard(job,state)+renderEvidencePanel(job,state)+renderActions(state,job)+renderChecklist(state)+renderLog();
     watchJobEvidence(job,state);
   }
 
