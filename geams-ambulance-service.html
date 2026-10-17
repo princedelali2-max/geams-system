@@ -1,0 +1,1196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>GEAMS Medical Response — Ghana National Ambulance Service</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  :root{
+    --bg:#0a0f14; --bg-raised:#111a22; --bg-deep:#070b0f;
+    --red:#3b82f6; --red-dim:rgba(59,130,246,0.12); --red-border:rgba(59,130,246,0.35);
+    --orange:#fb923c; --gold:#e8b84b; --green:#4ade80; --cyan:#38bdf8;
+    --text-primary:#f1f5f9; --text-muted:#8fa3b8; --text-ghost:#5e7a96;
+    --border-base:#1e2b38; --border-mid:#2a3a4a;
+    --r-sm:6px; --r-md:10px; --r-lg:16px;
+    --font-mono:'SF Mono',Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text-primary);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;height:100vh;overflow:hidden}
+  #app{height:100vh;display:flex;flex-direction:column;max-width:520px;margin:0 auto;position:relative;background:var(--bg)}
+
+  /* ── LOGIN ── */
+  .login-wrap{flex:1;display:flex;flex-direction:column;justify-content:center;padding:32px 24px;overflow-y:auto}
+  .login-logo{font-size:1.8rem;font-weight:800;text-align:center;letter-spacing:1px;color:var(--red)}
+  .login-sub{text-align:center;color:var(--text-muted);font-size:0.85rem;margin-top:4px;margin-bottom:24px}
+  .login-security-bar{display:flex;align-items:center;gap:8px;background:var(--red-dim);border:1px solid var(--red-border);border-radius:var(--r-md);padding:8px 12px;margin-bottom:18px}
+  .login-security-dot{width:7px;height:7px;border-radius:50%;background:var(--red);animation:blink 1.4s infinite}
+  .login-security-txt{font-family:var(--font-mono);font-size:0.6rem;letter-spacing:1px;color:var(--red)}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:0.2}}
+  .login-field{margin-bottom:14px}
+  .login-label{display:block;font-size:0.7rem;font-weight:600;color:var(--text-muted);margin-bottom:5px;text-transform:uppercase;letter-spacing:0.5px}
+  .login-input{width:100%;background:var(--bg-raised);border:1px solid var(--border-mid);border-radius:var(--r-md);padding:11px 13px;color:var(--text-primary);font-size:0.88rem}
+  .login-input:focus{outline:none;border-color:var(--red)}
+  .login-input.error{border-color:var(--red)}
+  .login-error{display:none;font-size:0.68rem;color:var(--red);margin-top:4px}
+  .login-error.show{display:block}
+  .login-btn{width:100%;background:var(--red);color:white;border:none;border-radius:var(--r-md);padding:13px;font-size:0.9rem;font-weight:700;cursor:pointer;margin-top:6px}
+  .login-btn:disabled{opacity:0.5;cursor:not-allowed}
+  .login-meta{display:flex;justify-content:center;gap:16px;margin-top:16px;font-size:0.72rem}
+  .login-meta-link{color:var(--cyan);cursor:pointer}
+
+  /* ── TOPBAR ── */
+  .topbar{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--border-base);flex-shrink:0;background:var(--bg-raised)}
+  .topbar-logo{font-weight:800;font-size:0.95rem;color:var(--red)}
+  .topbar-dot{width:8px;height:8px;border-radius:50%;background:var(--text-ghost)}
+  .topbar-dot.busy{background:var(--red);animation:blink 1.4s infinite}
+  .topbar-crew{font-size:0.7rem;color:var(--text-muted);margin-left:auto}
+  .topbar-btn{background:none;border:none;color:var(--text-muted);font-size:1rem;cursor:pointer;padding:4px 6px}
+
+  /* ── SCREENS ── */
+  .screen{display:none;flex:1;overflow-y:auto;flex-direction:column}
+  .screen.active{display:flex}
+
+  .empty-state{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 24px;text-align:center;color:var(--text-muted)}
+  .empty-state-icon{font-size:2.6rem;margin-bottom:12px;opacity:0.6}
+
+  .call-card{margin:14px;background:var(--bg-raised);border:1px solid var(--red-border);border-radius:var(--r-lg);padding:16px;animation:pulseCard 2s infinite}
+  @keyframes pulseCard{0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,0.25)}50%{box-shadow:0 0 0 8px rgba(239,68,68,0)}}
+  .call-card-type{font-size:1.05rem;font-weight:800;color:var(--red)}
+  .call-card-meta{font-size:0.76rem;color:var(--text-muted);margin-top:4px;line-height:1.6}
+  .call-card-actions{display:flex;gap:8px;margin-top:14px}
+  .btn{border:none;border-radius:var(--r-md);padding:10px 14px;font-size:0.8rem;font-weight:700;cursor:pointer}
+  .btn-full{flex:1}
+  .btn-primary{background:var(--red);color:white}
+  .btn-ghost{background:var(--bg-deep);color:var(--text-muted);border:1px solid var(--border-mid)}
+  .btn-success{background:var(--green);color:#052e16}
+  .btn-warning{background:var(--orange);color:#431407}
+  .btn-cyan{background:var(--cyan);color:#082f49}
+  .btn-sm{padding:7px 10px;font-size:0.72rem}
+  .btn:disabled{opacity:0.5;cursor:not-allowed}
+
+  .queue-item{margin:0 14px 10px;background:var(--bg-raised);border:1px solid var(--border-base);border-radius:var(--r-md);padding:12px 14px;display:flex;align-items:center;gap:10px;cursor:pointer}
+  .queue-item-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+
+  .stat-row{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:0 14px 14px}
+  .stat-box{background:var(--bg-raised);border:1px solid var(--border-base);border-radius:var(--r-md);padding:10px 6px;text-align:center}
+  .stat-val{font-size:1.1rem;font-weight:800;font-family:var(--font-mono)}
+  .stat-key{font-size:0.58rem;color:var(--text-ghost);text-transform:uppercase;letter-spacing:0.5px;margin-top:2px}
+
+  #incident-map{width:100%;height:280px;flex-shrink:0}
+  .action-bar{display:flex;gap:8px;padding:14px}
+  .job-detail{padding:14px}
+  .job-detail-row{font-size:0.8rem;color:var(--text-muted);margin-bottom:6px;line-height:1.5}
+  .toast{position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:9999;background:var(--bg-raised);border:1px solid var(--border-mid);border-radius:var(--r-md);padding:11px 16px;font-size:0.8rem;max-width:90%;box-shadow:0 6px 20px rgba(0,0,0,0.5);display:flex;gap:8px;align-items:flex-start}
+  .toast.success{border-color:var(--green)} .toast.error{border-color:var(--red)}
+  .toast.warning{border-color:var(--orange)} .toast.info{border-color:var(--cyan)}
+  .nav-tabs{display:flex;border-top:1px solid var(--border-base);background:var(--bg-raised);flex-shrink:0}
+  .nav-tab{flex:1;text-align:center;padding:9px 4px;font-size:0.62rem;color:var(--text-ghost);cursor:pointer}
+  .nav-tab.active{color:var(--red)}
+  .nav-tab-icon{font-size:1.1rem;display:block}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- LOGIN -->
+  <div class="login-wrap" id="login-view">
+    <div class="login-logo">🚑 GEAMS MEDIC</div>
+    <div class="login-sub">Ghana National Ambulance Service — Response Terminal</div>
+    <div class="login-security-bar"><div class="login-security-dot"></div><div class="login-security-txt">SECURE CHANNEL · CREW LOGIN REQUIRED</div></div>
+
+    <div class="login-field">
+      <label class="login-label" for="login-name">Paramedic Name</label>
+      <input class="login-input" id="login-name" type="text" placeholder="Your full name as registered" autocomplete="username">
+      <div class="login-error" id="err-name">Name is required</div>
+    </div>
+    <div class="login-field">
+      <label class="login-label" for="login-pass">Password</label>
+      <input class="login-input" id="login-pass" type="password" placeholder="Enter password" autocomplete="current-password">
+      <div class="login-error" id="err-pass">Password is required</div>
+    </div>
+    <div class="login-error" id="err-general" style="text-align:center;margin-top:6px"></div>
+    <button class="login-btn" id="login-btn" onclick="AmbulanceApp.doLogin()">🔐 Sign In</button>
+    <div class="login-meta">
+      <span class="login-meta-link" onclick="AmbulanceApp.showSignup()">🚑 New crew member? Register</span>
+    </div>
+  </div>
+
+  <!-- SIGNUP -->
+  <div class="login-wrap" id="signup-view" style="display:none">
+    <div class="login-logo">🚑 GEAMS MEDIC</div>
+    <div class="login-sub">Crew Registration</div>
+    <div class="login-field"><label class="login-label">Full Name</label>
+      <input class="login-input" id="su-name" placeholder="e.g. FO J. Owusu"></div>
+    <div class="login-field"><label class="login-label">Rank</label>
+      <select class="login-input" id="su-rank">
+        <option>Emergency Medical Technician (EMT)</option><option>Paramedic</option>
+        <option>Senior Paramedic</option><option>Ambulance Officer</option>
+      </select></div>
+    <div class="login-field"><label class="login-label">Phone</label>
+      <input class="login-input" id="su-phone" placeholder="+233-24-0000000"></div>
+    <div class="login-field"><label class="login-label">Ambulance Unit Number</label>
+      <input class="login-input" id="su-vehicle" placeholder="e.g. Ambulance 12"></div>
+    <div class="login-field"><label class="login-label">Assigned Jurisdiction (LCR coverage area)</label>
+      <select class="login-input" id="su-lcr"><!-- populated by JS from STATION_DIRECTORY --></select></div>
+    <div class="login-field"><label class="login-label">Create Password</label>
+      <input class="login-input" id="su-pass" type="password" placeholder="At least 6 characters"></div>
+    <div class="login-field"><label class="login-label">Confirm Password</label>
+      <input class="login-input" id="su-pass2" type="password" placeholder="Re-enter password"></div>
+    <div class="login-error" id="su-err-general" style="text-align:center;margin-top:6px"></div>
+    <button class="login-btn" id="signup-btn" onclick="AmbulanceApp.doSignup()">🚑 Register &amp; Sign In</button>
+    <div class="login-meta"><span class="login-meta-link" onclick="AmbulanceApp.showLogin()">← Back to Sign In</span></div>
+  </div>
+
+  <!-- MAIN APP -->
+  <div id="main-view" style="display:none;flex:1;flex-direction:column;overflow:hidden">
+    <div class="topbar">
+      <span class="topbar-logo">🚑 MEDIC</span>
+      <span class="topbar-dot" id="topbar-dot"></span>
+      <span class="topbar-crew" id="topbar-crew"></span>
+      <button class="topbar-btn" onclick="AmbulanceApp.endShift()" title="End Shift">⏻</button>
+    </div>
+
+    <div class="screen active" id="screen-queue"></div>
+    <div class="screen" id="screen-job"></div>
+    <div class="screen" id="screen-aid"></div>
+
+    <div class="nav-tabs">
+      <div class="nav-tab active" data-screen="queue" onclick="AmbulanceApp.navigate('queue')"><span class="nav-tab-icon">📋</span>Calls</div>
+      <div class="nav-tab" data-screen="job" onclick="AmbulanceApp.navigate('job')"><span class="nav-tab-icon">🗺</span>Active Response</div>
+      <div class="nav-tab" data-screen="aid" onclick="AmbulanceApp.navigate('aid')"><span class="nav-tab-icon">🤝</span>Mutual Aid<span id="aid-badge" style="display:none;background:var(--red);color:#fff;border-radius:8px;font-size:0.55rem;padding:1px 5px;margin-left:3px;font-weight:700"></span></div>
+    </div>
+  </div>
+
+  <div id="toast-container"></div>
+</div>
+
+<script>
+/* ============================================================
+   GEAMS SYNC — shared real-time layer (same implementation as the
+   other GEAMS apps — window.storage when run as a Claude artifact,
+   localStorage when served via geams-static-server.js).
+   ============================================================ */
+const GeamsSync = (() => {
+  const LS_PREFIX = 'geams:';
+  const APP = 'AMBULANCE';
+  let mode = 'checking';
+  let base = '';                       // backend URL ('' = same origin)
+  let online = false;                  // last backend request succeeded
+  let status = { devices: 0, byApp: {} };
+  const statusCbs = new Set();
+  const keyCbs = new Set();
+  let es = null;
+
+  const deviceId = (() => {
+    try { let d = sessionStorage.getItem('geams_device'); if (!d) { d = APP + '-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36); sessionStorage.setItem('geams_device', d); } return d; }
+    catch (e) { return APP + '-' + Math.random().toString(36).slice(2, 10); }
+  })();
+
+  function artifactAvailable() { return typeof window !== 'undefined' && !!window.storage; }
+  function localStorageAvailable() {
+    try { const k = '__geams_probe__'; localStorage.setItem(k,'1'); localStorage.removeItem(k); return true; }
+    catch (e) { return false; }
+  }
+  async function http(path, opts, ms) {
+    const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const t = ctl ? setTimeout(() => ctl.abort(), ms || 6000) : null;
+    try {
+      const r = await fetch(base + path, Object.assign({ cache: 'no-store', signal: ctl && ctl.signal }, opts || {}));
+      online = true; return r;
+    } catch (e) { online = false; throw e; }
+    finally { if (t) clearTimeout(t); }
+  }
+  async function probe(url) {
+    try {
+      const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 3000);
+      const r = await fetch(url + '/api/health', { cache: 'no-store', signal: ctl.signal }); clearTimeout(t);
+      if (!r.ok) return false; const j = await r.json(); return !!(j && j.ok);
+    } catch (e) { return false; }
+  }
+  function emitStatus() { statusCbs.forEach(cb => { try { cb(status, online); } catch (e) {} }); }
+  async function sendPresence() {
+    try {
+      const r = await http('/api/ping?d=' + encodeURIComponent(deviceId) + '&a=' + encodeURIComponent(APP) + '&t=' + Date.now(), {}, 5000);
+      const j = await r.json(); if (typeof j.devices !== 'number') throw new Error('old server');
+      status = { devices: j.devices, byApp: j.byApp || {}, err: '' };
+    } catch (e) { status = Object.assign({}, status, { err: 'presence failed — is the latest geams-server.js deployed?' }); }
+    emitStatus();
+  }
+  function startEvents() {
+    if (typeof EventSource === 'undefined') return;
+    try {
+      es = new EventSource(base + '/api/events');
+      es.onmessage = (ev) => { try { const m = JSON.parse(ev.data); keyCbs.forEach(cb => cb(m.key)); } catch (e) {} };
+      es.onopen = () => { online = true; keyCbs.forEach(cb => cb(null)); emitStatus(); };
+      es.onerror = () => { online = false; emitStatus(); };
+    } catch (e) {}
+  }
+
+  const ready = (async () => {
+    let want = null;
+    try {
+      const q = new URLSearchParams(location.search).get('backend');
+      if (q === 'local') localStorage.removeItem('geams_backend');
+      else if (q) localStorage.setItem('geams_backend', q.replace(/\/+$/, ''));
+      want = localStorage.getItem('geams_backend');
+    } catch (e) {}
+    const cands = [];
+    if (want) cands.push(want);
+    if (typeof location !== 'undefined' && /^https?:$/.test(location.protocol)) cands.push('');
+    for (const c of cands) {
+      if (await probe(c)) {
+        base = c; mode = 'server'; online = true;
+        startEvents(); sendPresence(); setInterval(sendPresence, 8000);
+        return;
+      }
+    }
+    if (artifactAvailable()) { mode = 'artifact'; return; }
+    if (localStorageAvailable()) { mode = 'localStorage'; return; }
+    mode = 'offline';
+  })();
+
+  function available() { return mode === 'artifact' || mode === 'localStorage' || mode === 'server'; }
+
+  async function srvGet(key) {
+    const r = await http('/api/kv/' + encodeURIComponent(key));
+    return await r.json();
+  }
+  async function getShared(key, fallback) {
+    await ready;
+    if (mode === 'server') {
+      try { const j = await srvGet(key); return j.found ? j.value : fallback; } catch (e) { return fallback; }
+    }
+    if (mode === 'artifact') {
+      try { const r = await window.storage.get(key, true); return r && r.value !== undefined ? JSON.parse(r.value) : fallback; }
+      catch (e) { return fallback; }
+    }
+    if (mode === 'localStorage') {
+      try { const raw = localStorage.getItem(LS_PREFIX + key); return raw !== null ? JSON.parse(raw) : fallback; }
+      catch (e) { return fallback; }
+    }
+    return fallback;
+  }
+  async function setShared(key, value) {
+    await ready;
+    if (mode === 'server') {
+      try {
+        const r = await http('/api/kv/' + encodeURIComponent(key), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value }) });
+        return r.ok;
+      } catch (e) { return false; }
+    }
+    if (mode === 'artifact') {
+      try { await window.storage.set(key, JSON.stringify(value), true); return true; } catch (e) { return false; }
+    }
+    if (mode === 'localStorage') {
+      try { localStorage.setItem(LS_PREFIX + key, JSON.stringify(value)); return true; } catch (e) { return false; }
+    }
+    return false;
+  }
+  async function mergeShared(key, fallback, patchFn) {
+    await ready;
+    if (mode === 'offline') return false;
+    if (mode === 'server') {
+      // compare-and-set loop so two devices writing at once never overwrite each other
+      for (let i = 0; i < 40; i++) {
+        try {
+          const j = await srvGet(key);
+          const next = patchFn(j.found ? j.value : fallback);
+          const r = await http('/api/kv/' + encodeURIComponent(key), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: next, ifVersion: j.v }) });
+          if (r.ok) return true;
+          if (r.status !== 409) return false;
+          await new Promise(res => setTimeout(res, 10 + Math.random() * 60 * (i + 1)));
+        } catch (e) { return false; }
+      }
+      return false;
+    }
+    try { const cur = await getShared(key, fallback); const next = patchFn(cur); await setShared(key, next); return true; }
+    catch (e) { return false; }
+  }
+  function watch(key, fallback, cb, intervalMs) {
+    let stopped = false, last = null;
+    const check = async () => {
+      if (stopped) return;
+      const v = await getShared(key, fallback);
+      const s = JSON.stringify(v);
+      if (s !== last) { last = s; cb(v); }
+    };
+    let storageListener = null, keyListener = null;
+    ready.then(() => {
+      if (stopped) return;
+      if (mode === 'localStorage' && typeof window !== 'undefined') {
+        storageListener = (e) => { if (e.key === LS_PREFIX + key) check(); };
+        window.addEventListener('storage', storageListener);
+      }
+      if (mode === 'server') {
+        keyListener = (k) => { if (k === null || k === key) check(); };
+        keyCbs.add(keyListener);
+      }
+    });
+    check();
+    const id = setInterval(check, Math.max(intervalMs || 2000, 2000));
+    return () => { stopped = true; clearInterval(id); if (storageListener) window.removeEventListener('storage', storageListener); if (keyListener) keyCbs.delete(keyListener); };
+  }
+  function onStatus(cb) { statusCbs.add(cb); try { cb(status, online); } catch (e) {} return () => statusCbs.delete(cb); }
+  function setBackend(url) {
+    try { if (url) localStorage.setItem('geams_backend', url.replace(/\/+$/, '')); else localStorage.removeItem('geams_backend'); } catch (e) {}
+    location.reload();
+  }
+  return { available, getShared, setShared, mergeShared, watch, ready, onStatus, setBackend, deviceId,
+           get mode(){ return mode; }, get online(){ return online; }, get devices(){ return status.devices; }, get deviceApps(){ return status.byApp; } };
+})();
+
+/* ── Connection badge: shows whether this app is on the shared backend and how many devices are connected. ── */
+(function () {
+  function badge() {
+    let el = document.getElementById('geams-sync-badge');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'geams-sync-badge';
+      el.style.cssText = 'position:fixed;bottom:6px;left:6px;z-index:999999;background:rgba(0,0,0,.75);color:#9ae6b4;font:10px/1.4 -apple-system,monospace;padding:4px 8px;border-radius:6px;max-width:300px;white-space:pre-wrap;cursor:pointer;';
+      el.title = 'Tap to set the GEAMS backend address';
+      el.onclick = () => {
+        const cur = (function(){ try { return localStorage.getItem('geams_backend') || ''; } catch(e){ return ''; } })();
+        const v = prompt('GEAMS backend address (e.g. https://geams.example.com or http://192.168.1.20:8080).\nLeave empty to use this device only.', cur);
+        if (v !== null) GeamsSync.setBackend(v.trim());
+      };
+      document.body.appendChild(el);
+    }
+    return el;
+  }
+  document.addEventListener('DOMContentLoaded', async () => {
+    badge().textContent = 'Backend: connecting…';
+    await GeamsSync.ready;
+    if (GeamsSync.mode === 'server') {
+      GeamsSync.onStatus((st, online) => {
+        const b = badge();
+        if (online) { b.style.color = '#9ae6b4'; b.textContent = st.err ? 'Backend: online · device count unavailable (' + st.err + ')' : 'Backend: online · ' + st.devices + ' device(s) connected'; }
+        else { b.style.color = '#fbbf24'; b.textContent = 'Backend: unreachable — retrying…'; }
+      });
+      return;
+    }
+    const b = badge();
+    b.style.color = '#fbbf24';
+    b.textContent = GeamsSync.mode === 'offline'
+      ? 'Offline: no storage available. Tap to set backend.'
+      : 'Backend: not connected · this device only (' + GeamsSync.mode + '). Other devices cannot see your data. Tap to set the backend address.';
+  });
+})();
+
+
+/* ============================================================
+   AMBULANCE DATA — jurisdiction directory, crew credentials, active job
+   ============================================================ */
+const AmbulanceData = (() => {
+  const STATION_DIRECTORY = [
+    { id:'GH-GA-ACC-001-B9C1', name:'Accra Central',  lat:5.5560,  lng:-0.2040 },
+    { id:'GH-GA-ACC-007-F2A3', name:'Tema',            lat:5.6698,  lng:-0.0167 },
+    { id:'GH-AS-KUM-001-A4F2', name:'Kumasi Central',  lat:6.6885,  lng:-1.6244 },
+    { id:'GH-AS-KUM-002-C7D9', name:'Suame',           lat:6.7228,  lng:-1.6131 },
+    { id:'GH-WR-TAK-001-D2E8', name:'Takoradi',        lat:4.8993,  lng:-1.7557 },
+    { id:'GH-CR-CAP-001-E5F1', name:'Cape Coast',      lat:5.1054,  lng:-1.2466 },
+    { id:'GH-NR-TAM-001-G3H6', name:'Tamale',          lat:9.4008,  lng:-0.8393 },
+    { id:'GH-UE-BOL-001-H8I2', name:'Bolgatanga',      lat:10.7853, lng:-0.8514 },
+    { id:'GH-VR-HO-001-J4K7',  name:'Ho Central',      lat:6.6011,  lng:0.4714  },
+    { id:'GH-VR-HOH-001-P3Q7', name:'Hohoe',           lat:7.15162, lng:0.47368, locationVerified:true, locationSource:'osm-mapped' },
+    { id:'GH-BA-SUN-001-K9L3', name:'Sunyani',         lat:7.3349,  lng:-2.3264 },
+    { id:'GH-AH-KOF-001-L1M5', name:'Koforidua',       lat:6.0944,  lng:-0.2590 },
+    { id:'GH-SW-SEK-001-M6N9', name:'Sekondi',         lat:4.9340,  lng:-1.7039 },
+  ];
+
+  // The coordinates above are best-available town-level estimates. When a
+  // station confirms its own exact location from the Station Dashboard
+  // (real on-site device GPS or a hand-placed map pin), that correction is
+  // published to the shared 'registry:stationLocations' key — apply it
+  // here so Ambulance jurisdiction/distance logic uses the same, most-
+  // accurate point every other GEAMS app uses, and keep watching for live
+  // updates.
+  function applyStationLocationOverrides(map) {
+    if (!map) return;
+    STATION_DIRECTORY.forEach(s => {
+      const o = map[s.id];
+      if (o && typeof o.lat === 'number' && typeof o.lng === 'number') {
+        s.lat = o.lat; s.lng = o.lng; s.locationVerified = true;
+      }
+    });
+  }
+  GeamsSync.getShared('registry:stationLocations', {}).then(applyStationLocationOverrides);
+  GeamsSync.watch('registry:stationLocations', {}, applyStationLocationOverrides, 5000);
+
+  // No preloaded crew accounts — crews register through Sign Up.
+  const MOCK_CREDENTIALS = [];
+  // ── Shared account registry. With the backend connected, accounts live on the
+  // server (key `registry:ambulance`) so a crew/officer who signs up on one phone can sign in
+  // on any other device. Without a backend it stays on this device only.
+  // Passwords are never stored in plain text — only a salted SHA-256 hash.
+  // (Honest limit: without server-side auth this is obfuscation, not real security.)
+  function sha256(str) {
+    const K = [0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
+    const b = new TextEncoder().encode(str), l = b.length, n = ((l + 9 + 63) >> 6) << 6, m = new Uint8Array(n);
+    m.set(b); m[l] = 0x80; const dv = new DataView(m.buffer); dv.setUint32(n - 4, l * 8 >>> 0); dv.setUint32(n - 8, Math.floor(l * 8 / 4294967296));
+    let h = [0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
+    const w = new Uint32Array(64), rr = (x, s) => (x >>> s) | (x << (32 - s));
+    for (let o = 0; o < n; o += 64) {
+      for (let i = 0; i < 16; i++) w[i] = dv.getUint32(o + i * 4);
+      for (let i = 16; i < 64; i++) { const s0 = rr(w[i-15],7)^rr(w[i-15],18)^(w[i-15]>>>3), s1 = rr(w[i-2],17)^rr(w[i-2],19)^(w[i-2]>>>10); w[i] = (w[i-16] + s0 + w[i-7] + s1) >>> 0; }
+      let [a,b2,c,d,e,f,g,hh] = h;
+      for (let i = 0; i < 64; i++) {
+        const S1 = rr(e,6)^rr(e,11)^rr(e,25), ch = (e&f)^(~e&g), t1 = (hh + S1 + ch + K[i] + w[i]) >>> 0;
+        const S0 = rr(a,2)^rr(a,13)^rr(a,22), mj = (a&b2)^(a&c)^(b2&c), t2 = (S0 + mj) >>> 0;
+        hh = g; g = f; f = e; e = (d + t1) >>> 0; d = c; c = b2; b2 = a; a = (t1 + t2) >>> 0;
+      }
+      h = [a,b2,c,d,e,f,g,hh].map((v, i) => (h[i] + v) >>> 0);
+    }
+    return h.map(v => v.toString(16).padStart(8, '0')).join('');
+  }
+  function hashPass(name, pass) { return sha256('geams:' + String(name).trim().toLowerCase() + ':' + pass); }
+  function passOk(c, name, pass) { return c.passHash ? c.passHash === hashPass(name, pass) : (c.password !== undefined && c.password === pass); }
+
+  let REGISTERED_CREDENTIALS = [];
+  const REG_KEY = 'registry:ambulance', REG_LS = 'geams_ambulance_registered';
+  (function loadRegistered() {
+    try { const raw = localStorage.getItem(REG_LS); if (raw) REGISTERED_CREDENTIALS = JSON.parse(raw); } catch (e) { REGISTERED_CREDENTIALS = []; }
+  })();
+  function cacheRegistered() { try { localStorage.setItem(REG_LS, JSON.stringify(REGISTERED_CREDENTIALS)); } catch (e) {} }
+  function mergeLists(a, b) { const seen = new Set(a.map(c => c.badge)); return a.concat((b || []).filter(c => !seen.has(c.badge))); }
+  async function refreshRegistered() {
+    if (GeamsSync.mode !== 'server') { await GeamsSync.ready; if (GeamsSync.mode !== 'server') return; }
+    const remote = await GeamsSync.getShared(REG_KEY, null);
+    if (Array.isArray(remote)) { REGISTERED_CREDENTIALS = mergeLists(remote, REGISTERED_CREDENTIALS.filter(c => !remote.some(r => r.badge === c.badge)) ); cacheRegistered(); }
+  }
+  function publishRegistered(cred) {
+    GeamsSync.mergeShared(REG_KEY, [], list => { list = Array.isArray(list) ? list : []; return list.some(c => c.badge === cred.badge) ? list : list.concat([cred]); });
+  }
+  GeamsSync.ready.then(() => { if (GeamsSync.mode === 'server') { GeamsSync.watch(REG_KEY, [], list => { if (Array.isArray(list)) { REGISTERED_CREDENTIALS = mergeLists(list, REGISTERED_CREDENTIALS); cacheRegistered(); } }, 4000); REGISTERED_CREDENTIALS.forEach(publishRegistered); } });
+  function registerCrew(cred) { REGISTERED_CREDENTIALS.push(cred); cacheRegistered(); publishRegistered(cred); }
+  function allCredentials() { return MOCK_CREDENTIALS.concat(REGISTERED_CREDENTIALS); }
+  function checkLogin(name, pass) { return allCredentials().find(c => c.name.toLowerCase() === name.toLowerCase() && passOk(c, name, pass)); }
+  function findStation(lcrId) { return STATION_DIRECTORY.find(s => s.id === lcrId); }
+
+  // Real great-circle distance between two real coordinate pairs (km).
+  // Used to rank genuinely nearby mutual-aid stations — never a fake/random value.
+  function haversineKm(lat1, lng1, lat2, lng2) {
+    const R = 6371;
+    const toRad = d => d * Math.PI / 180;
+    const dLat = toRad(lat2 - lat1), dLng = toRad(lng2 - lng1);
+    const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLng/2)**2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  }
+  // Every other jurisdiction's ambulance station, sorted nearest-first by real distance.
+  function nearbyStations(ownLcrId) {
+    const own = findStation(ownLcrId);
+    if (!own) return [];
+    return STATION_DIRECTORY
+      .filter(s => s.id !== ownLcrId)
+      .map(s => ({ ...s, distanceKm: haversineKm(own.lat, own.lng, s.lat, s.lng) }))
+      .sort((a, b) => a.distanceKm - b.distanceKm);
+  }
+
+  let crew = null;       // active logged-in crew profile
+  let currentJob = null; // active response, or null when idle
+
+  return {
+    STATION_DIRECTORY, allCredentials, checkLogin, refreshRegistered, hashPass, registerCrew, findStation, haversineKm, nearbyStations,
+    get crew() { return crew; }, setCrew(c) { crew = c; },
+    get currentJob() { return currentJob; }, setCurrentJob(j) { currentJob = j; },
+  };
+})();
+
+/* ============================================================
+   GEAMS AMBULANCE SYNC — receives incidents forwarded by an LCR in real
+   time, scoped strictly to this crew's own jurisdiction, and pushes
+   status/position updates back so the LCR sees live progress.
+   ============================================================ */
+const GeamsAmbulanceSync = (() => {
+  const claimed = new Set(); // incident ids already surfaced in this session — no duplicates
+  let watchStop = null;
+
+  function start(lcrId) {
+    if (watchStop) watchStop();
+    watchStop = GeamsSync.watch('ambulance:' + lcrId + ':incidents', {}, (map) => {
+      Object.values(map).forEach(rec => {
+        if (rec.serviceStatus !== 'new') return;              // already claimed by someone
+        if (claimed.has(rec.id)) return;                       // already surfaced this session
+        if (AmbulanceData.currentJob && AmbulanceData.currentJob.id === rec.id) return;
+        claimed.add(rec.id);
+        AmbulanceApp.onNewCall(rec);
+      });
+    }, 2500);
+  }
+
+  function pushUpdate(lcrId, incId, patch) {
+    GeamsSync.mergeShared('ambulance:' + lcrId + ':incidents', {}, (m) => {
+      m = m || {};
+      if (!m[incId]) return m;
+      Object.assign(m[incId], patch);
+      return m;
+    });
+  }
+
+  return { start, pushUpdate };
+})();
+
+/* ============================================================
+   AMBULANCE MUTUAL AID — cross-jurisdiction backup requests between
+   real ambulance stations. Every request, acceptance, decline, and
+   live unit position below travels over the same real-time GeamsSync
+   channel used for ordinary dispatch — there is no simulated/random
+   outcome anywhere in this module; a request only resolves when a
+   human at the target station actually accepts or declines it.
+   ============================================================ */
+const AmbulanceMutualAid = (() => {
+  const KEY = 'mutualaid:ambulance:requests';
+  let reqSeq = 1;
+  let ownLcrId = null;
+  let watchStop = null;
+  let latest = {};         // last known snapshot of the whole shared map
+  const seenIncoming = new Set(); // request ids already toasted this session
+
+  function start(lcrId) {
+    ownLcrId = lcrId;
+    if (watchStop) watchStop();
+    watchStop = GeamsSync.watch(KEY, {}, (map) => {
+      const prev = latest;
+      latest = map || {};
+      Object.values(latest).forEach(r => {
+        // New inbound request targeted at our jurisdiction.
+        if (r.targetLcrId === ownLcrId && r.originLcrId !== ownLcrId &&
+            r.status === 'pending' && !seenIncoming.has(r.id)) {
+          seenIncoming.add(r.id);
+          AmbulanceApp.onIncomingMutualAid(r);
+        }
+        // Status change on a request we originated — let the requester know.
+        const was = prev[r.id];
+        if (r.originLcrId === ownLcrId && was && was.status === 'pending' && r.status !== 'pending') {
+          AmbulanceApp.onMutualAidStatusChanged(r);
+        }
+        // Live position update on a mutual-aid job we are responding to, or
+        // one we originated — refresh the map/stat bar if it's on screen.
+        AmbulanceApp.onMutualAidRecordUpdated(r);
+      });
+      AmbulanceApp.refreshMutualAidTab();
+    }, 2000);
+  }
+
+  function myIncoming() {
+    return Object.values(latest).filter(r => r.targetLcrId === ownLcrId && r.originLcrId !== ownLcrId && r.status === 'pending');
+  }
+  function myOutgoing() {
+    return Object.values(latest).filter(r => r.originLcrId === ownLcrId)
+      .sort((a,b) => b.requestedAt - a.requestedAt);
+  }
+  function myResponding() {
+    return Object.values(latest).filter(r => r.acceptedByLcrId === ownLcrId && r.status === 'accepted');
+  }
+  function recordFor(requestId) { return latest[requestId] || null; }
+  function recordForIncident(incidentId) {
+    return Object.values(latest).find(r => r.incidentId === incidentId && r.originLcrId === ownLcrId) || null;
+  }
+
+  function sendRequest(job, targetStation, originStation, crew) {
+    const id = 'AID-A-' + Date.now().toString(36) + '-' + (reqSeq++);
+    const rec = {
+      id, kind: 'ambulance',
+      originLcrId: ownLcrId, originStationName: originStation.name,
+      targetLcrId: targetStation.id, targetStationName: targetStation.name,
+      distanceKm: Number(targetStation.distanceKm?.toFixed ? targetStation.distanceKm.toFixed(1) : targetStation.distanceKm),
+      incidentId: job.id, type: job.type, priority: job.priority, location: job.location,
+      lat: job.lat, lng: job.lng, notes: job.notes || '',
+      requestedByName: crew.name, requestedByBadge: crew.badge, requestedAt: Date.now(),
+      status: 'pending',
+      acceptedByLcrId: null, acceptedByName: null, acceptedByBadge: null, acceptedAt: null,
+      unitLat: null, unitLng: null, unitETA: null,
+    };
+    GeamsSync.mergeShared(KEY, {}, (m) => { m = m || {}; m[id] = rec; return m; });
+    return rec;
+  }
+
+  function cancelRequest(requestId) {
+    GeamsSync.mergeShared(KEY, {}, (m) => {
+      m = m || {};
+      if (m[requestId] && m[requestId].status === 'pending') m[requestId].status = 'cancelled';
+      return m;
+    });
+  }
+
+  function accept(requestId, ownStation, crew) {
+    GeamsSync.mergeShared(KEY, {}, (m) => {
+      m = m || {};
+      const r = m[requestId];
+      if (!r || r.status !== 'pending') return m;
+      r.status = 'accepted';
+      r.acceptedByLcrId = ownLcrId;
+      r.acceptedByName = crew.name;
+      r.acceptedByBadge = crew.badge;
+      r.acceptedAt = Date.now();
+      r.unitLat = ownStation.lat;
+      r.unitLng = ownStation.lng;
+      return m;
+    });
+  }
+
+  function decline(requestId) {
+    GeamsSync.mergeShared(KEY, {}, (m) => {
+      m = m || {};
+      if (m[requestId] && m[requestId].status === 'pending') m[requestId].status = 'declined';
+      return m;
+    });
+  }
+
+  function pushUnitUpdate(requestId, patch) {
+    GeamsSync.mergeShared(KEY, {}, (m) => {
+      m = m || {};
+      if (!m[requestId]) return m;
+      Object.assign(m[requestId], patch);
+      return m;
+    });
+  }
+
+  function markComplete(requestId) {
+    GeamsSync.mergeShared(KEY, {}, (m) => {
+      m = m || {};
+      if (m[requestId]) m[requestId].status = 'completed';
+      return m;
+    });
+  }
+
+  return {
+    start, myIncoming, myOutgoing, myResponding, recordFor, recordForIncident,
+    sendRequest, cancelRequest, accept, decline, pushUnitUpdate, markComplete,
+  };
+})();
+
+/* ============================================================
+   AMBULANCE APP — UI, navigation, login/signup, queue, active response
+   ============================================================ */
+const AmbulanceApp = (() => {
+  let currentScreen = 'queue';
+  let queue = [];              // incoming, not-yet-accepted calls (local view)
+  let routeTimer = null;
+  let map = null, unitMarker = null, incMarker = null, routeLine = null;
+  let routeCoords = [], routeStep = 0;
+
+  /* ── TOASTS ── */
+  function showToast(type, title, msg, duration=4500) {
+    const c = document.getElementById('toast-container');
+    const el = document.createElement('div');
+    el.className = 'toast ' + type;
+    const icon = {success:'✅',error:'🚨',warning:'⚠️',info:'ℹ️'}[type] || 'ℹ️';
+    el.innerHTML = `<span>${icon}</span><div><div style="font-weight:700;font-size:0.8rem">${title}</div><div style="color:var(--text-muted);font-size:0.74rem;margin-top:2px">${msg}</div></div>`;
+    c.appendChild(el);
+    setTimeout(() => el.remove(), duration);
+  }
+
+  /* ── LOGIN / SIGNUP ── */
+  function showSignup() {
+    document.getElementById('login-view').style.display = 'none';
+    document.getElementById('signup-view').style.display = 'flex';
+    const sel = document.getElementById('su-lcr');
+    if (sel && !sel.dataset.filled) {
+      sel.innerHTML = '<option value="">— Select jurisdiction —</option>' +
+        AmbulanceData.STATION_DIRECTORY.map(s => `<option value="${s.id}">${s.name} LCR</option>`).join('');
+      sel.dataset.filled = '1';
+    }
+  }
+  function showLogin() {
+    document.getElementById('signup-view').style.display = 'none';
+    document.getElementById('login-view').style.display = 'flex';
+  }
+
+  function doLogin() {
+    const name = (document.getElementById('login-name')?.value || '').trim();
+    const pass = document.getElementById('login-pass')?.value || '';
+    const genErr = document.getElementById('err-general');
+    ['login-name','login-pass'].forEach(id => document.getElementById(id)?.classList.remove('error'));
+    ['err-name','err-pass'].forEach(id => document.getElementById(id)?.classList.remove('show'));
+    if (genErr) genErr.textContent = '';
+    let valid = true;
+    if (!name) { document.getElementById('login-name')?.classList.add('error'); document.getElementById('err-name')?.classList.add('show'); valid = false; }
+    if (!pass) { document.getElementById('login-pass')?.classList.add('error'); document.getElementById('err-pass')?.classList.add('show'); valid = false; }
+    if (!valid) return;
+
+    const btn = document.getElementById('login-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Authenticating…'; }
+    setTimeout(async () => {
+      try { await AmbulanceData.refreshRegistered(); } catch (e) {}
+      const cred = AmbulanceData.checkLogin(name, pass);
+      if (!cred) {
+        if (genErr) genErr.textContent = 'Invalid name or password.';
+        if (btn) { btn.disabled = false; btn.textContent = '🔐 Sign In'; }
+        return;
+      }
+      enterApp(cred);
+    }, 700);
+  }
+
+  function doSignup() {
+    const name  = (document.getElementById('su-name')?.value || '').trim();
+    const rank  = document.getElementById('su-rank')?.value || 'Paramedic';
+    const phone = (document.getElementById('su-phone')?.value || '').trim();
+    const vehicle = (document.getElementById('su-vehicle')?.value || '').trim() || 'Unassigned';
+    const lcrId = document.getElementById('su-lcr')?.value || '';
+    const pass  = document.getElementById('su-pass')?.value || '';
+    const pass2 = document.getElementById('su-pass2')?.value || '';
+    const genErr = document.getElementById('su-err-general');
+    if (genErr) genErr.textContent = '';
+    if (!name || !phone || !lcrId || pass.length < 6 || pass !== pass2) {
+      if (genErr) genErr.textContent = !name || !phone || !lcrId ? 'Fill in all required fields.' :
+        pass.length < 6 ? 'Password must be at least 6 characters.' : 'Passwords do not match.';
+      return;
+    }
+    const cred = {
+      badge: 'GNAS-' + (2000 + Math.floor(Math.random()*7999)),
+      passHash: AmbulanceData.hashPass(name, pass), crewId: 'MEDIC-' + (5000 + Math.floor(Math.random()*4999)),
+      name, rank, lcrId, vehicle, phone,
+    };
+    AmbulanceData.registerCrew(cred);
+    const btn = document.getElementById('signup-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Registering…'; }
+    setTimeout(() => enterApp(cred), 700);
+  }
+
+  function enterApp(cred) {
+    AmbulanceData.setCrew(cred);
+    const station = AmbulanceData.findStation(cred.lcrId);
+    document.getElementById('login-view').style.display = 'none';
+    document.getElementById('signup-view').style.display = 'none';
+    document.getElementById('main-view').style.display = 'flex';
+    document.getElementById('topbar-crew').textContent = `${cred.name} · ${station ? station.name : cred.lcrId}`;
+    GeamsAmbulanceSync.start(cred.lcrId);
+    AmbulanceMutualAid.start(cred.lcrId);
+    navigate('queue');
+    showToast('success', 'Signed In', `Connected to ${station ? station.name : ''} LCR — listening for calls`, 5000);
+  }
+
+  function endShift() {
+    if (AmbulanceData.currentJob && AmbulanceData.currentJob.status !== 'complete') {
+      showToast('warning', 'Active Response', 'Complete or hand off your current call before ending shift', 5000);
+      return;
+    }
+    location.reload();
+  }
+
+  /* ── NAVIGATION ── */
+  function navigate(screen) {
+    currentScreen = screen;
+    document.querySelectorAll('.nav-tab').forEach(t => t.classList.toggle('active', t.dataset.screen === screen));
+    document.getElementById('screen-queue').classList.toggle('active', screen === 'queue');
+    document.getElementById('screen-job').classList.toggle('active', screen === 'job');
+    document.getElementById('screen-aid').classList.toggle('active', screen === 'aid');
+    if (screen === 'queue') renderQueue();
+    if (screen === 'job') renderJob();
+    if (screen === 'aid') renderMutualAid();
+  }
+
+  /* ── INCOMING QUEUE ── */
+  function onNewCall(rec) {
+    queue.unshift(rec);
+    const dot = document.getElementById('topbar-dot');
+    if (dot) dot.classList.add('busy');
+    showToast('error', '🚨 New Call — ' + rec.priority.toUpperCase(), `${rec.type} · ${rec.location}`, 7000);
+    if (currentScreen === 'queue') renderQueue();
+  }
+
+  function renderQueue() {
+    const el = document.getElementById('screen-queue');
+    if (!el) return;
+    if (AmbulanceData.currentJob && AmbulanceData.currentJob.status !== 'complete') {
+      el.innerHTML = `<div class="empty-state">
+        <div class="empty-state-icon">🚑</div>
+        <div style="font-weight:700;margin-bottom:6px">Active response in progress</div>
+        <div style="font-size:0.78rem">Go to "Active Response" to manage ${AmbulanceData.currentJob.id}</div>
+      </div>`;
+      return;
+    }
+    if (!queue.length) {
+      el.innerHTML = `<div class="empty-state">
+        <div class="empty-state-icon">📡</div>
+        <div style="font-weight:700;margin-bottom:6px">Standing by</div>
+        <div style="font-size:0.78rem">Listening for calls forwarded by your Local Control Room in real time</div>
+      </div>`;
+      return;
+    }
+    el.innerHTML = queue.map(rec => {
+      const color = rec.priority === 'critical' ? 'var(--red)' : rec.priority === 'high' ? 'var(--orange)' : 'var(--gold)';
+      return `<div class="call-card" style="border-color:${color}">
+        <div class="call-card-type" style="color:${color}">${rec.type}</div>
+        <div class="call-card-meta">
+          📍 ${rec.location}<br>
+          🧭 GPS: ${rec.lat?.toFixed(5)}, ${rec.lng?.toFixed(5)}<br>
+          ${rec.civilianName ? '👤 Reported by: ' + rec.civilianName + (rec.civilianPhone ? ' · ' + rec.civilianPhone : '') + '<br>' : ''}
+          ${rec.notes ? '📝 ' + rec.notes + '<br>' : ''}
+          🏢 Forwarded by ${rec.forwardedBy || 'Control Room'} · Ref: ${rec.id}
+        </div>
+        <div class="call-card-actions">
+          <button class="btn btn-primary btn-full" onclick="AmbulanceApp.acceptCall('${rec.id}')">🚑 Respond</button>
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  function acceptCall(incId) {
+    const rec = queue.find(r => r.id === incId);
+    if (!rec) return;
+    queue = queue.filter(r => r.id !== incId);
+    const crew = AmbulanceData.crew;
+    const station = AmbulanceData.findStation(crew.lcrId);
+    const job = {
+      id: rec.id, type: rec.type, priority: rec.priority, location: rec.location,
+      lat: rec.lat, lng: rec.lng, civilianName: rec.civilianName, civilianPhone: rec.civilianPhone,
+      notes: rec.notes, status: 'accepted', acceptedAt: Date.now(),
+      unitLat: station.lat, unitLng: station.lng, unitETA: null,
+    };
+    AmbulanceData.setCurrentJob(job);
+    GeamsAmbulanceSync.pushUpdate(crew.lcrId, incId, {
+      serviceStatus: 'accepted', unitName: crew.name, unitBadge: crew.badge,
+      unitLat: station.lat, unitLng: station.lng,
+    });
+    const dot = document.getElementById('topbar-dot');
+    if (dot) dot.classList.remove('busy');
+    showToast('success', 'Call Accepted', `${job.type} — navigating from ${station.name}`, 5000);
+    navigate('job');
+    startRoute(station, job);
+  }
+
+  /* ── ACTIVE RESPONSE / MAP ── */
+  // Real positioning: the unit's position comes from this device's GPS
+  // (watchPosition) while the call is En Route; ETA is computed from the real
+  // remaining distance. Nothing is animated or simulated.
+  let gpsWatch = null;
+  function distM(aLat, aLng, bLat, bLng) {
+    const R = 6371000, r = Math.PI/180, dLa = (bLat-aLat)*r, dLo = (bLng-aLng)*r;
+    const s = Math.sin(dLa/2)**2 + Math.cos(aLat*r)*Math.cos(bLat*r)*Math.sin(dLo/2)**2;
+    return 2*R*Math.atan2(Math.sqrt(s), Math.sqrt(1-s));
+  }
+  function stopGps() {
+    if (gpsWatch != null && navigator.geolocation) { navigator.geolocation.clearWatch(gpsWatch); }
+    gpsWatch = null;
+  }
+  function startRoute(station, job) {
+    routeCoords = [[station.lat, station.lng], [job.lat, job.lng]]; // straight line only
+    routeStep = 0;
+    if (routeTimer) { clearInterval(routeTimer); routeTimer = null; }
+    stopGps();
+    if (!navigator.geolocation) {
+      showToast('error', 'GPS unavailable', 'This device has no geolocation — your position cannot be shared with the Control Room', 7000);
+      return;
+    }
+    let warned = false;
+    gpsWatch = navigator.geolocation.watchPosition((pos) => {
+      const cj = AmbulanceData.currentJob;
+      if (!cj || cj.status === 'complete') { stopGps(); return; }
+      if (cj.status !== 'en_route') return; // only report while en route
+      const lat = pos.coords.latitude, lng = pos.coords.longitude;
+      cj.unitLat = lat; cj.unitLng = lng;
+      const dM = distM(lat, lng, job.lat, job.lng);
+      const v = (pos.coords.speed && pos.coords.speed > 2) ? pos.coords.speed : 30/3.6;
+      cj.unitETA = Math.max(0, Math.round(dM / v / 60));
+      GeamsAmbulanceSync.pushUpdate(AmbulanceData.crew.lcrId, job.id, { unitLat: lat, unitLng: lng, unitETA: cj.unitETA });
+      if (job.mutualAidRequestId) {
+        AmbulanceMutualAid.pushUnitUpdate(job.mutualAidRequestId, { unitLat: lat, unitLng: lng, unitETA: cj.unitETA });
+      }
+      if (unitMarker) unitMarker.setLatLng([lat, lng]);
+      if (currentScreen === 'job') updateStatBar();
+      if (dM < 50 && !cj._arrivalToasted) {
+        cj._arrivalToasted = true;
+        showToast('info', 'Arriving', 'You are within 50 m of the scene — mark On Scene', 5000);
+      }
+    }, (err) => {
+      if (warned) return; warned = true;
+      showToast('warning', 'GPS', err && err.code === 1 ? 'Location permission is blocked — allow it so the Control Room can see your real position.' : 'No GPS fix yet — still trying.', 7000);
+    }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 });
+  }
+
+  function setStatus(status) {
+    const job = AmbulanceData.currentJob;
+    if (!job) return;
+    job.status = status;
+    GeamsAmbulanceSync.pushUpdate(AmbulanceData.crew.lcrId, job.id, { serviceStatus: status });
+    const labels = { en_route:'En Route', on_scene:'On Scene', complete:'Call Complete' };
+    showToast('success', labels[status] || status, job.id, 4000);
+    if (status === 'complete') {
+      if (routeTimer) { clearInterval(routeTimer); routeTimer = null; }
+      stopGps();
+      if (job.mutualAidRequestId) AmbulanceMutualAid.markComplete(job.mutualAidRequestId);
+      AmbulanceData.setCurrentJob(null);
+      setTimeout(() => navigate('queue'), 800);
+      return;
+    }
+    renderJob();
+  }
+
+  /* ── MUTUAL AID (cross-jurisdiction backup) ── */
+  let aidPickerOpen = false;
+
+  function toggleAidPicker() {
+    aidPickerOpen = !aidPickerOpen;
+    renderJob();
+  }
+
+  function requestMutualAid(targetLcrId) {
+    const job = AmbulanceData.currentJob;
+    const crew = AmbulanceData.crew;
+    if (!job || !crew) return;
+    const target = AmbulanceData.nearbyStations(crew.lcrId).find(s => s.id === targetLcrId);
+    const originStation = AmbulanceData.findStation(crew.lcrId);
+    if (!target || !originStation) { showToast('error', 'Failed', 'Target station not found'); return; }
+    const existing = AmbulanceMutualAid.recordForIncident(job.id);
+    if (existing && existing.status === 'pending') {
+      showToast('warning', 'Already Requested', `Awaiting response from ${existing.targetStationName}`);
+      return;
+    }
+    const rec = AmbulanceMutualAid.sendRequest(job, target, originStation, crew);
+    job.mutualAidOutgoingId = rec.id;
+    aidPickerOpen = false;
+    showToast('success', 'Backup Requested', `${target.name} notified (${target.distanceKm.toFixed(1)} km away) — awaiting response`, 6000);
+    renderJob();
+  }
+
+  function cancelMutualAidRequest(requestId) {
+    AmbulanceMutualAid.cancelRequest(requestId);
+    showToast('info', 'Request Cancelled', 'The backup request has been withdrawn');
+    renderJob();
+    renderMutualAid();
+  }
+
+  function acceptMutualAid(requestId) {
+    const rec = AmbulanceMutualAid.recordFor(requestId);
+    if (!rec || rec.status !== 'pending') { showToast('error', 'Unavailable', 'This request is no longer pending'); return; }
+    if (AmbulanceData.currentJob && AmbulanceData.currentJob.status !== 'complete') {
+      showToast('warning', 'Already Responding', 'Complete your current response before accepting mutual aid', 5000);
+      return;
+    }
+    const crew = AmbulanceData.crew;
+    const ownStation = AmbulanceData.findStation(crew.lcrId);
+    AmbulanceMutualAid.accept(requestId, ownStation, crew);
+    const job = {
+      id: rec.incidentId, type: rec.type, priority: rec.priority, location: rec.location,
+      lat: rec.lat, lng: rec.lng, notes: rec.notes, status: 'accepted', acceptedAt: Date.now(),
+      unitLat: ownStation.lat, unitLng: ownStation.lng, unitETA: null,
+      isMutualAid: true, mutualAidRequestId: requestId,
+      mutualAidOrigin: rec.originStationName,
+    };
+    AmbulanceData.setCurrentJob(job);
+    showToast('success', 'Mutual Aid Accepted', `Responding to ${rec.originStationName} — ${rec.type}`, 6000);
+    navigate('job');
+    startRoute(ownStation, job);
+  }
+
+  function declineMutualAid(requestId) {
+    AmbulanceMutualAid.decline(requestId);
+    showToast('info', 'Request Declined', 'The requesting station has been notified');
+    renderMutualAid();
+  }
+
+  function onIncomingMutualAid(rec) {
+    const dot = document.getElementById('topbar-dot');
+    if (dot) dot.classList.add('busy');
+    showToast('error', '🤝 Mutual Aid Request', `${rec.originStationName} needs backup — ${rec.type} (${rec.distanceKm} km)`, 8000);
+    if (currentScreen === 'aid') renderMutualAid();
+  }
+
+  function onMutualAidStatusChanged(rec) {
+    if (rec.status === 'accepted') {
+      showToast('success', '🤝 Backup Accepted', `${rec.acceptedByName} (${rec.targetStationName}) is responding`, 6000);
+    } else if (rec.status === 'declined') {
+      showToast('warning', 'Backup Declined', `${rec.targetStationName} could not provide backup`, 5000);
+    }
+    if (currentScreen === 'aid') renderMutualAid();
+    if (currentScreen === 'job') renderJob();
+  }
+
+  function onMutualAidRecordUpdated(rec) {
+    // Live position refresh for whichever side of this request is on screen.
+    const job = AmbulanceData.currentJob;
+    if (!job) return;
+    const isOriginViewingBackupUnit = !job.mutualAidRequestId && AmbulanceMutualAid.recordForIncident(job.id)?.id === rec.id;
+    const isResponderViewingOwnUnit = job.mutualAidRequestId === rec.id;
+    if ((isOriginViewingBackupUnit || isResponderViewingOwnUnit) && currentScreen === 'job' && map) {
+      updateBackupMarker(rec);
+    }
+  }
+
+  function refreshMutualAidTab() {
+    const incoming = AmbulanceMutualAid.myIncoming();
+    const badge = document.getElementById('aid-badge');
+    if (badge) {
+      badge.style.display = incoming.length ? 'inline-block' : 'none';
+      badge.textContent = incoming.length || '';
+    }
+    if (currentScreen === 'aid') renderMutualAid();
+  }
+
+  function renderMutualAid() {
+    const el = document.getElementById('screen-aid');
+    if (!el) return;
+    const incoming = AmbulanceMutualAid.myIncoming();
+    const outgoing = AmbulanceMutualAid.myOutgoing();
+    const statusColor = s => ({ pending:'var(--gold)', accepted:'var(--green)', declined:'var(--red)', cancelled:'var(--text-ghost)', completed:'var(--cyan)' }[s] || 'var(--text-muted)');
+
+    el.innerHTML = `
+      ${incoming.length ? `
+      <div style="padding:14px 14px 0">
+        <div style="font-size:0.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">📥 Incoming Requests</div>
+      </div>
+      ${incoming.map(r => `
+        <div class="call-card" style="border-color:var(--cyan)">
+          <div class="call-card-type" style="color:var(--cyan)">🤝 ${r.originStationName} needs backup</div>
+          <div class="call-card-meta">
+            🚑 ${r.type} · ${(r.priority||'').toUpperCase()}<br>
+            📍 ${r.location}<br>
+            📏 ${r.distanceKm} km from your station<br>
+            👤 Requested by ${r.requestedByName}
+          </div>
+          <div class="call-card-actions">
+            <button class="btn btn-ghost btn-full" onclick="AmbulanceApp.declineMutualAid('${r.id}')">✕ Decline</button>
+            <button class="btn btn-primary btn-full" onclick="AmbulanceApp.acceptMutualAid('${r.id}')">🚑 Accept &amp; Respond</button>
+          </div>
+        </div>`).join('')}` : ''}
+
+      <div style="padding:14px 14px 0">
+        <div style="font-size:0.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">📤 My Sent Requests</div>
+      </div>
+      ${outgoing.length ? outgoing.map(r => `
+        <div class="queue-item" style="cursor:default">
+          <div class="queue-item-dot" style="background:${statusColor(r.status)}"></div>
+          <div style="flex:1">
+            <div style="font-size:0.8rem;font-weight:700">${r.targetStationName} <span style="font-weight:400;color:var(--text-ghost);font-size:0.68rem">${r.distanceKm} km</span></div>
+            <div style="font-size:0.7rem;color:var(--text-muted)">${r.type} · ${r.status.toUpperCase()}${r.acceptedByName ? ' — ' + r.acceptedByName + (r.unitETA!=null ? ' · ETA ' + r.unitETA + ' min' : '') : ''}</div>
+          </div>
+          ${r.status === 'pending' ? `<button class="btn btn-ghost btn-sm" onclick="AmbulanceApp.cancelMutualAidRequest('${r.id}')">Cancel</button>` : ''}
+        </div>`).join('') : `<div class="empty-state" style="padding:24px"><div style="font-size:0.78rem">No backup requests sent yet. Open an active response and tap "Request Mutual Aid" there.</div></div>`}
+    `;
+  }
+
+  function renderJob() {
+    const el = document.getElementById('screen-job');
+    if (!el) return;
+    const job = AmbulanceData.currentJob;
+    if (!job) {
+      el.innerHTML = `<div class="empty-state"><div class="empty-state-icon">🗺</div><div style="font-weight:700">No active response</div></div>`;
+      return;
+    }
+    el.innerHTML = `
+      <div id="incident-map"></div>
+      <div class="stat-row" style="margin-top:14px">
+        <div class="stat-box"><div class="stat-val" id="stat-eta">${job.unitETA ?? '—'}</div><div class="stat-key">Min ETA</div></div>
+        <div class="stat-box"><div class="stat-val" style="color:var(--red)">${(job.priority||'').toUpperCase()}</div><div class="stat-key">Priority</div></div>
+        <div class="stat-box"><div class="stat-val" style="font-size:0.75rem;color:var(--cyan)" id="stat-status">${statusLabel(job.status)}</div><div class="stat-key">Status</div></div>
+        <div class="stat-box"><div class="stat-val" style="font-size:0.7rem">${job.id}</div><div class="stat-key">Ref</div></div>
+      </div>
+      <div class="job-detail">
+        ${job.isMutualAid ? `<div class="job-detail-row" style="color:var(--cyan);font-weight:700">🤝 Mutual Aid — responding for ${job.mutualAidOrigin}</div>` : ''}
+        <div class="job-detail-row"><b>${job.type}</b></div>
+        <div class="job-detail-row">📍 ${job.location}</div>
+        <div class="job-detail-row">🧭 GPS: ${job.lat?.toFixed(5)}, ${job.lng?.toFixed(5)}</div>
+        ${job.civilianName ? `<div class="job-detail-row">👤 ${job.civilianName}${job.civilianPhone ? ' · ' + job.civilianPhone : ''}</div>` : ''}
+        ${job.notes ? `<div class="job-detail-row">📝 ${job.notes}</div>` : ''}
+        ${renderMutualAidStatusRow(job)}
+      </div>
+      ${!job.isMutualAid ? renderAidPicker() : ''}
+      <div class="action-bar">
+        ${!job.isMutualAid ? `<button class="btn btn-cyan" onclick="AmbulanceApp.toggleAidPicker()">🤝 ${aidPickerOpen ? 'Hide' : 'Request Mutual Aid'}</button>` : ''}
+        ${job.status === 'accepted' ? `<button class="btn btn-primary btn-full" onclick="AmbulanceApp.setStatus('en_route')">🚨 Depart — En Route</button>` : ''}
+        ${job.status === 'en_route' ? `<button class="btn btn-warning btn-full" onclick="AmbulanceApp.setStatus('on_scene')">📍 Mark On Scene</button>` : ''}
+        ${job.status === 'on_scene' ? `<button class="btn btn-success btn-full" onclick="AmbulanceApp.setStatus('complete')">✅ Complete Call</button>` : ''}
+      </div>`;
+    setTimeout(initMap, 60);
+  }
+
+  function renderMutualAidStatusRow(job) {
+    const outRec = !job.isMutualAid ? AmbulanceMutualAid.recordForIncident(job.id) : null;
+    if (!outRec || outRec.status === 'cancelled') return '';
+    if (outRec.status === 'pending') return `<div class="job-detail-row" style="color:var(--gold)">🤝 Backup requested from ${outRec.targetStationName} (${outRec.distanceKm} km) — awaiting response</div>`;
+    if (outRec.status === 'accepted') return `<div class="job-detail-row" style="color:var(--green)">🤝 ${outRec.acceptedByName} from ${outRec.targetStationName} is responding${outRec.unitETA!=null ? ' · ETA ' + outRec.unitETA + ' min' : ''}</div>`;
+    if (outRec.status === 'declined') return `<div class="job-detail-row" style="color:var(--red)">🤝 ${outRec.targetStationName} declined the backup request</div>`;
+    if (outRec.status === 'completed') return `<div class="job-detail-row" style="color:var(--cyan)">🤝 Backup unit from ${outRec.targetStationName} completed its response</div>`;
+    return '';
+  }
+
+  function renderAidPicker() {
+    if (!aidPickerOpen) return '';
+    const crew = AmbulanceData.crew;
+    const stations = AmbulanceData.nearbyStations(crew.lcrId).slice(0, 6);
+    return `
+      <div style="margin:0 14px 10px;background:var(--bg-raised);border:1px solid var(--border-mid);border-radius:var(--r-md);padding:10px">
+        <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:8px">Nearest other-jurisdiction ambulance stations, by real distance:</div>
+        ${stations.map(s => `
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border-base)">
+            <div><div style="font-size:0.8rem;font-weight:700">${s.name}</div><div style="font-size:0.68rem;color:var(--text-ghost)">${s.distanceKm.toFixed(1)} km away</div></div>
+            <button class="btn btn-cyan btn-sm" onclick="AmbulanceApp.requestMutualAid('${s.id}')">Send Request</button>
+          </div>`).join('')}
+      </div>`;
+  }
+
+  function statusLabel(s) {
+    return { accepted:'Accepted', en_route:'En Route', on_scene:'On Scene', complete:'Complete' }[s] || s;
+  }
+
+  function updateStatBar() {
+    const eta = document.getElementById('stat-eta');
+    if (eta && AmbulanceData.currentJob) eta.textContent = AmbulanceData.currentJob.unitETA ?? '—';
+  }
+
+  let backupMarker = null;
+
+  function initMap() {
+    const el = document.getElementById('incident-map');
+    if (!el || typeof L === 'undefined') return;
+    const job = AmbulanceData.currentJob;
+    if (!job) return;
+    if (map) { try { map.remove(); } catch(e){} map = null; backupMarker = null; }
+    const center = [job.unitLat || job.lat, job.unitLng || job.lng];
+    map = L.map('incident-map', { zoomControl:true, attributionControl:false }).setView(center, 13);
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom:19 }).addTo(map);
+    incMarker = L.marker([job.lat, job.lng], { icon: L.divIcon({
+      html:'<div style="font-size:22px">🩺</div>', className:'', iconSize:[26,26], iconAnchor:[13,13] }) })
+      .addTo(map).bindPopup(job.type);
+    unitMarker = L.marker([job.unitLat || job.lat, job.unitLng || job.lng], { icon: L.divIcon({
+      html:'<div style="font-size:22px">🚑</div>', className:'', iconSize:[26,26], iconAnchor:[13,13] }) })
+      .addTo(map).bindPopup(AmbulanceData.crew.name);
+    routeLine = L.polyline(routeCoords.length ? routeCoords : [[job.lat,job.lng]], { color:'#ef4444', weight:3, dashArray:'8 6' }).addTo(map);
+    const bounds = [[job.lat,job.lng],[job.unitLat||job.lat, job.unitLng||job.lng]];
+
+    // Live backup-unit marker: shown on the origin's map once another
+    // jurisdiction accepts, and on the responder's own map (their own unit,
+    // already drawn above as unitMarker, so only draw this for the origin).
+    const aidRec = !job.isMutualAid ? AmbulanceMutualAid.recordForIncident(job.id) : null;
+    if (aidRec && aidRec.status === 'accepted' && aidRec.unitLat != null) {
+      backupMarker = L.marker([aidRec.unitLat, aidRec.unitLng], { icon: L.divIcon({
+        html:'<div style="font-size:22px">🚑🤝</div>', className:'', iconSize:[30,26], iconAnchor:[15,13] }) })
+        .addTo(map).bindPopup(`${aidRec.acceptedByName} — ${aidRec.targetStationName} (mutual aid)`);
+      bounds.push([aidRec.unitLat, aidRec.unitLng]);
+    }
+    map.fitBounds(L.latLngBounds(bounds), { padding:[40,40] });
+  }
+
+  function updateBackupMarker(rec) {
+    if (!map || rec.unitLat == null) return;
+    if (!backupMarker) {
+      backupMarker = L.marker([rec.unitLat, rec.unitLng], { icon: L.divIcon({
+        html:'<div style="font-size:22px">🚑🤝</div>', className:'', iconSize:[30,26], iconAnchor:[15,13] }) })
+        .addTo(map).bindPopup(`${rec.acceptedByName || ''} — ${rec.targetStationName || ''} (mutual aid)`);
+    } else {
+      backupMarker.setLatLng([rec.unitLat, rec.unitLng]);
+    }
+  }
+
+  return {
+    showSignup, showLogin, doLogin, doSignup, endShift, navigate,
+    onNewCall, acceptCall, setStatus, showToast,
+    toggleAidPicker, requestMutualAid, cancelMutualAidRequest,
+    acceptMutualAid, declineMutualAid,
+    onIncomingMutualAid, onMutualAidStatusChanged, onMutualAidRecordUpdated, refreshMutualAidTab,
+  };
+})();
+
+document.addEventListener('DOMContentLoaded', () => {
+  ['login-name','login-pass'].forEach(id => {
+    const elm = document.getElementById(id);
+    if (elm) elm.addEventListener('keydown', e => { if (e.key === 'Enter') AmbulanceApp.doLogin(); });
+  });
+});
+</script>
+</body>
+</html>
