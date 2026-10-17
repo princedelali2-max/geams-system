@@ -1608,11 +1608,26 @@ const GeamsStationSync = (() => {
           StationData.logActivity(inc.id, 'RECEIVED',
             `Live incident received from Civilian App — ${rec.civilianName} — ${rec.type}`, 'System');
           StationData.emit('new_incident', inc);
-        } else if (rec.status === 'cancelled' && inc.status !== 'resolved') {
+        } else if (rec.status === 'cancelled' && inc.status !== 'resolved' && !inc.officerAssigned && !rec.officerName) {
+          // Cancelled before any officer was assigned: nothing is in the field,
+          // so it can be closed straight away.
           inc.status = 'resolved';
           inc.resolutionType = 'Cancelled by civilian (false alarm)';
           inc.civilianTracking = false;
           StationData.emit('incident_resolved', inc);
+        } else if ((rec.civilianCancelled || rec.status === 'cancelled') && inc.status !== 'resolved') {
+          // Civilian cancelled while an officer is assigned / en route. Do NOT
+          // auto-resolve: keep the incident open, flag it, and let the operator
+          // decide when to stand the officer down (Resolve action).
+          if (!inc.civilianCancelled) {
+            inc.civilianCancelled = true;
+            inc.civilianCancelReason = rec.cancelReason || 'No reason given';
+            inc.civilianTracking = false;
+            StationData.logActivity(inc.id, 'CIVILIAN_CANCELLED',
+              `Civilian cancelled the alert (${inc.civilianCancelReason}) while ${inc.officerAssigned || rec.officerName || 'an officer'} is assigned — awaiting operator decision`, 'System');
+            StationApp.showToast('warning', '⚠ Civilian Cancelled', `${inc.id}: officer still assigned — verify and resolve or continue`, 30000);
+            if (typeof StationIncidents !== 'undefined' && document.getElementById('page-incidents')?.classList.contains('active')) StationIncidents.render();
+          }
         } else if (rec.status === 'resolved' && inc.status !== 'resolved') {
           // Covers resolution set EXTERNALLY to this station's own
           // confirmResolve() flow — specifically HQ resolving a Police
@@ -1652,7 +1667,7 @@ const GeamsStationSync = (() => {
           // Station's own simulation resumes automatically.
           if (rec.officerLat != null && rec.officerLng != null &&
               (rec.officerStatus === 'en_route' || rec.officerStatus === 'arrived')) {
-            inc._liveOfficerPos = { lat: rec.officerLat, lng: rec.officerLng, eta: rec.officerETA, arrived: rec.officerStatus === 'arrived' };
+            inc._liveOfficerPos = { lat: rec.officerLat, lng: rec.officerLng, eta: rec.officerETA, arrived: rec.officerStatus === 'arrived', distM: rec.officerDistM, route: rec.officerRoute || (inc._liveOfficerPos && inc._liveOfficerPos.route) || null };
             inc._liveOfficerPosAt = Date.now();
             if (typeof DispatchTracker !== 'undefined') DispatchTracker.mirrorLivePosition(inc.id, inc._liveOfficerPos);
           }
@@ -1727,10 +1742,19 @@ const GeamsStationSync = (() => {
     StationData.clearDemoOfficers();
     StationData.emit('officer_roster_updated', null);
     if (typeof StationBackup !== 'undefined') StationBackup.start();
+    let lastRosterMap = {}, lastRosterSig = '';
+    const applyRoster = () => {
+      StationData.mergeLiveOfficers(Object.values(lastRosterMap || {}));
+      const sig = StationData.officers.map(o => o.id + ':' + o.status).join('|');
+      if (sig !== lastRosterSig) { lastRosterSig = sig; StationData.emit('officer_roster_updated', null); }
+    };
     watchStops.push(GeamsSync.watch('lcr:' + lcrId + ':officers', {}, (map) => {
-      StationData.mergeLiveOfficers(Object.values(map));
-      StationData.emit('officer_roster_updated', null);
+      lastRosterMap = map || {}; lastRosterSig = ''; applyRoster();
     }, 3000));
+    // Heartbeat expiry: an officer whose app closed stops changing the roster
+    // record, so re-evaluate every 5 s to drop them once they go quiet.
+    const rosterExpiry = setInterval(applyRoster, 5000);
+    watchStops.push(() => clearInterval(rosterExpiry));
 
     hqStatusTimer = setInterval(pushHQStatus, 4000);
     pushHQStatus();
@@ -2379,9 +2403,12 @@ const StationData = (() => {
     const now = Date.now();
     const liveIds = new Set();
     liveList.forEach(rec => {
+      // Only officers who are on duty AND still sending heartbeats are "live".
+      // Off-duty records and officers whose app closed (no heartbeat for 30 s)
+      // are removed from the roster instead of lingering as ghosts.
+      if (rec.status !== 'on-duty') return;
+      if (!rec.lastSeen || (now - rec.lastSeen > 30000)) return;
       liveIds.add(rec.id);
-      const stale = rec.status === 'on-duty' && rec.lastSeen && (now - rec.lastSeen > 30000);
-      const resolvedStatus = rec.status === 'on-duty' ? (stale ? 'offline' : 'available') : 'off-duty';
       let off = officers.find(o => o.id === rec.id);
       if (!off) {
         off = { id: rec.id, currentIncident: null, lat: null, lng: null };
@@ -2390,17 +2417,17 @@ const StationData = (() => {
       off.name = rec.name; off.badge = rec.badge; off.rank = rec.rank || (rec.name||'').split('.')[0].trim();
       off.phone = rec.phone; off.vehicle = rec.vehicle; off.liveSync = true;
       off.lat = (rec.lat != null) ? rec.lat : null; off.lng = (rec.lng != null) ? rec.lng : null;
-      // Don't override a locally-tracked active dispatch — the officer is
-      // still "dispatched" from the LCR's point of view even though their
-      // own roster entry just says on-duty.
-      if (off.status !== 'dispatched') off.status = resolvedStatus;
+      // Don't override a locally-tracked active dispatch.
+      if (off.status !== 'dispatched') off.status = 'available';
     });
-    // Officers who dropped out of the live roster entirely (logged out on
-    // a device that never sent a clean off-duty, or simply not part of
-    // this jurisdiction) — mark off-duty unless mid-dispatch.
-    officers.forEach(o => {
-      if (o.liveSync && !liveIds.has(o.id) && o.status !== 'dispatched') o.status = 'off-duty';
-    });
+    for (let i = officers.length - 1; i >= 0; i--) {
+      const o = officers[i];
+      if (o.liveSync && !liveIds.has(o.id)) {
+        // Mid-dispatch officers stay until their case is closed; everyone else goes.
+        if (o.status === 'dispatched' && o.currentIncident) { o.status = 'offline'; continue; }
+        officers.splice(i, 1);
+      }
+    }
   }
 
   /** Officer-confirmed correction to this station's own location, from
@@ -4590,7 +4617,7 @@ const StationDashboard = (() => {
         </div>
         <div class="alert-row3">
           <span class="badge badge-${inc.priority}"><span class="badge-dot"></span>${inc.priority.toUpperCase()}</span>
-          <span class="badge ${inc.status==='resolved'?'badge-resolved':inc.status==='dispatched'?'badge-low':'badge-high'}">${inc.status==='active'?'PENDING':inc.status.toUpperCase()}</span>${inc.readyToResolve && inc.status!=='resolved' ? `<span class="badge badge-resolved" title="Officer marked complete" style="cursor:pointer;margin-left:4px" onclick="event.stopPropagation();StationApp.markResolved('${inc.id}')">✅ READY</span>` : ''}${inc.type && inc.type.toLowerCase().includes('police harassment') ? `<span class="badge badge-high" title="Resolved by HQ only" style="margin-left:4px">🛡️ HQ REVIEW</span>` : ''}
+          <span class="badge ${inc.status==='resolved'?'badge-resolved':inc.status==='dispatched'?'badge-low':'badge-high'}">${inc.status==='active'?'PENDING':inc.status.toUpperCase()}</span>${inc.civilianCancelled && inc.status!=='resolved' ? `<span class="badge badge-high" title="Civilian cancelled — awaiting operator decision" style="margin-left:4px">⚠ CIVILIAN CANCELLED</span>` : ''}${inc.readyToResolve && inc.status!=='resolved' ? `<span class="badge badge-resolved" title="Officer marked complete" style="cursor:pointer;margin-left:4px" onclick="event.stopPropagation();StationApp.markResolved('${inc.id}')">✅ READY</span>` : ''}${inc.type && inc.type.toLowerCase().includes('police harassment') ? `<span class="badge badge-high" title="Resolved by HQ only" style="margin-left:4px">🛡️ HQ REVIEW</span>` : ''}
           ${inc.officerAssigned
             ? `<span class="badge badge-resolved" style="cursor:pointer" onclick="event.stopPropagation();StationMap.panToOfficer('${StationData.officers.find(o=>o.name===inc.officerAssigned)?.id||''}')" >👮 ${inc.officerAssigned.split(' ').pop()}</span>`
             : `<span class="badge badge-offline">UNASSIGNED</span>`}
@@ -4961,7 +4988,7 @@ const StationIncidents = (() => {
         <td class="td-mono" style="color:var(--primary)">${inc.id}${isExternal ? ' <span title="Cross-jurisdiction — authorized" style="color:var(--orange);font-size:0.6rem">⚠</span>' : ''}</td>
         <td style="font-weight:600">${inc.type}</td>
         <td><span class="badge badge-${inc.priority}">${inc.priority.toUpperCase()}</span></td>
-        <td><span class="badge ${inc.status==='resolved'?'badge-resolved':inc.status==='dispatched'?'badge-low':'badge-high'}">${inc.status==='active'?'PENDING':inc.status.toUpperCase()}</span>${inc.readyToResolve && inc.status!=='resolved' ? `<span class="badge badge-resolved" title="Officer marked complete" style="cursor:pointer;margin-left:4px" onclick="event.stopPropagation();StationApp.markResolved('${inc.id}')">✅ READY</span>` : ''}${inc.type && inc.type.toLowerCase().includes('police harassment') ? `<span class="badge badge-high" title="Resolved by HQ only" style="margin-left:4px">🛡️ HQ REVIEW</span>` : ''}</td>
+        <td><span class="badge ${inc.status==='resolved'?'badge-resolved':inc.status==='dispatched'?'badge-low':'badge-high'}">${inc.status==='active'?'PENDING':inc.status.toUpperCase()}</span>${inc.civilianCancelled && inc.status!=='resolved' ? `<span class="badge badge-high" title="Civilian cancelled — awaiting operator decision" style="margin-left:4px">⚠ CIVILIAN CANCELLED</span>` : ''}${inc.readyToResolve && inc.status!=='resolved' ? `<span class="badge badge-resolved" title="Officer marked complete" style="cursor:pointer;margin-left:4px" onclick="event.stopPropagation();StationApp.markResolved('${inc.id}')">✅ READY</span>` : ''}${inc.type && inc.type.toLowerCase().includes('police harassment') ? `<span class="badge badge-high" title="Resolved by HQ only" style="margin-left:4px">🛡️ HQ REVIEW</span>` : ''}</td>
         <td class="td-muted" style="font-size:0.72rem">📍 ${inc.location}</td>
         <td class="td-muted" style="font-size:0.72rem">${inc.civilian}</td>
         <td style="font-size:0.72rem;color:${inc.officerAssigned?'var(--green)':'var(--text-muted)'}">${inc.officerAssigned||'—'}</td>
@@ -5134,7 +5161,9 @@ const DispatchTracker = (() => {
   function distLeftKm(u) {
     const lp = u.inc && u.inc._liveOfficerPos;
     if (!lp || u.inc.lat == null) return '—';
-    return (dist([lp.lat, lp.lng], [u.inc.lat, u.inc.lng]) / 1000).toFixed(1);
+    if (lp.distM != null) return (lp.distM / 1000).toFixed(1);
+    const tl = (u.inc.civilianLat != null && u.inc.civilianTracking !== false) ? [u.inc.civilianLat, u.inc.civilianLng] : [u.inc.lat, u.inc.lng];
+    return (dist([lp.lat, lp.lng], tl) / 1000).toFixed(1);
   }
 
   function timeNow() {
@@ -5402,8 +5431,9 @@ const DispatchTracker = (() => {
         if (livePos.arrived) u.unitMarker.setIcon(arrivedIcon());
         if (u.routeLine) { try { trackMap.removeLayer(u.routeLine); } catch (e) {} }
         if (u.inc && u.inc.lat != null) {
-          u.routeLine = L.polyline([pos, [u.inc.lat, u.inc.lng]], {
-            color: '#38bdf8', weight: 3, opacity: 0.7, dashArray: '6 8',
+          const road = livePos.route && livePos.route.length > 1 ? [pos].concat(livePos.route) : [pos, [u.inc.lat, u.inc.lng]];
+          u.routeLine = L.polyline(road, {
+            color: '#38bdf8', weight: 3, opacity: 0.7, dashArray: livePos.route ? null : '6 8',
           }).addTo(trackMap);
         }
         if (u.liveTrail.length > 1) {
