@@ -1156,10 +1156,15 @@ function startEmergencySync(em, notes, skipCreate) {
         CivilianApp.showToast('success', '🚓 Officer Assigned', `${active.officerName} has been dispatched to you`, 6000);
       }
     }
+    if (rec.officerRoute) active.officerRoute = rec.officerRoute;
     if (rec.officerETA != null) {
       active.officerETA = rec.officerETA;
+      active.officerDistM = rec.officerDistM != null ? rec.officerDistM : null;
       const etaEl = document.getElementById('officer-eta-val');
-      if (etaEl) etaEl.textContent = rec.officerETA > 0 ? rec.officerETA + ' min' : 'Arriving...';
+      if (etaEl && rec.officerStatus !== 'arrived') {
+        const dist = active.officerDistM != null ? ' · ' + (active.officerDistM >= 1000 ? (active.officerDistM / 1000).toFixed(1) + ' km' : active.officerDistM + ' m') : '';
+        etaEl.textContent = (rec.officerETA > 0 ? rec.officerETA + ' min' : 'Arriving...') + dist;
+      }
     }
     // Officer has arrived on scene — distinct, one-time notification
     // (separate from the "assigned" toast above and the resolution
@@ -1175,7 +1180,7 @@ function startEmergencySync(em, notes, skipCreate) {
     active.officerLat = rec.officerLat;
     active.officerLng = rec.officerLng;
     if (typeof ScreenEmergency !== 'undefined' && rec.officerLat != null && rec.officerLng != null) {
-      ScreenEmergency.updateOfficerMarker(rec.officerLat, rec.officerLng);
+      ScreenEmergency.updateOfficerMarker(rec.officerLat, rec.officerLng, active.officerRoute);
     }
   }, 2000);
   if (_syncStopChat) _syncStopChat();
@@ -1914,10 +1919,22 @@ const CivilianApp = (() => {
     if (!pin || pin.length < 4) { showToast('warning','PIN Required','Enter your 4-digit GEAMS PIN to cancel'); return; }
     closeSheet();
     const em = CivilianData.activeEmergency();
+    const reason = document.getElementById('cancel-reason')?.value || 'False alarm';
+    let officerAlreadyAssigned = !!(em && em.officerName);
     if (em) {
       GeamsSync.mergeShared('lcr:' + em.stationId + ':incidents', {}, (m) => {
         m = m || {};
-        if (m[em.id]) { m[em.id].status = 'cancelled'; m[em.id].resolvedAt = new Date().toISOString(); }
+        const r = m[em.id];
+        if (!r || r.status === 'resolved') return m;
+        if (r.officerName || r.officerStatus === 'en_route' || r.officerStatus === 'arrived' || r.status === 'dispatched') {
+          // An officer is already assigned / on the way: DON'T close the incident.
+          // Flag the cancellation so the Control Room and the officer see it and
+          // a person at the LCR decides when to stand the officer down.
+          officerAlreadyAssigned = true;
+          r.civilianCancelled = true; r.cancelReason = reason; r.cancelledAt = new Date().toISOString();
+        } else {
+          r.status = 'cancelled'; r.cancelReason = reason; r.resolvedAt = new Date().toISOString();
+        }
         return m;
       });
     }
@@ -1928,7 +1945,7 @@ const CivilianApp = (() => {
     if (tb) { tb.style.background=''; tb.style.borderBottomColor=''; }
     const dot = document.getElementById('logo-dot');
     if (dot) dot.classList.remove('emergency');
-    showToast('warning','Alert Cancelled','Station notified — false alarm recorded');
+    setTimeout(() => showToast(officerAlreadyAssigned ? 'warning' : 'success', 'Alert Cancelled', officerAlreadyAssigned ? 'An officer is already on the way. The Control Room has been told and will confirm with the officer — please keep your phone on.' : 'Station notified — false alarm recorded', officerAlreadyAssigned ? 9000 : 4000), 300);
     navigate('home');
   }
 
@@ -3708,8 +3725,11 @@ const ScreenEmergency = (() => {
             civMarker.setLatLng([data.lat, data.lng]);
             if (officerMarker && routeLine) {
               const op = officerMarker.getLatLng();
+              const em0 = CivilianData.activeEmergency();
+              const road = em0 && em0.officerRoute;
               emMap.removeLayer(routeLine);
-              routeLine = L.polyline([[op.lat, op.lng], [data.lat, data.lng]], { color: '#4ade80', weight: 3, dashArray: '8 5', className: 'safe-route-line' }).addTo(emMap);
+              const pts = (road && road.length > 1) ? [[op.lat, op.lng]].concat(road, [[data.lat, data.lng]]) : [[op.lat, op.lng], [data.lat, data.lng]];
+              routeLine = L.polyline(pts, { color: '#4ade80', weight: 4, dashArray: (road && road.length > 1) ? null : '8 5', className: 'safe-route-line' }).addTo(emMap);
             }
           } catch (e) { /* map may be stale — safe to ignore */ }
         }
@@ -3736,7 +3756,7 @@ const ScreenEmergency = (() => {
     // callback whenever the LCR/Dispatch apps publish a real GPS update.
     const em = CivilianData.activeEmergency();
     if (em && em.officerLat != null && em.officerLng != null) {
-      updateOfficerMarker(em.officerLat, em.officerLng);
+      updateOfficerMarker(em.officerLat, em.officerLng, em.officerRoute);
     }
   }
 
@@ -3745,7 +3765,7 @@ const ScreenEmergency = (() => {
   // fix. This is what keeps the civilian's map in sync with the actual
   // officer position shown on the LCR, Dispatch, and HQ maps, instead of
   // the old hardcoded offset.
-  function updateOfficerMarker(lat, lng) {
+  function updateOfficerMarker(lat, lng, road) {
     if (!emMap || lat == null || lng == null) return;
     try {
       if (!officerMarker) {
@@ -3758,7 +3778,9 @@ const ScreenEmergency = (() => {
       }
       const civ = CivilianData.currentLatLng();
       if (routeLine) { emMap.removeLayer(routeLine); }
-      routeLine = L.polyline([[lat, lng], [civ.lat, civ.lng]], { color: '#4ade80', weight: 3, dashArray: '8 5', className: 'safe-route-line' }).addTo(emMap);
+      const pts = (road && road.length > 1) ? [[lat, lng]].concat(road, [[civ.lat, civ.lng]]) : [[lat, lng], [civ.lat, civ.lng]];
+      routeLine = L.polyline(pts, { color: '#4ade80', weight: 4, dashArray: (road && road.length > 1) ? null : '8 5', className: 'safe-route-line' }).addTo(emMap);
+      try { emMap.fitBounds(routeLine.getBounds(), { padding: [30, 30], maxZoom: 17 }); } catch (e) {}
     } catch (e) { /* map may be stale if the user navigated away — safe to ignore */ }
   }
 
