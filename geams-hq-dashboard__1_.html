@@ -2111,13 +2111,25 @@ const GeamsData = (() => {
         });
       }, 3000);
 
-      GeamsSync.watch('lcr:' + st.id + ':officers', {}, (map) => {
-        liveOfficers[st.id] = Object.values(map || {});
-        const fresh = liveOfficers[st.id].filter(o => o.status === 'on-duty' && Date.now() - (o.lastSeen||0) < 30000);
-        st.officers = liveOfficers[st.id].length;
+      // Only on-duty officers with a recent heartbeat count as live; off-duty or
+      // silent (closed app) officers are dropped. Re-checked every 5 s because a
+      // closed app stops changing its record, so nothing else would trigger it.
+      let rawOfficers = [];
+      const recomputeOfficers = () => {
+        const fresh = rawOfficers.filter(o => o.status === 'on-duty' && Date.now() - (o.lastSeen||0) < 30000);
+        const sig = fresh.map(o => o.id).join(',');
+        const changed = sig !== (liveOfficers[st.id] || []).map(o => o.id).join(',');
+        liveOfficers[st.id] = fresh;
+        st.officers = fresh.length;
         st.onDuty = fresh.length;
+        if (changed) emit('station_counts', st);
+      };
+      GeamsSync.watch('lcr:' + st.id + ':officers', {}, (map) => {
+        rawOfficers = Object.values(map || {});
+        recomputeOfficers();
         emit('station_counts', st);
       }, 3000);
+      setInterval(recomputeOfficers, 5000);
     });
   }
 
