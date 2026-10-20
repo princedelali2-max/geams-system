@@ -832,7 +832,7 @@ const GeamsSync = (() => {
     location.reload();
   }
   return { available, getShared, setShared, mergeShared, watch, ready, onStatus, setBackend, deviceId,
-           get mode(){ return mode; }, get online(){ return online; }, get devices(){ return status.devices; }, get deviceApps(){ return status.byApp; } };
+           get mode(){ return mode; }, get base(){ return base; }, get online(){ return online; }, get devices(){ return status.devices; }, get deviceApps(){ return status.byApp; } };
 })();
 
 
@@ -978,6 +978,271 @@ const FaceEngine = (() => {
   }
 })();
 
+/* ============================================================
+   GEAMS LIVE VIDEO — real WebRTC video (+audio) from the civilian's camera to
+   the Control Room and the assigned officer. The shared backend carries only the
+   connection handshake (key rtc:<incId>:sig); the video itself flows directly
+   device-to-device. As a fallback for networks that block direct connections
+   (no TURN relay is configured), the civilian also sends a still snapshot every
+   2.5 s (key evidence:<incId>:frame) and viewers show that, clearly labelled.
+   ============================================================ */
+const GeamsLive = (() => {
+  const ICE = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] };
+  const sigKey = id => 'rtc:' + id + ':sig';
+  const liveKey = id => 'rtc:' + id + ':live';
+  const rid = () => Math.random().toString(36).slice(2, 10);
+  const gathered = (pc, ms) => new Promise(res => {
+    if (pc.iceGatheringState === 'complete') return res();
+    const t = setTimeout(res, ms || 3500);
+    pc.addEventListener('icegatheringstatechange', () => { if (pc.iceGatheringState === 'complete') { clearTimeout(t); res(); } });
+  });
+  const sdp = d => ({ type: d.type, sdp: d.sdp });
+
+  /* ───────── BROADCASTER (civilian) ───────── */
+  let bc = null;
+  function broadcasting() { return !!bc; }
+  function broadcastStream() { return bc ? bc.stream : null; }
+
+  async function startBroadcast(incId, facing) {
+    if (bc) stopBroadcast();
+    if (!window.isSecureContext) throw Object.assign(new Error('insecure'), { name: 'InsecureContext' });
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw Object.assign(new Error('nocamera'), { name: 'NoMediaApi' });
+    let stream;
+    try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing || 'environment' }, audio: true }); }
+    catch (e) {
+      if (e && (e.name === 'NotAllowedError' || e.name === 'NotFoundError' || e.name === 'OverconstrainedError')) {
+        // microphone refused/missing — try video alone
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing || 'environment' }, audio: false });
+      } else throw e;
+    }
+    bc = { incId, stream, pcs: {}, handled: {}, stopSig: null };
+    await GeamsSync.setShared(sigKey(incId), {});
+    await GeamsSync.setShared(liveKey(incId), { active: true, ts: Date.now(), audio: stream.getAudioTracks().length > 0 });
+    bc.beat = setInterval(() => { GeamsSync.mergeShared(liveKey(incId), {}, m => { m = m || {}; m.active = true; m.ts = Date.now(); return m; }); }, 8000);
+    bc.stopSig = GeamsSync.watch(sigKey(incId), {}, (map) => {
+      if (!bc) return;
+      Object.entries(map || {}).forEach(([vid, entry]) => {
+        if (!entry || !entry.offer || bc.handled[vid] === entry.ts) return;
+        bc.handled[vid] = entry.ts;
+        answerViewer(vid, entry).catch(() => {});
+      });
+    }, 1500);
+    stream.getVideoTracks()[0].addEventListener('ended', () => { if (bc && bc.stream === stream) stopBroadcast(); });
+    return stream;
+  }
+  async function answerViewer(vid, entry) {
+    const b = bc; if (!b) return;
+    if (b.pcs[vid]) { try { b.pcs[vid].close(); } catch (e) {} }
+    const pc = new RTCPeerConnection(ICE);
+    b.pcs[vid] = pc;
+    b.stream.getTracks().forEach(t => pc.addTrack(t, b.stream));
+    pc.onconnectionstatechange = () => { if (['failed', 'closed'].includes(pc.connectionState)) { try { pc.close(); } catch (e) {} } };
+    await pc.setRemoteDescription(entry.offer);
+    const ans = await pc.createAnswer();
+    await pc.setLocalDescription(ans);
+    await gathered(pc);
+    await GeamsSync.mergeShared(sigKey(b.incId), {}, m => { m = m || {}; if (m[vid] && m[vid].ts === entry.ts) m[vid].answer = sdp(pc.localDescription); return m; });
+  }
+  function stopBroadcast() {
+    const b = bc; if (!b) return;
+    bc = null;
+    if (b.beat) clearInterval(b.beat);
+    if (b.stopSig) b.stopSig();
+    Object.values(b.pcs).forEach(pc => { try { pc.close(); } catch (e) {} });
+    b.stream.getTracks().forEach(t => t.stop());
+    GeamsSync.setShared(liveKey(b.incId), { active: false, ts: Date.now() });
+    GeamsSync.setShared(sigKey(b.incId), {});
+  }
+
+  /* ───────── VIEWER (LCR / Dispatch) ───────── */
+  // view(incId, onStatus) → { el, stop }.  `el` is a persistent <video> element:
+  // call attach(container) after every re-render to put it back on screen.
+  function view(incId, onStatus) {
+    const vid = 'v-' + rid();
+    const el = document.createElement('video');
+    el.autoplay = true; el.playsInline = true; el.muted = true; el.controls = false;
+    el.style.cssText = 'width:100%;height:100%;object-fit:contain;background:#000;display:block';
+    let pc = null, stopped = false, liveActive = false, connectedAt = 0, retryT = null, sigStop = null, connecting = false, offerTs = 0;
+    const status = (s, kind) => { try { onStatus && onStatus(s, kind || 'info'); } catch (e) {} };
+
+    async function connect() {
+      if (stopped || connecting) return;
+      connecting = true;
+      try {
+        if (pc) { try { pc.close(); } catch (e) {} }
+        pc = new RTCPeerConnection(ICE);
+        const mine = pc;
+        pc.addTransceiver('video', { direction: 'recvonly' });
+        pc.addTransceiver('audio', { direction: 'recvonly' });
+        pc.ontrack = (ev) => {
+          if (el.srcObject !== ev.streams[0]) el.srcObject = ev.streams[0];
+          el.play().catch(() => {});
+        };
+        pc.onconnectionstatechange = () => {
+          if (mine !== pc) return;
+          if (pc.connectionState === 'connected') { connectedAt = Date.now(); status('LIVE video connected', 'live'); }
+          if (['failed', 'disconnected', 'closed'].includes(pc.connectionState) && !stopped && liveActive) {
+            status('Video connection lost — retrying…', 'warn');
+            clearTimeout(retryT); retryT = setTimeout(connect, 3000);
+          }
+        };
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        await gathered(pc);
+        offerTs = Date.now();
+        const ts = offerTs, desc = sdp(pc.localDescription);
+        await GeamsSync.mergeShared(sigKey(incId), {}, m => { m = m || {}; m[vid] = { offer: desc, ts }; return m; });
+        status('Connecting to civilian camera…', 'info');
+        // give up on direct video after 20 s (snapshots still shown by the caller)
+        setTimeout(() => { if (!stopped && pc === mine && mine.connectionState !== 'connected') status('Direct video blocked by the network — showing snapshots (a TURN relay server is needed for this network)', 'warn'); }, 20000);
+      } catch (e) {
+        status('Could not start video: ' + (e && e.message || e), 'error');
+      } finally { connecting = false; }
+    }
+
+    sigStop = GeamsSync.watch(sigKey(incId), {}, (map) => {
+      const e = map && map[vid];
+      if (e && e.answer && e.ts === offerTs && pc && pc.signalingState === 'have-local-offer') {
+        pc.setRemoteDescription(e.answer).catch(() => {});
+      }
+    }, 1500);
+    const liveStop = GeamsSync.watch(liveKey(incId), null, (d) => {
+      const fresh = d && d.active && (Date.now() - (d.ts || 0) < 30000);
+      if (fresh && !liveActive) { liveActive = true; status('Civilian started live video — connecting…', 'info'); connect(); }
+      else if (!fresh && liveActive) {
+        liveActive = false;
+        if (pc) { try { pc.close(); } catch (e) {} pc = null; }
+        el.srcObject = null;
+        status('Civilian stopped live video', 'off');
+      } else if (!fresh && !liveActive) status('Waiting for the civilian to start live video', 'off');
+    }, 2000);
+
+    function stop() {
+      stopped = true; clearTimeout(retryT);
+      if (sigStop) sigStop(); liveStop();
+      if (pc) { try { pc.close(); } catch (e) {} pc = null; }
+      el.srcObject = null;
+      GeamsSync.mergeShared(sigKey(incId), {}, m => { m = m || {}; delete m[vid]; return m; });
+    }
+    function attach(container) { if (container && el.parentNode !== container) { container.innerHTML = ''; container.appendChild(el); el.play().catch(() => {}); } }
+    function connected() { return pc && pc.connectionState === 'connected'; }
+    return { el, stop, attach, connected };
+  }
+
+  return { startBroadcast, stopBroadcast, broadcasting, broadcastStream, view };
+})();
+
+/* ============================================================
+   GEAMS ARCHIVE — permanent record of every incident so HQ and the LCR can
+   replay it later: timeline events, officer + civilian GPS tracks, chat, live
+   video recordings and attached files.
+     archive:<inc>:civ|off|lcr|hq   → event lists written by each app
+     archive:<inc>:media            → manifest of recordings / files
+     /api/blob/<inc>/<name>         → the actual video / file bytes (server only)
+   Recordings and files are only stored when the shared backend is connected.
+   ============================================================ */
+const GeamsArchive = (() => {
+  const evKey = (inc, who) => 'archive:' + inc + ':' + who;
+  const mediaKey = inc => 'archive:' + inc + ':media';
+  const rid = () => Math.random().toString(36).slice(2, 9);
+  const enc = encodeURIComponent;
+
+  function serverMode() { return GeamsSync.mode === 'server'; }
+  function blobUrl(inc, name, dl) { return (GeamsSync.base || '') + '/api/blob/' + enc(inc) + '/' + enc(name) + (dl ? '?dl=1' : ''); }
+
+  // ── events (batched so many small writes become one) ──
+  const queues = {}, timers = {}, lastTrack = {};
+  function log(inc, who, type, text, extra) {
+    if (!inc) return;
+    const k = evKey(inc, who);
+    (queues[k] = queues[k] || []).push(Object.assign({ t: Date.now(), who, type, text: String(text || '') }, extra || {}));
+    if (!timers[k]) timers[k] = setTimeout(() => flush(k), 1200);
+  }
+  function flush(k) {
+    timers[k] = null;
+    const batch = queues[k] || []; queues[k] = [];
+    if (!batch.length) return;
+    GeamsSync.mergeShared(k, [], arr => { arr = Array.isArray(arr) ? arr : []; arr.push(...batch); if (arr.length > 4000) arr = arr.slice(-4000); return arr; })
+      .then(ok => { if (!ok) { queues[k] = batch.concat(queues[k] || []); if (!timers[k]) timers[k] = setTimeout(() => flush(k), 5000); } });
+  }
+  function track(inc, who, lat, lng, extra, minGapMs) {
+    if (!inc || lat == null || lng == null) return;
+    const k = inc + ':' + who, now = Date.now();
+    if (lastTrack[k] && now - lastTrack[k] < (minGapMs || 8000)) return;
+    lastTrack[k] = now;
+    log(inc, who, 'pos', '', Object.assign({ lat: +(+lat).toFixed(6), lng: +(+lng).toFixed(6) }, extra || {}));
+  }
+
+  // ── files & recordings ──
+  function addManifest(inc, entry) {
+    return GeamsSync.mergeShared(mediaKey(inc), [], arr => { arr = Array.isArray(arr) ? arr : []; const i = arr.findIndex(x => x.id === entry.id); if (i >= 0) arr[i] = Object.assign(arr[i], entry); else arr.push(entry); return arr; });
+  }
+  async function putBlob(inc, name, body, type, append) {
+    const r = await fetch((GeamsSync.base || '') + '/api/blob/' + enc(inc) + '/' + enc(name) + (append ? '?append=1' : ''), { method: 'PUT', headers: { 'Content-Type': type || 'application/octet-stream' }, body });
+    if (!r.ok) throw new Error('upload failed ' + r.status);
+    return r.json();
+  }
+  // Upload a file someone attached to an incident (photo, video, audio, document).
+  async function addFile(inc, file, meta) {
+    if (!serverMode()) return { saved: false, reason: 'Not connected to the GEAMS backend — the file was not stored permanently' };
+    const name = Date.now().toString(36) + '-' + String(file.name || 'file').replace(/[^A-Za-z0-9._-]/g, '_');
+    await putBlob(inc, name, file, file.type, false);
+    const entry = Object.assign({ id: 'F-' + rid(), kind: 'file', name, orig: file.name || name, type: file.type || '', size: file.size || 0, ts: Date.now() }, meta || {});
+    await addManifest(inc, entry);
+    log(inc, (meta && meta.who) || 'lcr', 'file', 'File attached: ' + entry.orig + ' (' + Math.round(entry.size / 1024) + ' KB)');
+    return { saved: true, entry };
+  }
+  // Record a live MediaStream to the server in 4-second chunks.
+  function recordStream(inc, stream, label, who) {
+    if (!serverMode()) return { stop() {}, saved: false };
+    if (typeof MediaRecorder === 'undefined') return { stop() {}, saved: false };
+    const types = ['video/webm;codecs=vp8,opus', 'video/webm;codecs=vp9,opus', 'video/webm', 'video/mp4'];
+    const mime = types.find(t => { try { return MediaRecorder.isTypeSupported(t); } catch (e) { return false; } });
+    const ext = mime && mime.indexOf('mp4') >= 0 ? 'mp4' : 'webm';
+    const id = 'R-' + rid(), name = id + '.' + ext, startTs = Date.now();
+    let rec;
+    try { rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream); } catch (e) { return { stop() {}, saved: false }; }
+    let chain = Promise.resolve(), bytes = 0, first = true, stopped = false;
+    const type = (rec.mimeType || mime || 'video/webm').split(';')[0];
+    rec.ondataavailable = (ev) => {
+      if (!ev.data || !ev.data.size) return;
+      const blob = ev.data, isFirst = first; first = false;
+      chain = chain.then(async () => {
+        for (let i = 0; i < 4; i++) { try { await putBlob(inc, name, blob, type, !isFirst); bytes += blob.size; return; } catch (e) { await new Promise(r => setTimeout(r, 1500 * (i + 1))); } }
+      });
+    };
+    rec.onstop = () => { chain.then(() => addManifest(inc, { id, kind: 'video', name, type, label: label || 'Live video', who: who || 'civ', startTs, endTs: Date.now(), size: bytes })); };
+    rec.start(4000);
+    addManifest(inc, { id, kind: 'video', name, type, label: label || 'Live video', who: who || 'civ', startTs, endTs: null, size: 0 });
+    log(inc, who || 'civ', 'video_start', (label || 'Live video') + ' recording started');
+    return { saved: true, stop() { if (stopped) return; stopped = true; try { if (rec.state !== 'inactive') rec.stop(); } catch (e) {} log(inc, who || 'civ', 'video_stop', (label || 'Live video') + ' recording ended'); } };
+  }
+  // Periodic still frames (e.g. from an <video> element) saved as small JPEGs.
+  async function addSnapshot(inc, dataUrl, who, label) {
+    if (!serverMode()) return;
+    try {
+      const blob = await (await fetch(dataUrl)).blob();
+      const name = 'S-' + Date.now().toString(36) + '.jpg';
+      await putBlob(inc, name, blob, 'image/jpeg', false);
+      await addManifest(inc, { id: 'S-' + rid(), kind: 'snapshot', name, type: 'image/jpeg', size: blob.size, ts: Date.now(), who: who || 'civ', label: label || 'Snapshot' });
+    } catch (e) {}
+  }
+
+  // ── loading for replay ──
+  async function loadBundle(stationId, inc) {
+    const [recs, civ, off, lcr, hq, media, chat] = await Promise.all([
+      GeamsSync.getShared('lcr:' + stationId + ':incidents', {}),
+      GeamsSync.getShared(evKey(inc, 'civ'), []), GeamsSync.getShared(evKey(inc, 'off'), []),
+      GeamsSync.getShared(evKey(inc, 'lcr'), []), GeamsSync.getShared(evKey(inc, 'hq'), []),
+      GeamsSync.getShared(mediaKey(inc), []), GeamsSync.getShared('chat:' + inc, []),
+    ]);
+    return { stationId, inc, rec: (recs || {})[inc] || null, events: [].concat(civ, off, lcr, hq).filter(Boolean), media: media || [], chat: Array.isArray(chat) ? chat : [] };
+  }
+  async function mediaCount(inc) { const m = await GeamsSync.getShared(mediaKey(inc), []); return Array.isArray(m) ? m.length : 0; }
+
+  return { log, track, addFile, recordStream, addSnapshot, loadBundle, mediaCount, blobUrl, serverMode };
+})();
+
 /* ── Connection badge: shows whether this app is on the shared backend and how many devices are connected. ── */
 (function () {
   function badge() {
@@ -1113,6 +1378,8 @@ function startEmergencySync(em, notes, skipCreate) {
       };
       return m;
     });
+    GeamsArchive.log(em.id, 'civ', 'created', 'Alert raised: ' + em.type + (notes ? ' — ' + notes : '') + ' · ' + (CivilianData.user.name || 'civilian'));
+    GeamsArchive.track(em.id, 'civ', em.lat, em.lng, null, 0);
   }
   if (_syncStopIncident) _syncStopIncident();
   _syncStopIncident = GeamsSync.watch('lcr:' + em.stationId + ':incidents', {}, (map) => {
@@ -1335,6 +1602,7 @@ const CivilianData = (() => {
     }
     activeEmergency = null;
     emergencySeconds = 0;
+    try { GeamsLive.stopBroadcast(); const p = document.getElementById('live-preview'); if (p) p.remove(); } catch (e) {}
   }
 
   /* ── INCIDENT HISTORY ── */
@@ -1569,6 +1837,7 @@ CivilianData.onUpdate((event, data) => {
   // the shared record indefinitely, which could resurrect a civilian pin
   // on the LCR/Dispatch maps that had already been correctly removed.
   if (!em || em.status === 'resolved' || em.status === 'cancelled') return;
+  GeamsArchive.track(em.id, 'civ', data.lat, data.lng);
   GeamsSync.mergeShared('lcr:' + em.stationId + ':incidents', {}, (m) => {
     m = m || {};
     if (m[em.id]) { m[em.id].civilianLat = data.lat; m[em.id].civilianLng = data.lng; }
@@ -1921,6 +2190,7 @@ const CivilianApp = (() => {
     const em = CivilianData.activeEmergency();
     const reason = document.getElementById('cancel-reason')?.value || 'False alarm';
     let officerAlreadyAssigned = !!(em && em.officerName);
+    if (em) GeamsArchive.log(em.id, 'civ', 'cancel', 'Civilian cancelled the alert: ' + reason);
     if (em) {
       GeamsSync.mergeShared('lcr:' + em.stationId + ':incidents', {}, (m) => {
         m = m || {};
@@ -2295,6 +2565,7 @@ const CivilianApp = (() => {
     _evidenceIncId = incId;
     const setup = (stream) => {
       _evidenceStream = stream;
+      try { _evRec = GeamsArchive.recordStream(incId, stream, 'Evidence camera', 'civ'); } catch (e) {}
       const video = document.createElement('video');
       video.autoplay = true; video.playsInline = true; video.muted = true;
       // Off-screen but technically rendered — fully hidden (display:none)
@@ -2329,6 +2600,7 @@ const CivilianApp = (() => {
   }
 
   function stopEvidenceRelay() {
+    if (_evRec) { try { _evRec.stop(); } catch (e) {} _evRec = null; }
     if (_evidenceTimer) { clearInterval(_evidenceTimer); _evidenceTimer = null; }
     if (_evidenceStream) { _evidenceStream.getTracks().forEach(t => t.stop()); _evidenceStream = null; }
     if (_evidenceVideoEl) { try { _evidenceVideoEl.remove(); } catch(e){} _evidenceVideoEl = null; }
@@ -2338,6 +2610,86 @@ const CivilianApp = (() => {
     }
     _evidenceIncId = null;
     updateEvidenceBadge(false);
+  }
+
+  /* ── LIVE VIDEO TO CONTROL ROOM + OFFICER (real camera, real WebRTC) ── */
+  let _liveSnapTimer = null, _liveSnapVideo = null, _liveFacing = 'environment', _liveRec = null, _evRec = null;
+  function livePreviewUI(stream) {
+    let box = document.getElementById('live-preview');
+    if (box) box.remove();
+    box = document.createElement('div');
+    box.id = 'live-preview';
+    box.style.cssText = 'position:fixed;right:10px;bottom:84px;width:132px;z-index:99998;background:#000;border:2px solid #dc2626;border-radius:12px;overflow:hidden;box-shadow:0 4px 18px rgba(0,0,0,.55)';
+    box.innerHTML = `<video autoplay playsinline muted style="width:100%;height:170px;object-fit:cover;display:block;background:#000"></video>
+      <div style="display:flex;align-items:center;gap:4px;padding:5px 6px;background:#dc2626;color:#fff;font:700 0.58rem/1 -apple-system,sans-serif">
+        <span style="width:6px;height:6px;border-radius:50%;background:#fff;animation:blink 1.2s infinite"></span>LIVE
+        <span style="margin-left:auto;cursor:pointer;font-size:0.8rem" title="Switch camera" onclick="CivilianApp.flipLiveCamera()">🔄</span>
+        <span style="cursor:pointer;font-size:0.8rem" title="Stop" onclick="CivilianApp.stopLiveVideo()">⏹</span>
+      </div>`;
+    document.body.appendChild(box);
+    const v = box.querySelector('video'); v.srcObject = stream; v.play().catch(() => {});
+  }
+  function startLiveSnapshots(incId, stream) {
+    stopLiveSnapshots();
+    const v = document.createElement('video');
+    v.autoplay = true; v.playsInline = true; v.muted = true;
+    v.style.cssText = 'position:fixed;width:2px;height:2px;opacity:0.01;pointer-events:none;left:-9999px;top:-9999px';
+    v.srcObject = new MediaStream(stream.getVideoTracks());
+    document.body.appendChild(v); v.play().catch(() => {});
+    _liveSnapVideo = v;
+    const c = document.createElement('canvas'), x = c.getContext('2d');
+    _liveSnapTimer = setInterval(() => {
+      if (!v.videoWidth) return;
+      c.width = 320; c.height = Math.round(320 * (v.videoHeight / v.videoWidth || 0.75));
+      x.drawImage(v, 0, 0, c.width, c.height);
+      GeamsSync.setShared('evidence:' + incId + ':frame', { frame: c.toDataURL('image/jpeg', 0.45), ts: Date.now(), active: true, civilianName: CivilianData.user.name });
+    }, 2500);
+  }
+  function stopLiveSnapshots() {
+    if (_liveSnapTimer) { clearInterval(_liveSnapTimer); _liveSnapTimer = null; }
+    if (_liveSnapVideo) { try { _liveSnapVideo.remove(); } catch (e) {} _liveSnapVideo = null; }
+  }
+  async function startLiveVideo(facing) {
+    const em = CivilianData.activeEmergency();
+    if (!em) { showToast('warning', 'No active alert', 'Live video is available while an emergency alert is active', 5000); return; }
+    _liveFacing = facing || _liveFacing;
+    try {
+      // getUserMedia is the first thing awaited, so the browser treats this as
+      // a direct result of the tap and shows its camera permission prompt.
+      const stream = await GeamsLive.startBroadcast(em.id, _liveFacing);
+      livePreviewUI(stream);
+      startLiveSnapshots(em.id, stream);
+      _liveRec = GeamsArchive.recordStream(em.id, stream, 'Civilian live video', 'civ');
+      if (!_liveRec.saved) setTimeout(() => showToast('warning', 'Not being recorded', 'The backend is not connected, so this video is shown live but not saved for later replay', 7000), 1500);
+      const now = new Date();
+      GeamsSync.mergeShared('chat:' + em.id, [], (arr) => { arr = arr || []; arr.push({ from: 'system', text: '📹 ' + (CivilianData.user.name || 'Civilian') + ' started live video', time: now.getHours().toString().padStart(2,'0') + ':' + now.getMinutes().toString().padStart(2,'0'), ts: now.getTime() }); return arr; });
+      showToast('success', '📹 Live video on', 'The Control Room and your officer can now see your camera' + (stream.getAudioTracks().length ? ' and hear you' : ' (no microphone)'), 5000);
+      const btn = document.getElementById('chat-video-btn'); if (btn) btn.textContent = '⏹';
+    } catch (e) {
+      const n = e && e.name;
+      if (n === 'InsecureContext') showToast('error', 'Camera needs a secure page', 'Open GEAMS using its https:// address — browsers block the camera on plain http pages', 8000);
+      else if (n === 'NotAllowedError' || n === 'SecurityError') openSheet('📷 Camera blocked', cameraDeniedGuidanceHTML('CivilianApp.closeSheet();CivilianApp.startLiveVideo()'));
+      else if (n === 'NotFoundError' || n === 'NoMediaApi') showToast('error', 'No camera found', 'This device or browser has no usable camera', 6000);
+      else if (n === 'NotReadableError') showToast('error', 'Camera busy', 'Another app is using the camera — close it and try again', 6000);
+      else showToast('error', 'Could not start video', String(e && e.message || e), 6000);
+    }
+  }
+  function stopLiveVideo() {
+    if (_liveRec) { _liveRec.stop(); _liveRec = null; }
+    GeamsLive.stopBroadcast(); stopLiveSnapshots();
+    const em = CivilianData.activeEmergency();
+    if (em) GeamsSync.mergeShared('evidence:' + em.id + ':frame', {}, (m) => { m = m || {}; m.active = false; m.stoppedAt = Date.now(); return m; });
+    const p = document.getElementById('live-preview'); if (p) p.remove();
+    const btn = document.getElementById('chat-video-btn'); if (btn) btn.textContent = '📹';
+    showToast('info', 'Live video stopped', 'Your camera is off', 3000);
+  }
+  function toggleLiveVideo() { return GeamsLive.broadcasting() ? stopLiveVideo() : startLiveVideo(); }
+  async function flipLiveCamera() {
+    if (!GeamsLive.broadcasting()) return;
+    _liveFacing = _liveFacing === 'environment' ? 'user' : 'environment';
+    if (_liveRec) { _liveRec.stop(); _liveRec = null; }
+    GeamsLive.stopBroadcast(); stopLiveSnapshots();
+    await startLiveVideo(_liveFacing);
   }
 
   function stopEvidenceRelayManual() {
@@ -3234,7 +3586,7 @@ const CivilianApp = (() => {
     reportPoliceHarassment, submitPoliceHarassment, startHarassmentCamera,
     capturePoliceHarassmentPhoto, stopHarassmentCamera, closeHarassmentSheet,
     refreshHome, viewReportStatus, dismissReportCard,
-    stopEvidenceRelayManual, stopEvidenceRelayIfMatching, resumeEvidenceRelay,
+    stopEvidenceRelayManual, stopEvidenceRelayIfMatching, resumeEvidenceRelay, toggleLiveVideo, startLiveVideo, stopLiveVideo, flipLiveCamera,
     updateEmergencyContacts, editEmergencyContact, saveEmergencyContact, removeEmergencyContact,
     enrolFingerprint, runFingerprintScan, removeFingerprint, verifyFingerprint,
     enrolFace, captureFaceNow, closeFaceSheet, removeFace, startFaceEnrolCamera,
@@ -3973,7 +4325,7 @@ const ScreenChat = (() => {
       <div style="display:flex;gap:8px;padding:8px 14px 10px;flex-shrink:0;background:var(--bg-raised);border-top:1px solid var(--border-dim)">
         <input class="form-input" id="chat-input" placeholder="Message police..." style="min-height:42px;font-size:0.85rem" onkeydown="if(event.key==='Enter')ScreenChat.send()">
         <button class="btn btn-primary btn-sm" onclick="ScreenChat.send()">Send</button>
-        <button class="btn btn-ghost btn-sm" onclick="CivilianApp.showToast('info','Video','Starting video call with control room...')">📹</button>
+        <button class="btn btn-ghost btn-sm" id="chat-video-btn" title="Share live camera with the Control Room and your officer" onclick="CivilianApp.toggleLiveVideo()">${GeamsLive.broadcasting()?'⏹':'📹'}</button>
       </div>`;
 
     setTimeout(()=>{const cm=document.getElementById('chat-messages');if(cm)cm.scrollTop=cm.scrollHeight;},50);

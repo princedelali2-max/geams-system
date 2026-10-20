@@ -338,7 +338,7 @@ const GeamsSync = (() => {
     location.reload();
   }
   return { available, getShared, setShared, mergeShared, watch, ready, onStatus, setBackend, deviceId,
-           get mode(){ return mode; }, get online(){ return online; }, get devices(){ return status.devices; }, get deviceApps(){ return status.byApp; } };
+           get mode(){ return mode; }, get base(){ return base; }, get online(){ return online; }, get devices(){ return status.devices; }, get deviceApps(){ return status.byApp; } };
 })();
 
 /* ── Connection badge: shows whether this app is on the shared backend and how many devices are connected. ── */
