@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>GEAMS Fire Response — Ghana National Fire Service</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -17,11 +17,11 @@
     --font-mono:'SF Mono',Consolas,monospace;
   }
   *{box-sizing:border-box;margin:0;padding:0}
-  body{background:var(--bg);color:var(--text-primary);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;height:100vh;overflow:hidden}
-  #app{height:100vh;display:flex;flex-direction:column;max-width:520px;margin:0 auto;position:relative;background:var(--bg)}
+  body{background:var(--bg);color:var(--text-primary);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;height:100vh;height:var(--app-h,100dvh);overflow:hidden}
+  #app{height:100vh;height:var(--app-h,100dvh);display:flex;flex-direction:column;max-width:520px;margin:0 auto;position:relative;background:var(--bg)}
 
   /* ── LOGIN ── */
-  .login-wrap{flex:1;display:flex;flex-direction:column;justify-content:center;padding:32px 24px;overflow-y:auto}
+  .login-wrap{flex:1;min-height:0;-webkit-overflow-scrolling:touch;display:flex;flex-direction:column;justify-content:flex-start;justify-content:safe center;padding:32px 24px;overflow-y:auto}
   .login-logo{font-size:1.8rem;font-weight:800;text-align:center;letter-spacing:1px;color:var(--red)}
   .login-sub{text-align:center;color:var(--text-muted);font-size:0.85rem;margin-top:4px;margin-bottom:24px}
   .login-security-bar{display:flex;align-items:center;gap:8px;background:var(--red-dim);border:1px solid var(--red-border);border-radius:var(--r-md);padding:8px 12px;margin-bottom:18px}
@@ -49,7 +49,7 @@
   .topbar-btn{background:none;border:none;color:var(--text-muted);font-size:1rem;cursor:pointer;padding:4px 6px}
 
   /* ── SCREENS ── */
-  .screen{display:none;flex:1;overflow-y:auto;flex-direction:column}
+  .screen{display:none;flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;flex-direction:column}
   .screen.active{display:flex}
 
   .empty-state{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 24px;text-align:center;color:var(--text-muted)}
@@ -85,11 +85,14 @@
   .toast{position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:9999;background:var(--bg-raised);border:1px solid var(--border-mid);border-radius:var(--r-md);padding:11px 16px;font-size:0.8rem;max-width:90%;box-shadow:0 6px 20px rgba(0,0,0,0.5);display:flex;gap:8px;align-items:flex-start}
   .toast.success{border-color:var(--green)} .toast.error{border-color:var(--red)}
   .toast.warning{border-color:var(--orange)} .toast.info{border-color:var(--cyan)}
-  .nav-tabs{display:flex;border-top:1px solid var(--border-base);background:var(--bg-raised);flex-shrink:0}
+  .nav-tabs{display:flex;border-top:1px solid var(--border-base);background:var(--bg-raised);flex-shrink:0;padding-bottom:env(safe-area-inset-bottom,0px)}
   .nav-tab{flex:1;text-align:center;padding:9px 4px;font-size:0.62rem;color:var(--text-ghost);cursor:pointer}
   .nav-tab.active{color:var(--red)}
   .nav-tab-icon{font-size:1.1rem;display:block}
 </style>
+<script>/* keep the app exactly as tall as the VISIBLE screen (phone browsers' 100vh includes the hidden address bar, which pushed the bottom tabs off-screen) */
+(function(){function s(){var h=(window.visualViewport&&window.visualViewport.height)||window.innerHeight;document.documentElement.style.setProperty('--app-h',Math.round(h)+'px');}s();window.addEventListener('resize',s);window.addEventListener('orientationchange',function(){setTimeout(s,250);});if(window.visualViewport){window.visualViewport.addEventListener('resize',s);}})();
+</script>
 </head>
 <body>
 <div id="app">
@@ -355,6 +358,7 @@ const GeamsSync = (() => {
         const v = prompt('GEAMS backend address (e.g. https://geams.example.com or http://192.168.1.20:8080).\nLeave empty to use this device only.', cur);
         if (v !== null) GeamsSync.setBackend(v.trim());
       };
+      (function(){var st=document.createElement('style');st.textContent='@media (max-width:700px){#geams-sync-badge{bottom:auto!important;left:50%!important;top:calc(env(safe-area-inset-top,0px) + 2px)!important;transform:translateX(-50%);font-size:9px!important;padding:1px 7px!important;opacity:.85;max-width:70vw!important;white-space:nowrap!important;overflow:hidden;text-overflow:ellipsis;border-radius:0 0 6px 6px!important}}';document.head.appendChild(st);})();
       document.body.appendChild(el);
     }
     return el;

@@ -26,7 +26,7 @@
   --gap-xs:4px;--gap-sm:8px;--gap-md:14px;--gap-lg:18px;--gap-xl:24px;
   --r-sm:6px;--r-md:10px;--r-lg:14px;--r-xl:20px;
   --touch-sm:40px;--touch-md:48px;--touch-lg:56px;
-  --safe-bottom:env(safe-area-inset-bottom,16px);
+  --safe-bottom:env(safe-area-inset-bottom,0px);
   --navbar-h:64px;--topbar-h:54px;
   --ease:cubic-bezier(0.4,0,0.2,1);--fast:0.12s;--mid:0.22s;
 }
@@ -60,8 +60,8 @@ body{background:var(--bg-void);color:var(--text-bright);font-family:var(--font-u
 
 /* App is hidden behind the login screen at startup.
    boot() sets opacity:1 after successful auth. */
-#app{display:grid;height:100vh;width:100%;overflow:hidden;position:relative;
-  grid-template-rows:var(--topbar-h) 1fr var(--navbar-h);
+#app{display:grid;height:100vh;height:100dvh;height:var(--app-h,100dvh);width:100%;overflow:hidden;position:fixed;top:0;left:0;right:0;
+  grid-template-rows:var(--topbar-h) minmax(0,1fr) auto;
   grid-template-columns:1fr;
   grid-template-areas:
     "topbar"
@@ -84,7 +84,7 @@ body{background:var(--bg-void);color:var(--text-bright);font-family:var(--font-u
 #topbar{height:var(--topbar-h);background:var(--bg-raised);
   border-bottom:1px solid var(--border-base);display:flex;align-items:center;
   padding:0 16px;gap:10px;z-index:100;}
-#bottom-nav{height:var(--navbar-h);background:var(--bg-raised);
+#bottom-nav{min-height:var(--navbar-h);box-sizing:content-box;background:var(--bg-raised);
   border-top:1px solid var(--border-base);display:flex;align-items:center;
   padding-bottom:var(--safe-bottom);z-index:100;}
 
@@ -254,7 +254,7 @@ body{background:var(--bg-void);color:var(--text-bright);font-family:var(--font-u
 /* On desktop, map fills available height properly */
 @media (min-width:1200px){
   #screen-map .map-header{border-radius:0;}
-  #dispatch-map{height:calc(100vh - var(--topbar-h) - 90px)!important;}
+  #dispatch-map{height:calc(var(--app-h,100vh) - var(--topbar-h) - 90px)!important;}
 }
 /* Tablet: 2-col grid for action buttons */
 @media (min-width:768px){
@@ -420,7 +420,7 @@ body{background:var(--bg-void);color:var(--text-bright);font-family:var(--font-u
   border-radius:var(--r-md);border:1px solid var(--border-base);background:#060e1a;
   transition:height 0.15s;}
 .sketch-overlay.fullscreen .sketch-canvas-wrap{
-  height:calc(100vh - 280px)!important;
+  height:calc(var(--app-h,100vh) - 280px)!important;
   min-height:200px;border-radius:0;}
 /* Leaflet map layer fills the wrap */
 #sketch-map-layer{position:absolute;inset:0;z-index:1;background:#060e1a;}
@@ -441,7 +441,7 @@ body{background:var(--bg-void);color:var(--text-bright);font-family:var(--font-u
 }
 .sheet{background:var(--bg-raised);border-radius:var(--r-xl) var(--r-xl) 0 0;
   border:1px solid var(--border-mid);border-bottom:none;max-height:88vh;overflow-y:auto;
-  animation:sheetUp 0.28s var(--ease);padding-bottom:calc(var(--safe-bottom)+8px);}
+  animation:sheetUp 0.28s var(--ease);padding-bottom:calc(var(--safe-bottom) + 8px);}
 .sheet-handle{width:36px;height:4px;border-radius:2px;background:var(--border-mid);margin:10px auto 0;}
 .sheet-header{display:flex;align-items:center;padding:14px 18px 10px;gap:10px;border-bottom:1px solid var(--border-dim);}
 .sheet-title{font-size:1rem;font-weight:700;flex:1;}
@@ -490,10 +490,10 @@ body{background:var(--bg-void);color:var(--text-bright);font-family:var(--font-u
 .blink{animation:blink 1s infinite;}
 .stagger>*:nth-child(1){animation-delay:0.00s}.stagger>*:nth-child(2){animation-delay:0.05s}
 .stagger>*:nth-child(3){animation-delay:0.10s}.stagger>*:nth-child(4){animation-delay:0.15s}
-#boot-screen{position:fixed;inset:0;background:var(--bg-void);z-index:9999;display:flex;
-  flex-direction:column;align-items:center;justify-content:center;gap:0;overflow-y:auto;}
+#boot-screen{position:fixed;top:0;left:0;right:0;bottom:0;height:var(--app-h,100%);background:var(--bg-void);z-index:9999;display:flex;
+  flex-direction:column;align-items:center;justify-content:flex-start;gap:0;overflow-y:auto;-webkit-overflow-scrolling:touch;}
 /* Login form */
-.login-wrap{width:100%;max-width:360px;padding:24px 24px 32px;display:flex;flex-direction:column;gap:0;}
+.login-wrap{width:100%;max-width:360px;padding:24px 24px 32px;display:flex;flex-direction:column;gap:0;margin:auto;flex-shrink:0;}
 .login-logo{font-size:2.1rem;font-weight:900;letter-spacing:6px;color:var(--primary);
   font-family:var(--font-ui);text-shadow:0 0 28px var(--primary-glow);text-align:center;margin-bottom:4px;}
 .login-sub{font-family:var(--font-mono);font-size:0.62rem;letter-spacing:3px;
@@ -553,7 +553,10 @@ body{background:var(--bg-void);color:var(--text-bright);font-family:var(--font-u
 /* Lift Leaflet controls above the sketch drawing canvas (z-index 2) */
 /* Leaflet map tile / popup theming */
 .route-line-remaining{animation:routeDash 1.2s linear infinite}
-</style></head><body>
+</style><script>/* keep the app exactly as tall as the VISIBLE screen (phone browsers' 100vh includes the hidden address bar, which pushed the bottom tabs off-screen) */
+(function(){function s(){var h=(window.visualViewport&&window.visualViewport.height)||window.innerHeight;document.documentElement.style.setProperty('--app-h',Math.round(h)+'px');}s();window.addEventListener('resize',s);window.addEventListener('orientationchange',function(){setTimeout(s,250);});if(window.visualViewport){window.visualViewport.addEventListener('resize',s);}})();
+</script>
+</head><body>
 
 <!-- LOGIN / AUTH SCREEN -->
 <div id="boot-screen">
@@ -1443,6 +1446,7 @@ const GeamsArchive = (() => {
         const v = prompt('GEAMS backend address (e.g. https://geams.example.com or http://192.168.1.20:8080).\nLeave empty to use this device only.', cur);
         if (v !== null) GeamsSync.setBackend(v.trim());
       };
+      (function(){var st=document.createElement('style');st.textContent='@media (max-width:700px){#geams-sync-badge{bottom:auto!important;left:50%!important;top:calc(env(safe-area-inset-top,0px) + 2px)!important;transform:translateX(-50%);font-size:9px!important;padding:1px 7px!important;opacity:.85;max-width:70vw!important;white-space:nowrap!important;overflow:hidden;text-overflow:ellipsis;border-radius:0 0 6px 6px!important}}';document.head.appendChild(st);})();
       document.body.appendChild(el);
     }
     return el;
@@ -4265,7 +4269,7 @@ const ScreenMap = (() => {
             <button class="btn btn-sm btn-ghost" onclick="DispatchMap.fitBoth()">⊞</button>
           </div>
         </div>
-        <div id="dispatch-map" style="height:calc(100vh - 190px);width:100%"></div>
+        <div id="dispatch-map" style="height:calc(var(--app-h,100vh) - 190px);width:100%"></div>
       </div>
       <div style="padding:10px 14px;background:var(--bg-raised);border-top:1px solid var(--border-base);display:flex;align-items:center;gap:10px">
         ${closed
