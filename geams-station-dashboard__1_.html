@@ -7097,10 +7097,12 @@ const StationBackup = (() => {
     if (session && session.reqId && map[session.reqId] && map[session.reqId].status === 'ended') endSession(true, true);
     // Start / resume a session for any accepted, un-ended, un-expired request that involves us
     // (requester side after acceptance; either side after a page reload).
-    if (!session) {
-      const live = all.filter(r => r.status === 'accepted' && (r.fromId === me || r.toId === me) && r.decidedAt
+    {
+      let live = all.filter(r => r.status === 'accepted' && (r.fromId === me || r.toId === me) && r.decidedAt
           && Date.now() < r.decidedAt + (r.durationMin || 120)*60000 && !dismissedReq[r.id])
         .sort((a,b) => b.decidedAt - a.decidedAt)[0];
+      // already in a session: a NEWER accepted request from another LCR takes over (unless a call is running)
+      if (live && session && (live.id === session.reqId || live.decidedAt <= session.startedAt || call)) live = null;
       if (live) {
         const iAsked = live.fromId === me;
         const partner = StationAuth.findStation(iAsked ? live.toId : live.fromId);
@@ -7108,8 +7110,8 @@ const StationBackup = (() => {
           const freshAcc = Date.now() - live.decidedAt < 120000;
           if (!notified['acc'+live.id]) {
             notified['acc'+live.id] = 1;
-            StationApp.showToast('success', iAsked ? 'Backup Accepted' : 'Backup Session Resumed',
-              iAsked ? `${partner.name} accepted${live.auto ? ' automatically' : ''} — shared session starting` : `Shared session with ${partner.name} restored`, 5000);
+            StationApp.showToast('success', iAsked ? 'Backup Accepted' : (session ? 'Switched Backup Session' : 'Backup Session Started'),
+              iAsked ? `${partner.name} accepted${live.auto ? ' automatically' : ''} — shared session starting` : `Shared session with ${partner.name} is active (auto-accepted)`, 6000);
           }
           startSession(partner, iAsked ? 'requested' : 'received', live.durationMin || 120, live.id, live.decidedAt + (live.durationMin || 120)*60000);
         }
@@ -7155,7 +7157,7 @@ const StationBackup = (() => {
                 </div>
               </div>
               <div style="display:flex;gap:6px;flex-shrink:0">
-                <button class="btn btn-danger btn-sm" onclick="StationBackup.decline('${r.id}')">✕ Decline</button>
+                <button class="btn btn-danger btn-sm" onclick="StationBackup.decline('${r.id}')">⏹ End / Decline</button>
                 <button class="btn btn-success btn-sm" onclick="StationBackup.accept('${r.id}')">✓ Accept</button>
               </div>
             </div>`).join('')}
@@ -7166,17 +7168,20 @@ const StationBackup = (() => {
         <div class="panel-header"><span>📤</span><span class="panel-title">Outgoing Request History</span></div>
         <div class="panel-body no-pad" style="overflow-y:auto;max-height:calc(100vh - 480px)">
           <table class="data-table">
-            <thead><tr><th>Status</th><th>To Station</th><th>Officers</th><th>Duration</th><th>Sent</th><th>Reason</th></tr></thead>
+            <thead><tr><th>Status</th><th>To Station</th><th>Officers</th><th>Duration</th><th>Sent</th><th>Reason</th><th>Action</th></tr></thead>
             <tbody>
               ${outgoing.length ? outgoing.map(r => `
                 <tr>
-                  <td><span class="badge ${r.status==='accepted'?'badge-resolved':r.status==='declined'?'badge-offline':'badge-high'}">${r.status.toUpperCase()}</span></td>
+                  <td><span class="badge ${r.status==='accepted'?'badge-resolved':(r.status==='declined'||r.status==='ended')?'badge-offline':'badge-high'}">${r.status.toUpperCase()}</span></td>
                   <td style="font-weight:600">${r.toName} <span class="td-mono" style="color:var(--primary);font-size:0.6rem">${r.toId}</span></td>
                   <td class="td-muted">${r.officersNeeded}</td>
                   <td class="td-muted">${r.duration}</td>
                   <td class="td-muted">${r.sentAt}</td>
                   <td style="font-size:0.72rem;color:var(--text-muted)">${r.reason}</td>
-                </tr>`).join('') : `<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:24px">No backup requests sent yet</td></tr>`}
+                  <td>${r.status==='pending' ? `<button class="btn btn-danger btn-sm" onclick="StationBackup.cancelRequest('${r.id}')">✕ Cancel</button>`
+                        : (r.status==='accepted' && r.decidedAt && Date.now() < r.decidedAt + (r.durationMin||120)*60000) ? `<button class="btn btn-danger btn-sm" onclick="StationBackup.cancelRequest('${r.id}')">⏹ End Session</button>`
+                        : '<span class="td-muted">—</span>'}</td>
+                </tr>`).join('') : `<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:24px">No backup requests sent yet</td></tr>`}
             </tbody>
           </table>
         </div>
@@ -7216,8 +7221,8 @@ const StationBackup = (() => {
     const others = otherStations();
     StationApp.openModal('🤝 Request Backup From Another LCR', `
       <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:16px;line-height:1.6">
-        Request support from another Local Control Room. The request is <strong>accepted automatically</strong> as soon as that
-        station's dashboard is open (if it is closed, it is accepted when they next open it). Both stations then get a temporary
+        Request support from another Local Control Room. Requests are <strong>auto-accepted</strong>: the shared session starts
+        immediately and the other station joins by itself as soon as its dashboard is open. Both stations get a temporary
         shared view of each other's jurisdiction, live chat, calling and map annotations for the agreed duration.
       </div>
       <div class="form-group"><label class="form-label">Request From</label>
@@ -7259,14 +7264,19 @@ const StationBackup = (() => {
       id, fromId: myId(), fromName: StationData.station.name,
       toId: target.id, toName: target.name,
       officersNeeded, duration: durationLabel, durationMin, reason,
-      status: 'pending', createdAt: Date.now(),
+      status: 'accepted', auto: true, createdAt: Date.now(), decidedAt: Date.now(),
     };
+    // Backup requests are auto-accepted: the request is stored as accepted, so the
+    // shared session starts now on this side and the other LCR joins by itself as soon
+    // as its dashboard is open (or the next time it opens, while the window lasts).
     GeamsSync.mergeShared(REQ_KEY, {}, (m) => { m = m || {}; m[id] = req; return m; });
-    StationData.logActivity('BACKUP', 'BACKUP', `Backup requested from ${target.name} (${officersNeeded})`, StationData.station.commanderName);
+    StationData.logActivity('BACKUP', 'BACKUP', `Backup requested from ${target.name} (${officersNeeded}) — auto-accepted`, StationData.station.commanderName);
     StationApp.closeModal();
-    StationApp.showToast('warning','Backup Requested', `Sent to ${target.name} — it is accepted automatically when their dashboard is open`);
+    notified['acc'+id] = 1;
+    startSession(target, 'requested', durationMin, id, req.decidedAt + durationMin*60000);
+    StationApp.showToast('success','Backup Session Started', `${target.name} joins automatically when their dashboard is open — chat and annotations are delivered to them live`, 7000);
     outgoing.unshift({ ...req, sentAt: new Date().toLocaleTimeString('en-GB',{hour12:false}) });
-    render();
+    if (document.getElementById('page-backup')) render();
   }
 
   function accept(reqId) {
@@ -7305,6 +7315,18 @@ const StationBackup = (() => {
     StationApp.showToast('info','Request Declined', `${r.fromName} was notified`);
     updateBadge();
     render();
+  }
+
+  /* End a request from the list: cancels a pending one, or ends the shared session of an accepted one. */
+  function cancelRequest(reqId) {
+    dismissedReq[reqId] = 1;
+    if (session && session.reqId === reqId) { endSession(); return; }
+    GeamsSync.mergeShared(REQ_KEY, {}, (m) => { m = m || {}; if (m[reqId]) { m[reqId].status = 'ended'; m[reqId].endedAt = Date.now(); } return m; });
+    incoming = incoming.filter(x => x.id !== reqId);
+    outgoing.forEach(x => { if (x.id === reqId) x.status = 'ended'; });
+    StationApp.showToast('info','Request Ended', 'The backup request was ended');
+    updateBadge();
+    if (document.getElementById('page-backup')) render();
   }
 
   function updateBadge() {
@@ -7830,7 +7852,7 @@ const StationBackup = (() => {
   function endCall() { hangupCall(); }
 
   return {
-    render, start, stop, openNewRequest, sendRequest, accept, decline,
+    render, start, stop, openNewRequest, sendRequest, accept, decline, cancelRequest,
     endSession, isSessionActive, getSession, openAnnotate, submitAnnotation, updateBadge,
     openChat, sendChatMessage, openEvidenceShare, shareEvidence, openCall, endCall,
     startCall, answerCall, declineCall, hangupCall, toggleMute, toggleCam,
