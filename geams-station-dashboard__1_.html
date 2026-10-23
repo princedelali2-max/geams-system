@@ -7037,9 +7037,10 @@ const StationBackup = (() => {
      sees them as soon as its own dashboard is open; nothing is simulated.
      If the target LCR is not open, the request simply stays pending. */
   const REQ_KEY = 'backup:requests';
-  let reqWatchStop = null, chatWatchStopB = null, evWatchStopB = null, anWatchStopB = null;
+  let reqWatchStop = null, chatWatchStopB = null, evWatchStopB = null, anWatchStopB = null, callWatchStopB = null;
   const notified = {};
   const annRendered = {};
+  const dismissedReq = {};   // sessions this device ended — never auto-resume them
   function myId() { return StationData.station.id; }
   function kmTo(id) {
     const s = StationAuth.findStation(id); if (!s) return '?';
@@ -7050,8 +7051,9 @@ const StationBackup = (() => {
     reqWatchStop = GeamsSync.watch(REQ_KEY, {}, onRequests, 2500);
   }
   function stop() {
-    [reqWatchStop, chatWatchStopB, evWatchStopB, anWatchStopB].forEach(f => { try { f && f(); } catch (e) {} });
-    reqWatchStop = chatWatchStopB = evWatchStopB = anWatchStopB = null;
+    try { teardownCall(); } catch (e) {}
+    [reqWatchStop, chatWatchStopB, evWatchStopB, anWatchStopB, callWatchStopB].forEach(f => { try { f && f(); } catch (e) {} });
+    reqWatchStop = chatWatchStopB = evWatchStopB = anWatchStopB = callWatchStopB = null;
     incoming = []; outgoing = [];
   }
   function onRequests(map) {
@@ -7062,29 +7064,57 @@ const StationBackup = (() => {
     incoming = all.filter(r => r.toId === me && r.status === 'pending' && Date.now() - r.createdAt < DAY)
       .sort((a,b) => b.createdAt - a.createdAt)
       .map(r => ({ ...r, distanceKm: kmTo(r.fromId) }));
+    // AUTO-ACCEPT: a backup request addressed to this LCR is accepted as soon as
+    // this dashboard sees it (requests that waited while we were closed are
+    // accepted on opening, if younger than 15 min). Only one shared session can
+    // run at a time; extra requests stay pending for a manual decision.
+    const FRESH = 15*60000;
+    incoming.slice().reverse().forEach(r => {   // oldest first
+      if (notified['auto'+r.id]) return;
+      if (session) return;
+      if (Date.now() - r.createdAt > FRESH) return;
+      const mine = all.find(o => o.fromId === me && o.toId === r.fromId && o.status === 'pending');
+      if (mine && mine.createdAt < r.createdAt) return;   // both asked each other: the older request wins
+      notified['auto'+r.id] = 1;
+      if (mine) GeamsSync.mergeShared(REQ_KEY, {}, (m) => { m = m || {}; if (m[mine.id] && m[mine.id].status === 'pending') { m[mine.id].status = 'ended'; m[mine.id].endedAt = Date.now(); } return m; });
+      doAccept(r, true);
+    });
+    incoming = incoming.filter(r => !notified['auto'+r.id]);
     incoming.forEach(r => {
       if (notified['in'+r.id]) return;
       notified['in'+r.id] = 1;
-      StationApp.showToast('warning', '📥 Incoming Backup Request', `${r.fromName} is requesting support`, 6000);
+      StationApp.showToast('warning', '📥 Incoming Backup Request', session ? `${r.fromName} is requesting support — you are already in a shared session, decide manually` : `${r.fromName} is requesting support`, 6000);
     });
     outgoing = all.filter(r => r.fromId === me).sort((a,b) => b.createdAt - a.createdAt)
       .map(r => ({ ...r, sentAt: new Date(r.createdAt).toLocaleTimeString('en-GB',{hour12:false}) }));
     outgoing.forEach(r => {
       const fresh = r.decidedAt && Date.now() - r.decidedAt < 120000;
-      if (r.status === 'accepted' && !notified['acc'+r.id] && fresh && !session && Date.now() < r.decidedAt + r.durationMin*60000) {
-        notified['acc'+r.id] = 1;
-        const target = StationAuth.findStation(r.toId);
-        if (target) {
-          StationApp.showToast('success','Backup Accepted', `${target.name} accepted — shared session starting`, 5000);
-          startSession(target, 'requested', r.durationMin, r.id);
-        }
-      }
       if (r.status === 'declined' && !notified['dec'+r.id] && fresh) {
         notified['dec'+r.id] = 1;
         StationApp.showToast('error','Backup Declined', `${r.toName} could not provide backup right now`);
       }
     });
     if (session && session.reqId && map[session.reqId] && map[session.reqId].status === 'ended') endSession(true, true);
+    // Start / resume a session for any accepted, un-ended, un-expired request that involves us
+    // (requester side after acceptance; either side after a page reload).
+    if (!session) {
+      const live = all.filter(r => r.status === 'accepted' && (r.fromId === me || r.toId === me) && r.decidedAt
+          && Date.now() < r.decidedAt + (r.durationMin || 120)*60000 && !dismissedReq[r.id])
+        .sort((a,b) => b.decidedAt - a.decidedAt)[0];
+      if (live) {
+        const iAsked = live.fromId === me;
+        const partner = StationAuth.findStation(iAsked ? live.toId : live.fromId);
+        if (partner) {
+          const freshAcc = Date.now() - live.decidedAt < 120000;
+          if (!notified['acc'+live.id]) {
+            notified['acc'+live.id] = 1;
+            StationApp.showToast('success', iAsked ? 'Backup Accepted' : 'Backup Session Resumed',
+              iAsked ? `${partner.name} accepted${live.auto ? ' automatically' : ''} — shared session starting` : `Shared session with ${partner.name} restored`, 5000);
+          }
+          startSession(partner, iAsked ? 'requested' : 'received', live.durationMin || 120, live.id, live.decidedAt + (live.durationMin || 120)*60000);
+        }
+      }
+    }
     updateBadge();
     if (document.getElementById('page-backup')) render();
   }
@@ -7165,7 +7195,7 @@ const StationBackup = (() => {
           <div style="flex:1;min-width:200px">
             <div style="font-weight:700;color:#86efac;font-size:0.88rem">Shared Annotation Session Active — ${session.partner.name}</div>
             <div style="font-size:0.72rem;color:var(--text-muted)">
-              Both control rooms can view each other's jurisdiction and post shared map annotations.
+              Both control rooms see each other's map pins, chat and calls live through the backend${GeamsSync.mode==='server'?'':' — ⚠ no backend: only tabs on THIS device can reach each other'}.
               Auto-revokes in <strong id="backup-session-countdown">${remainingMin} min</strong>.
             </div>
           </div>
@@ -7186,8 +7216,9 @@ const StationBackup = (() => {
     const others = otherStations();
     StationApp.openModal('🤝 Request Backup From Another LCR', `
       <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:16px;line-height:1.6">
-        Formally request support from another Local Control Room. If accepted, both stations gain a temporary
-        shared view of each other's jurisdiction and map annotations for the agreed duration.
+        Request support from another Local Control Room. The request is <strong>accepted automatically</strong> as soon as that
+        station's dashboard is open (if it is closed, it is accepted when they next open it). Both stations then get a temporary
+        shared view of each other's jurisdiction, live chat, calling and map annotations for the agreed duration.
       </div>
       <div class="form-group"><label class="form-label">Request From</label>
         <select class="form-select" id="backup-target">
@@ -7233,27 +7264,33 @@ const StationBackup = (() => {
     GeamsSync.mergeShared(REQ_KEY, {}, (m) => { m = m || {}; m[id] = req; return m; });
     StationData.logActivity('BACKUP', 'BACKUP', `Backup requested from ${target.name} (${officersNeeded})`, StationData.station.commanderName);
     StationApp.closeModal();
-    StationApp.showToast('warning','Backup Requested', `Sent to ${target.name} — they will see it when their dashboard is open`);
+    StationApp.showToast('warning','Backup Requested', `Sent to ${target.name} — it is accepted automatically when their dashboard is open`);
     outgoing.unshift({ ...req, sentAt: new Date().toLocaleTimeString('en-GB',{hour12:false}) });
     render();
   }
 
   function accept(reqId) {
     const r = incoming.find(x => x.id === reqId);
-    if (!r) return;
+    if (r) doAccept(r, false);
+  }
+  function doAccept(r, auto) {
+    const reqId = r.id;
     const partner = StationAuth.findStation(r.fromId);
+    if (!partner) return;
     const durMin = r.durationMin || 120;
+    const decidedAt = Date.now();
     GeamsSync.mergeShared(REQ_KEY, {}, (m) => {
       m = m || {};
-      if (m[reqId]) { m[reqId].status = 'accepted'; m[reqId].decidedAt = Date.now(); }
+      if (m[reqId] && m[reqId].status === 'pending') { m[reqId].status = 'accepted'; m[reqId].decidedAt = decidedAt; m[reqId].auto = !!auto; m[reqId].acceptedBy = myId(); }
       return m;
     });
     incoming = incoming.filter(x => x.id !== reqId);
-    StationApp.showToast('success','Backup Accepted', `Shared session started with ${r.fromName}`);
+    StationApp.showToast('success', auto ? 'Backup Auto-Accepted' : 'Backup Accepted', `Shared session started with ${r.fromName}`, 5000);
     notified['acc'+reqId] = 1;
-    startSession(partner, 'received', durMin, reqId);
+    StationData.logActivity('BACKUP', 'BACKUP', `Backup ${auto?'auto-':''}accepted for ${r.fromName}`, StationData.station.commanderName);
+    startSession(partner, 'received', durMin, reqId, decidedAt + durMin*60000);
     updateBadge();
-    render();
+    if (document.getElementById('page-backup')) render();
   }
 
   function decline(reqId) {
@@ -7279,10 +7316,10 @@ const StationBackup = (() => {
      Jurisdiction access to another LCR's map is granted only for the
      life of this session object, and is force-revoked the moment it
      expires — mirrors the access-control requirement directly. */
-  function startSession(partner, direction, durationMin, reqId) {
+  function startSession(partner, direction, durationMin, reqId, expiresAtOverride) {
     if (session) endSession(true);
     const startedAt = Date.now();
-    const expiresAt = startedAt + durationMin * 60000;
+    const expiresAt = expiresAtOverride || (startedAt + durationMin * 60000);
     session = { partner, direction, startedAt, expiresAt, durationMin, reqId, annotations: [],
                 authorizedIncidentIds: [],
                 chatHistory: [{ from:'system', text:`Secure channel opened with ${partner.name}`, time: nowTime() }],
@@ -7316,7 +7353,8 @@ const StationBackup = (() => {
 
   function watchSessionData() {
     const rid = session.reqId, me = myId();
-    [chatWatchStopB, evWatchStopB, anWatchStopB].forEach(f => { try { f && f(); } catch (e) {} });
+    [chatWatchStopB, evWatchStopB, anWatchStopB, callWatchStopB].forEach(f => { try { f && f(); } catch (e) {} });
+    callWatchStopB = GeamsSync.watch('backup:call:' + rid, null, onCallSignal, 2000);
     let lastIn = 0, lastEv = 0;
     chatWatchStopB = GeamsSync.watch('backup:chat:' + rid, [], (arr) => {
       if (!session || session.reqId !== rid) return;
@@ -7358,15 +7396,16 @@ const StationBackup = (() => {
 
   function endSession(silent, remote) {
     if (!session) return;
+    if (session.reqId) dismissedReq[session.reqId] = 1;
+    hangupCall(true);
     if (!remote && session.reqId) {
       const rid = session.reqId;
       GeamsSync.mergeShared(REQ_KEY, {}, (m) => { m = m || {}; if (m[rid]) { m[rid].status = 'ended'; m[rid].endedAt = Date.now(); } return m; });
     }
-    [chatWatchStopB, evWatchStopB, anWatchStopB].forEach(f => { try { f && f(); } catch (e) {} });
-    chatWatchStopB = evWatchStopB = anWatchStopB = null;
+    [chatWatchStopB, evWatchStopB, anWatchStopB, callWatchStopB].forEach(f => { try { f && f(); } catch (e) {} });
+    chatWatchStopB = evWatchStopB = anWatchStopB = callWatchStopB = null;
     const partnerName = session.partner.name;
     if (session.timer) clearInterval(session.timer);
-    if (callTimer) { clearInterval(callTimer); callTimer = null; callSeconds = 0; }
     StationMap.clearSharedSession();
 
     // Revoke cross-jurisdiction authorization granted by this session —
@@ -7407,7 +7446,10 @@ const StationBackup = (() => {
     const note = document.getElementById('annotate-note').value.trim();
     if (!note) { StationApp.showToast('error','Empty Note','Enter annotation text first'); return; }
     if (!session) { StationApp.closeModal(); return; }
-    const a = StationMap.addAnnotationAtCenter(note, StationData.station.commanderName, true);
+    let a = StationMap.addAnnotationAtCenter(note, StationData.station.commanderName, true);
+    if (!a) {   // map not loaded on this device: still share the note, anchored at this station
+      a = { lat: StationData.station.lat, lng: StationData.station.lng, note, authorName: StationData.station.commanderName, author: 'self', time: nowTime() };
+    }
     if (a) {
       a.id = 'ANN-' + Date.now().toString(36); annRendered[a.id] = 1;
       session.annotations.push(a);
@@ -7434,6 +7476,7 @@ const StationBackup = (() => {
       <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:10px;line-height:1.5">
         Secure inter-station channel with <strong>${session.partner.commanderName}</strong> (${session.partner.name}).
         Visible only for the duration of this backup session.
+        <span style="display:block;margin-top:4px;color:${GeamsSync.mode==='server'?'var(--green)':'var(--gold)'}">${GeamsSync.mode==='server'?'● Live — messages are delivered instantly through the backend':'⚠ Backend not connected — messages only reach tabs on this device'}</span>
       </div>
       <div class="chat-window" style="height:300px;border:1px solid var(--border-base);border-radius:var(--r-md);overflow:hidden">
         <div class="chat-messages" id="backup-chat-messages">${buildBackupChatHTML()}</div>
@@ -7542,31 +7585,255 @@ const StationBackup = (() => {
     openEvidenceShare();
   }
 
-  /* ── VOICE CALL ──
-     A simple call flow (ringing → connected → timer) between the two
-     commanders, reusing the same control styling as the civilian video
-     call panel elsewhere in the app. */
-  let callTimer = null, callSeconds = 0;
+  /* ── REAL VOICE / VIDEO CALL ──
+     Genuine WebRTC call between the two control rooms. The backend carries only
+     the handshake (key backup:call:<requestId>); audio/video flow device-to-device.
+     STUN only — no TURN relay — so a few strict networks cannot connect; the call
+     then says so instead of pretending. */
+  const CALL_ICE = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] };
+  let call = null;            // { id, role, pc, local, started, timer, ringT, answered }
+  let incomingSig = null, ringTone = null;
+  const csdp = d => ({ type: d.type, sdp: d.sdp });
+  function iceDone(pc, ms) {
+    return new Promise(res => {
+      if (pc.iceGatheringState === 'complete') return res();
+      const t = setTimeout(res, ms || 3500);
+      pc.addEventListener('icegatheringstatechange', () => { if (pc.iceGatheringState === 'complete') { clearTimeout(t); res(); } });
+    });
+  }
+  function callOverlay() {
+    let o = document.getElementById('bk-call-overlay');
+    if (!o) {
+      o = document.createElement('div'); o.id = 'bk-call-overlay';
+      o.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;padding:16px';
+      document.body.appendChild(o);
+    }
+    return o;
+  }
+  function closeOverlay() { const o = document.getElementById('bk-call-overlay'); if (o) o.remove(); stopRing(); }
+  function startRing() {
+    stopRing();
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext; const ac = new AC();
+      const beep = () => { const o = ac.createOscillator(), g = ac.createGain(); o.frequency.value = 880; g.gain.value = 0.06; o.connect(g); g.connect(ac.destination); o.start(); setTimeout(() => o.stop(), 350); };
+      beep(); ringTone = { ac, id: setInterval(beep, 1500) };
+    } catch (e) {}
+  }
+  function stopRing() { if (ringTone) { clearInterval(ringTone.id); try { ringTone.ac.close(); } catch (e) {} ringTone = null; } }
 
   function openCall() {
     if (!session) { StationApp.showToast('error','No Session','Start or accept a backup request first'); return; }
     const partner = session.partner;
     const phone = partner.phone || partner.commanderPhone || '';
+    const live = GeamsSync.mode === 'server';
     StationApp.openModal(`📞 Call — ${partner.name}`, `
-      <div style="padding:6px 0 10px;font-size:0.8rem;line-height:1.6;color:var(--text-muted)">
-        In-app voice calling between control rooms needs a telephony service, which is not connected.
-        Use the secure Chat in this session, or phone the station directly.
-        <div style="margin-top:12px;font-weight:700;color:var(--text-bright)">${partner.commanderName}</div>
-        <div>${phone ? `<a class="btn btn-success btn-sm" href="tel:${phone}">📞 Dial ${phone}</a>` : 'No phone number is on file for this station.'}</div>
+      <div style="padding:4px 0 8px;font-size:0.8rem;line-height:1.6;color:var(--text-muted)">
+        Real in-app call to <strong style="color:var(--text-bright)">${partner.commanderName}</strong> (${partner.name}). The other control room must have its dashboard open — it rings there immediately.
+        ${live ? '' : '<div style="color:var(--gold);margin-top:6px">⚠ Backend not connected — only a dashboard open on this same device can receive the call.</div>'}
+        <div style="margin-top:6px;font-size:0.7rem;color:var(--text-ghost)">Needs microphone${'' } (and camera for video) permission and an https:// page. Some strict mobile networks block direct calls (no relay server is configured).</div>
+        ${phone ? `<div style="margin-top:8px"><a class="btn btn-ghost btn-sm" href="tel:${phone}">📱 Or dial ${phone}</a></div>` : ''}
       </div>`,
-      `<button class="btn btn-ghost btn-sm" onclick="StationApp.closeModal()">Close</button>`);
+      `<button class="btn btn-ghost btn-sm" onclick="StationApp.closeModal()">Close</button>
+       <button class="btn btn-success btn-sm" onclick="StationApp.closeModal();StationBackup.startCall(false)">📞 Voice call</button>
+       <button class="btn btn-primary btn-sm" onclick="StationApp.closeModal();StationBackup.startCall(true)">🎥 Video call</button>`);
   }
-  function endCall() { StationApp.closeModal(); }
+
+  async function getMedia(video) {
+    if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return { err: 'Calling needs an https:// page and a browser with microphone access.' };
+    try { return { stream: await navigator.mediaDevices.getUserMedia({ audio: true, video: video ? { facingMode: 'user' } : false }) }; }
+    catch (e) {
+      if (video) { try { return { stream: await navigator.mediaDevices.getUserMedia({ audio: true }), noVideo: true }; } catch (e2) { e = e2; } }
+      return { err: (e && e.name === 'NotAllowedError') ? 'Microphone permission was refused.' : (e && e.name === 'NotFoundError') ? 'No microphone found on this device.' : 'Could not open the microphone: ' + (e && e.message || e) };
+    }
+  }
+
+  async function startCall(video) {
+    if (!session) return;
+    if (call) { StationApp.showToast('info','Call','A call is already in progress'); return; }
+    const rid = session.reqId, me = myId(), partner = session.partner;
+    const m = await getMedia(video);
+    if (m.err) { StationApp.showToast('error','Cannot start call', m.err, 7000); return; }
+    if (m.noVideo) StationApp.showToast('warning','No camera','Starting as a voice call');
+    const id = 'C' + Date.now().toString(36);
+    const pc = new RTCPeerConnection(CALL_ICE);
+    call = { id, role: 'caller', pc, local: m.stream, video: !!video && !m.noVideo, rid };
+    m.stream.getTracks().forEach(t => pc.addTrack(t, m.stream));
+    wirePc(pc);
+    showCallUI(`Calling ${partner.commanderName} · ${partner.name}…`);
+    try {
+      const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: !!video });
+      await pc.setLocalDescription(offer);
+      await iceDone(pc);
+      if (!call || call.id !== id) return;
+      await GeamsSync.setShared('backup:call:' + rid, { id, from: me, fromName: StationData.station.commanderName + ' · ' + StationData.station.name, state: 'ringing', video: call.video, offer: csdp(pc.localDescription), ts: Date.now() });
+      StationData.logActivity('BACKUP', 'CALL', `${call.video?'Video':'Voice'} call placed to ${partner.name}`, StationData.station.commanderName);
+      call.ringT = setTimeout(() => {
+        if (call && call.id === id && !call.answered) {
+          GeamsSync.mergeShared('backup:call:' + rid, null, d => { if (d && d.id === id && d.state === 'ringing') d.state = 'missed'; return d; });
+          StationApp.showToast('warning','No answer', `${partner.name} did not answer`);
+          teardownCall();
+        }
+      }, 45000);
+    } catch (e) { StationApp.showToast('error','Call failed', e && e.message || String(e)); teardownCall(); }
+  }
+
+  function wirePc(pc) {
+    pc.ontrack = (ev) => {
+      const el = document.getElementById('bk-call-remote'); if (!el) return;
+      if (el.srcObject !== ev.streams[0]) el.srcObject = ev.streams[0];
+      el.play().catch(() => {});
+      updateCallLayout();
+    };
+    pc.onconnectionstatechange = () => {
+      if (!call || call.pc !== pc) return;
+      if (pc.connectionState === 'connected') {
+        call.answered = true; clearTimeout(call.ringT);
+        if (!call.started) { call.started = Date.now(); call.timer = setInterval(tickCall, 1000); }
+        setCallStatus('Connected');
+      } else if (pc.connectionState === 'failed') {
+        setCallStatus('⚠ Could not connect directly — this network blocks peer-to-peer calls (no relay configured). Use Chat or phone the station.');
+      } else if (pc.connectionState === 'disconnected') setCallStatus('Connection interrupted — reconnecting…');
+    };
+    // never leave a half-open call hanging silently
+    setTimeout(() => { if (call && call.pc === pc && pc.connectionState !== 'connected' && call.answered) setCallStatus('⚠ Still connecting… the network may be blocking direct calls (no relay configured).'); }, 20000);
+  }
+
+  function onCallSignal(sig) {
+    if (!session || !sig || !sig.id) return;
+    const me = myId();
+    if (sig.state === 'ringing' && sig.from !== me) {
+      if (Date.now() - sig.ts > 60000) return;
+      if (call || (incomingSig && incomingSig.id === sig.id)) return;
+      if (call && call.id === sig.id) return;
+      incomingSig = sig; showIncoming(sig);
+      return;
+    }
+    if (call && call.id === sig.id) {
+      if (sig.state === 'active' && call.role === 'caller' && sig.answer && !call.gotAnswer) {
+        call.gotAnswer = true; call.answered = true; clearTimeout(call.ringT);
+        call.pc.setRemoteDescription(sig.answer).catch(e => setCallStatus('Could not complete call setup: ' + e.message));
+        setCallStatus('Answered — connecting…');
+      }
+      if (['ended','declined','missed'].includes(sig.state)) {
+        StationApp.showToast('info','Call ended', sig.state === 'declined' ? `${session.partner.name} declined the call` : `${session.partner.name} ended the call`);
+        teardownCall();
+      }
+    } else if (incomingSig && incomingSig.id === sig.id && sig.state !== 'ringing') {
+      incomingSig = null; closeOverlay();
+      StationApp.showToast('info','Missed call', `${session.partner.name} stopped calling`);
+    }
+  }
+
+  function showIncoming(sig) {
+    startRing();
+    StationApp.showToast('warning','📞 Incoming call', `${sig.fromName || session.partner.name} is calling`, 8000);
+    callOverlay().innerHTML = `
+      <div style="background:var(--bg-panel,#101a2b);border:1px solid var(--border-base);border-radius:14px;padding:24px 28px;text-align:center;max-width:360px;width:100%">
+        <div style="font-size:2rem">${sig.video ? '🎥' : '📞'}</div>
+        <div style="font-weight:700;color:var(--text-bright);margin:8px 0 2px">Incoming ${sig.video ? 'video' : 'voice'} call</div>
+        <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:16px">${sig.fromName || session.partner.name}</div>
+        <div style="display:flex;gap:10px;justify-content:center">
+          <button class="btn btn-danger" onclick="StationBackup.declineCall()">✕ Decline</button>
+          <button class="btn btn-success" onclick="StationBackup.answerCall()">✓ Answer</button>
+        </div>
+      </div>`;
+  }
+  function declineCall() {
+    const sig = incomingSig; incomingSig = null; closeOverlay();
+    if (!sig || !session) return;
+    GeamsSync.mergeShared('backup:call:' + session.reqId, null, d => { if (d && d.id === sig.id) d.state = 'declined'; return d; });
+  }
+  async function answerCall() {
+    const sig = incomingSig; if (!sig || !session) return;
+    incomingSig = null; stopRing();
+    const rid = session.reqId, partner = session.partner;
+    const m = await getMedia(sig.video);
+    const pc = new RTCPeerConnection(CALL_ICE);
+    call = { id: sig.id, role: 'callee', pc, local: m.stream || null, video: !!sig.video && !!m.stream && !m.noVideo, rid, answered: true };
+    if (m.err) StationApp.showToast('warning','No microphone', m.err + ' You can hear the caller but they cannot hear you.', 7000);
+    wirePc(pc);
+    showCallUI('Connecting…');
+    try {
+      await pc.setRemoteDescription(sig.offer);
+      if (m.stream) m.stream.getTracks().forEach(t => pc.addTrack(t, m.stream));
+      const ans = await pc.createAnswer();
+      await pc.setLocalDescription(ans);
+      await iceDone(pc);
+      await GeamsSync.mergeShared('backup:call:' + rid, null, d => { if (d && d.id === sig.id) { d.state = 'active'; d.answer = csdp(pc.localDescription); d.answeredAt = Date.now(); } return d; });
+      StationData.logActivity('BACKUP', 'CALL', `Call answered with ${partner.name}`, StationData.station.commanderName);
+    } catch (e) { StationApp.showToast('error','Call failed', e && e.message || String(e)); hangupCall(); }
+  }
+
+  function showCallUI(status) {
+    const partner = session ? session.partner : { name: '', commanderName: '' };
+    callOverlay().innerHTML = `
+      <div style="background:var(--bg-panel,#101a2b);border:1px solid var(--border-base);border-radius:14px;padding:16px;max-width:520px;width:100%;text-align:center">
+        <div style="font-weight:700;color:var(--text-bright)">${partner.commanderName} · ${partner.name}</div>
+        <div id="bk-call-status" style="font-size:0.78rem;color:var(--text-muted);margin:4px 0 10px;min-height:1.2em">${status}</div>
+        <div id="bk-call-stage" style="position:relative;background:#000;border-radius:10px;overflow:hidden;height:70px">
+          <video id="bk-call-remote" autoplay playsinline style="width:100%;height:100%;object-fit:contain;display:block"></video>
+          <video id="bk-call-local" autoplay playsinline muted style="position:absolute;right:8px;bottom:8px;width:28%;max-height:35%;border-radius:6px;border:1px solid rgba(255,255,255,.3);display:none;object-fit:cover"></video>
+        </div>
+        <div id="bk-call-timer" style="font-family:var(--font-mono);font-size:0.9rem;color:var(--green);margin:8px 0">00:00</div>
+        <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+          <button class="btn btn-ghost btn-sm" id="bk-call-mute" onclick="StationBackup.toggleMute()">🎤 Mute</button>
+          ${call && call.video ? '<button class="btn btn-ghost btn-sm" id="bk-call-cam" onclick="StationBackup.toggleCam()">📷 Camera off</button>' : ''}
+          <button class="btn btn-danger btn-sm" onclick="StationBackup.hangupCall()">⏹ End call</button>
+        </div>
+      </div>`;
+    const lv = document.getElementById('bk-call-local');
+    if (call && call.local && call.video && lv) { lv.srcObject = call.local; lv.style.display = 'block'; }
+    updateCallLayout();
+  }
+  function updateCallLayout() {
+    const stage = document.getElementById('bk-call-stage'), el = document.getElementById('bk-call-remote');
+    if (!stage || !el) return;
+    const hasVideo = el.srcObject && el.srcObject.getVideoTracks && el.srcObject.getVideoTracks().length > 0;
+    stage.style.height = hasVideo ? '280px' : '70px';
+  }
+  function setCallStatus(t) { const e = document.getElementById('bk-call-status'); if (e) e.textContent = t; }
+  function tickCall() {
+    if (!call || !call.started) return;
+    const sec = Math.floor((Date.now() - call.started) / 1000);
+    const e = document.getElementById('bk-call-timer');
+    if (e) e.textContent = String(Math.floor(sec/60)).padStart(2,'0') + ':' + String(sec%60).padStart(2,'0');
+  }
+  function toggleMute() {
+    if (!call || !call.local) return;
+    const t = call.local.getAudioTracks()[0]; if (!t) return;
+    t.enabled = !t.enabled;
+    const b = document.getElementById('bk-call-mute'); if (b) b.textContent = t.enabled ? '🎤 Mute' : '🔇 Unmute';
+  }
+  function toggleCam() {
+    if (!call || !call.local) return;
+    const t = call.local.getVideoTracks()[0]; if (!t) return;
+    t.enabled = !t.enabled;
+    const b = document.getElementById('bk-call-cam'); if (b) b.textContent = t.enabled ? '📷 Camera off' : '📷 Camera on';
+  }
+  function teardownCall() {
+    const c = call; call = null; incomingSig = null;
+    if (c) {
+      clearTimeout(c.ringT); clearInterval(c.timer);
+      try { c.pc.close(); } catch (e) {}
+      if (c.local) c.local.getTracks().forEach(t => t.stop());
+    }
+    closeOverlay();
+  }
+  function hangupCall(silent) {
+    const c = call;
+    if (incomingSig) { declineCall(); }
+    if (!c) return;
+    if (session && c.rid) GeamsSync.mergeShared('backup:call:' + c.rid, null, d => { if (d && d.id === c.id && !['ended','declined','missed'].includes(d.state)) { d.state = 'ended'; d.endedAt = Date.now(); } return d; });
+    if (c.started && !silent) StationData.logActivity('BACKUP', 'CALL', `Call with ${session ? session.partner.name : 'partner'} ended (${Math.round((Date.now()-c.started)/1000)} s)`, StationData.station.commanderName);
+    teardownCall();
+  }
+  function endCall() { hangupCall(); }
 
   return {
     render, start, stop, openNewRequest, sendRequest, accept, decline,
     endSession, isSessionActive, getSession, openAnnotate, submitAnnotation, updateBadge,
     openChat, sendChatMessage, openEvidenceShare, shareEvidence, openCall, endCall,
+    startCall, answerCall, declineCall, hangupCall, toggleMute, toggleCam,
   };
 })();
 
