@@ -2197,7 +2197,9 @@ const DispatchApp = (() => {
       oldScript.parentNode.replaceChild(newScript, oldScript);
     });
   }
+  let _sheetCleanup = null;
   function closeSheet() {
+    if (_sheetCleanup) { try { _sheetCleanup(); } catch (e) {} _sheetCleanup = null; }
     const ov = document.getElementById('sheet-overlay');
     if (ov) ov.classList.add('hidden');
   }
@@ -2902,85 +2904,268 @@ const DispatchApp = (() => {
   }
 
   // ── EVIDENCE ──
-  function toggleBodyCam() {
-    bodyCamActive=!bodyCamActive;
-    DispatchData.currentJob.bodyCamActive=bodyCamActive;
-    const btns=document.querySelectorAll('#bodycam-btn');
-    btns.forEach(btn=>{
-      btn.className=bodyCamActive?'btn btn-danger btn-full':'btn btn-cyan btn-full';
-      btn.innerHTML=bodyCamActive?'⏹ Stop Body Camera':'⏺ Body Camera';
-    });
-    DispatchData.activityLog.unshift({time:DispatchData.fmt(new Date()),lcrId:DispatchData.officer.controlRoomId,
-      text:bodyCamActive?'<strong>Body camera started</strong> — recording to secure storage':'<strong>Body camera stopped</strong> — footage uploading'});
-    showToast(bodyCamActive?'info':'success',bodyCamActive?'Body Camera Recording':'Body Camera Stopped',
-      bodyCamActive?'Footage saved to secure evidence storage':'Footage uploaded — tagged to '+DispatchData.currentJob.id);
-    if(currentScreen==='evidence')ScreenEvidence.render();
+
+  // ════════ EVIDENCE: live camera / mic, stored on the GEAMS server ════════
+  const EV = { stream:null, rec:null, chunks:[], blob:null, kind:'photo', recording:false, timer:null, t0:0, actx:null, raf:null, bodyRec:null, bodyStream:null };
+  const fmtSize = n => n > 1048576 ? (n/1048576).toFixed(1)+' MB' : Math.max(1,Math.round(n/1024))+' KB';
+  const fmtDur = ms => { const s=Math.floor(ms/1000); return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0'); };
+  function evStopStream() {
+    clearInterval(EV.timer); EV.timer=null; if (EV.raf) cancelAnimationFrame(EV.raf); EV.raf=null;
+    try { if (EV.rec && EV.rec.state !== 'inactive') EV.rec.stop(); } catch (e) {}
+    if (EV.stream) EV.stream.getTracks().forEach(t => t.stop());
+    EV.stream=null; EV.rec=null; EV.recording=false;
+    if (EV.actx) { try { EV.actx.close(); } catch (e) {} EV.actx=null; }
+  }
+  function evMime(video) {
+    const t = video ? ['video/webm;codecs=vp8,opus','video/webm','video/mp4'] : ['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg'];
+    return t.find(x => { try { return MediaRecorder.isTypeSupported(x); } catch (e) { return false; } }) || '';
+  }
+  async function evSha(blob) {
+    try { if (window.crypto && crypto.subtle) return [...new Uint8Array(await crypto.subtle.digest('SHA-256', await blob.arrayBuffer()))].map(b=>b.toString(16).padStart(2,'0')).join(''); } catch (e) {}
+    return '';
+  }
+  function evNeedsSecure() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return 'Camera and microphone need a secure (https) page and a supported browser.';
+    return '';
   }
 
+  const EV_TYPES = [['Scene photograph','photo'],['Suspect photo','photo'],['Video recording','video'],['Document / ID scan','photo'],['Injury documentation','photo'],['Property / stolen item','photo']];
   function uploadEvidence() {
+    if (!DispatchData.currentJob || DispatchData.currentJob.id === '—') { showToast('warning','No active job','Accept a job first so evidence is tagged to a case'); return; }
+    EV.blob = null;
     openSheet('📎 Upload Evidence',`
-      <div class="upload-zone" onclick="DispatchApp.showToast('info','Upload','Opening camera / file selector...')">
-        <div class="upload-icon">📷</div>
-        <div class="upload-label">Tap to take photo or select file</div>
-        <div style="font-size:0.65rem;color:var(--text-ghost);margin-top:4px">JPG · PNG · MP4 · PDF</div>
-      </div>
-      <div class="form-group" style="margin-top:14px"><label class="form-label">Evidence Type</label>
-        <select class="form-select">
-          <option>Scene photograph</option><option>Suspect photo</option>
-          <option>Video recording</option><option>Document / ID scan</option>
-          <option>Injury documentation</option><option>Property / stolen item</option>
+      <div class="form-group"><label class="form-label">Evidence Type</label>
+        <select class="form-select" id="ev-type" onchange="DispatchApp.evTypeChanged()">
+          ${EV_TYPES.map(t=>`<option value="${t[1]}">${t[0]}</option>`).join('')}
         </select></div>
+      <div id="ev-stage" style="border-radius:var(--r-lg);overflow:hidden;background:#000;position:relative;min-height:200px;display:flex;align-items:center;justify-content:center;margin-bottom:8px">
+        <video id="ev-video" playsinline muted autoplay style="width:100%;max-height:300px;display:none"></video>
+        <img id="ev-photo" style="width:100%;max-height:300px;object-fit:contain;display:none">
+        <div id="ev-msg" style="color:var(--text-muted);font-size:0.78rem;text-align:center;padding:20px">📷 Opening camera…</div>
+        <div id="ev-rec" style="display:none;position:absolute;top:8px;left:8px;background:rgba(0,0,0,.6);color:#ff4d4d;font-family:var(--font-mono);font-size:0.7rem;padding:3px 8px;border-radius:10px">● REC 00:00</div>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <button class="btn btn-primary btn-full" id="ev-shoot" onclick="DispatchApp.evShoot()" disabled>📸 Capture</button>
+        <button class="btn btn-ghost" id="ev-retake" onclick="DispatchApp.evTypeChanged()" style="display:none">↻ Retake</button>
+      </div>
+      <label class="btn btn-ghost btn-full btn-sm" style="cursor:pointer;margin-bottom:8px">📁 Choose an existing file instead
+        <input type="file" id="ev-file" accept="image/*,video/*,application/pdf" style="display:none" onchange="DispatchApp.evFilePicked(this)"></label>
       <div class="form-group"><label class="form-label">Notes</label>
-        <textarea class="form-textarea" rows="2" placeholder="Brief description..."></textarea></div>`,
+        <textarea class="form-textarea" id="ev-notes" rows="2" placeholder="Brief description..."></textarea></div>`,
       `<button class="btn btn-ghost" onclick="DispatchApp.closeSheet()">Cancel</button>
-       <button class="btn btn-primary btn-full" onclick="DispatchApp.confirmUpload()">📎 Upload &amp; Tag to Case</button>`);
+       <button class="btn btn-primary btn-full" id="ev-upload" onclick="DispatchApp.confirmUpload()" disabled>📎 Upload &amp; Tag to Case</button>`);
+    _sheetCleanup = evStopStream;
+    evTypeChanged();
   }
-  function confirmUpload() {
+  async function evTypeChanged() {
+    evStopStream(); EV.blob = null;
+    const sel = document.getElementById('ev-type'); if (!sel) return;
+    EV.kind = sel.value;
+    const vid = document.getElementById('ev-video'), img = document.getElementById('ev-photo'), msg = document.getElementById('ev-msg');
+    const shoot = document.getElementById('ev-shoot'), up = document.getElementById('ev-upload'), retake = document.getElementById('ev-retake');
+    img.style.display='none'; vid.style.display='none'; msg.style.display='block'; retake.style.display='none'; up.disabled = true;
+    shoot.innerHTML = EV.kind==='video' ? '⏺ Start recording' : '📸 Capture'; shoot.disabled = true;
+    const bad = evNeedsSecure(); if (bad) { msg.textContent = '⚠ ' + bad + ' Use "Choose an existing file" instead.'; return; }
+    msg.textContent = '📷 Opening camera…';
+    try {
+      EV.stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ ideal:'environment' } }, audio: EV.kind==='video' });
+      if (!document.getElementById('ev-video')) { evStopStream(); return; }
+      vid.srcObject = EV.stream; vid.style.display='block'; msg.style.display='none'; await vid.play().catch(()=>{});
+      shoot.disabled = false;
+    } catch (e) {
+      msg.textContent = '⚠ Camera unavailable (' + (e.name==='NotAllowedError' ? 'permission denied — allow camera in the browser' : e.message) + '). Use "Choose an existing file" instead.';
+    }
+  }
+  function evShoot() {
+    const vid = document.getElementById('ev-video'), shoot = document.getElementById('ev-shoot');
+    if (!EV.stream) return;
+    if (EV.kind === 'photo') {
+      const c = document.createElement('canvas'); c.width = vid.videoWidth || 1280; c.height = vid.videoHeight || 720;
+      c.getContext('2d').drawImage(vid, 0, 0, c.width, c.height);
+      c.toBlob(b => {
+        if (!b) { showToast('error','Capture failed','Try again'); return; }
+        EV.blob = new File([b], 'photo.jpg', { type:'image/jpeg' });
+        const img = document.getElementById('ev-photo'); img.src = URL.createObjectURL(b); img.style.display='block'; vid.style.display='none';
+        evStopStream(); shoot.disabled = true; document.getElementById('ev-retake').style.display='';
+        document.getElementById('ev-upload').disabled = false;
+      }, 'image/jpeg', 0.9);
+      return;
+    }
+    if (!EV.recording) {
+      if (typeof MediaRecorder === 'undefined') { showToast('error','Not supported','This browser cannot record video'); return; }
+      const mime = evMime(true); EV.chunks = [];
+      try { EV.rec = mime ? new MediaRecorder(EV.stream,{mimeType:mime}) : new MediaRecorder(EV.stream); } catch (e) { showToast('error','Cannot record',e.message); return; }
+      EV.rec.ondataavailable = ev => { if (ev.data && ev.data.size) EV.chunks.push(ev.data); };
+      EV.rec.onstop = () => {
+        const type = (EV.rec && EV.rec.mimeType || mime || 'video/webm').split(';')[0];
+        EV.blob = new File(EV.chunks, 'video.' + (type.includes('mp4')?'mp4':'webm'), { type });
+        const v = document.getElementById('ev-video');
+        if (v) { v.srcObject = null; v.src = URL.createObjectURL(EV.blob); v.muted = false; v.controls = true; }
+        const up = document.getElementById('ev-upload'); if (up) up.disabled = false;
+      };
+      EV.rec.start(1000); EV.recording = true; EV.t0 = Date.now();
+      shoot.innerHTML = '⏹ Stop recording'; document.getElementById('ev-rec').style.display='block';
+      EV.timer = setInterval(() => { const r=document.getElementById('ev-rec'); if (r) r.textContent='● REC '+fmtDur(Date.now()-EV.t0); }, 500);
+    } else {
+      const rec = EV.rec; clearInterval(EV.timer); EV.recording = false;
+      document.getElementById('ev-rec').style.display='none';
+      shoot.disabled = true; document.getElementById('ev-retake').style.display='';
+      if (rec && rec.state !== 'inactive') rec.stop();
+      if (EV.stream) EV.stream.getTracks().forEach(t => t.stop());
+    }
+  }
+  function evFilePicked(inp) {
+    const f = inp.files && inp.files[0]; if (!f) return;
+    evStopStream(); EV.blob = f;
+    const vid = document.getElementById('ev-video'), img = document.getElementById('ev-photo'), msg = document.getElementById('ev-msg');
+    vid.style.display = 'none'; img.style.display = 'none'; msg.style.display = 'block'; msg.textContent = '📄 ' + f.name + ' · ' + fmtSize(f.size);
+    if (f.type.startsWith('image/')) { img.src = URL.createObjectURL(f); img.style.display='block'; msg.style.display='none'; }
+    document.getElementById('ev-shoot').disabled = true; document.getElementById('ev-retake').style.display='';
+    document.getElementById('ev-upload').disabled = false;
+  }
+  async function confirmUpload() {
+    const file = EV.blob; if (!file) { showToast('warning','Nothing to upload','Capture or choose a file first'); return; }
+    const job = DispatchData.currentJob, sel = document.getElementById('ev-type');
+    const type = sel.options[sel.selectedIndex].text, notes = (document.getElementById('ev-notes')?.value || '').trim();
+    const up = document.getElementById('ev-upload'); if (up) { up.disabled = true; up.textContent = 'Uploading…'; }
+    const hash = await evSha(file);
+    let res = { saved:false, reason:'No incident id' };
+    try { if (job._syncIncId) res = await GeamsArchive.addFile(job._syncIncId, file, { who:'off', evType:type, notes, sha256:hash, officer:DispatchData.officer.name }); } catch (e) { res = { saved:false, reason:e.message }; }
+    const local = URL.createObjectURL(file);
     closeSheet();
-    DispatchData.currentJob.evidenceCount++;
-    DispatchData.evidence.push({id:'EVD-'+DispatchData.currentJob.id+'-'+DispatchData.currentJob.evidenceCount,
-      type:'Scene photograph',time:DispatchData.fmt(new Date()),size:'2.4MB'});
-    DispatchData.activityLog.unshift({time:DispatchData.fmt(new Date()),lcrId:DispatchData.officer.controlRoomId,text:`<strong>Evidence uploaded</strong> — ${DispatchData.currentJob.evidenceCount} files on case`});
-    showToast('success','Evidence Uploaded','File tagged to '+DispatchData.currentJob.id+' — tamper sealed');
+    job.evidenceCount++;
+    DispatchData.evidence.push({ id:'EVD-'+job.id+'-'+job.evidenceCount, type, time:DispatchData.fmt(new Date()), size:fmtSize(file.size), sha:hash, saved:res.saved, url:local, mime:file.type, notes });
+    DispatchData.activityLog.unshift({ time:DispatchData.fmt(new Date()), lcrId:DispatchData.officer.controlRoomId, text:`<strong>Evidence ${res.saved?'uploaded':'captured (NOT stored on server)'}</strong> — ${type}, ${fmtSize(file.size)}` });
+    if (res.saved) showToast('success','Evidence uploaded', type+' stored on the GEAMS server and tagged to '+job.id);
+    else showToast('warning','Kept on this phone only', (res.reason || 'Upload failed') + '. Re-upload when connected.', 7000);
     if(currentScreen==='evidence')ScreenEvidence.render();
     if(currentScreen==='job')ScreenJob.render();
   }
+  function viewEvidence(i) {
+    const e = DispatchData.evidence[i]; if (!e || !e.url) return;
+    const body = e.mime && e.mime.startsWith('image/') ? `<img src="${e.url}" style="width:100%;border-radius:8px">`
+      : e.mime && e.mime.startsWith('video/') ? `<video src="${e.url}" controls playsinline style="width:100%;border-radius:8px"></video>`
+      : e.mime && e.mime.startsWith('audio/') ? `<audio src="${e.url}" controls style="width:100%"></audio>`
+      : `<a href="${e.url}" target="_blank" class="btn btn-primary btn-full">Open file</a>`;
+    openSheet('👁 '+e.type, body + `<div style="font-size:0.65rem;color:var(--text-muted);margin-top:8px;word-break:break-all">${e.id} · ${e.time} · ${e.size}${e.sha?'<br>SHA-256 '+e.sha:''}${e.notes?'<br>'+e.notes:''}</div>`, `<button class="btn btn-primary btn-full" onclick="DispatchApp.closeSheet()">Close</button>`);
+  }
 
+  // ── Body camera: real camera + microphone recording streamed to the server ──
+  async function startBodyCam() {
+    const bad = evNeedsSecure(); if (bad) { showToast('error','Body camera unavailable', bad); return false; }
+    const job = DispatchData.currentJob;
+    try { EV.bodyStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ ideal:'environment' } }, audio:true }); }
+    catch (e) { showToast('error','Body camera unavailable', e.name==='NotAllowedError' ? 'Allow camera and microphone in the browser' : e.message); return false; }
+    EV.bodyRec = job._syncIncId ? GeamsArchive.recordStream(job._syncIncId, EV.bodyStream, 'Officer body camera', 'off') : { saved:false, stop(){} };
+    if (!EV.bodyRec.saved) showToast('warning','Not being stored','The camera is on but the GEAMS server is not connected, so nothing is saved.', 7000);
+    return true;
+  }
+  function stopBodyCam() {
+    try { EV.bodyRec && EV.bodyRec.stop(); } catch (e) {}
+    if (EV.bodyStream) EV.bodyStream.getTracks().forEach(t => t.stop());
+    EV.bodyRec = null; EV.bodyStream = null;
+  }
+  async function toggleBodyCam() {
+    const want = !bodyCamActive;
+    if (want && !(await startBodyCam())) return;
+    if (!want) stopBodyCam();
+    bodyCamActive = want;
+    DispatchData.currentJob.bodyCamActive = bodyCamActive;
+    document.querySelectorAll('#bodycam-btn').forEach(btn => {
+      btn.className = bodyCamActive ? 'btn btn-danger btn-full' : 'btn btn-cyan btn-full';
+      btn.innerHTML = bodyCamActive ? '⏹ Stop Body Camera' : '⏺ Body Camera';
+    });
+    DispatchData.activityLog.unshift({ time:DispatchData.fmt(new Date()), lcrId:DispatchData.officer.controlRoomId,
+      text: bodyCamActive ? '<strong>Body camera started</strong> — recording video and audio' : '<strong>Body camera stopped</strong> — recording ended' });
+    showToast(bodyCamActive?'info':'success', bodyCamActive?'Body camera recording':'Body camera stopped', bodyCamActive?'Streaming to evidence storage in 4-second chunks':'Recording saved to '+DispatchData.currentJob.id);
+    if(currentScreen==='evidence')ScreenEvidence.render();
+  }
+
+  // ── Witness statement: real audio recording + level meter + typed statement ──
   function captureWitnessStatement() {
+    if (!DispatchData.currentJob || DispatchData.currentJob.id === '—') { showToast('warning','No active job','Accept a job first so the statement is tagged to a case'); return; }
+    EV.blob = null;
     openSheet('🎤 Witness Statement',`
-      <div class="form-group"><label class="form-label">Witness Name</label><input class="form-input" placeholder="Full name"></div>
-      <div class="form-group"><label class="form-label">Phone</label><input class="form-input" placeholder="+233-XX-XXXXXXX" type="tel"></div>
-      <div class="form-group"><label class="form-label">Statement</label>
-        <textarea class="form-textarea" style="min-height:100px" placeholder="Record witness account verbatim..."></textarea></div>
+      <div class="form-group"><label class="form-label">Witness Name</label><input class="form-input" id="wit-name" placeholder="Full name"></div>
+      <div class="form-group"><label class="form-label">Phone</label><input class="form-input" id="wit-phone" placeholder="+233-XX-XXXXXXX" type="tel"></div>
+      <div class="form-group"><label class="form-label">Statement (typed)</label>
+        <textarea class="form-textarea" id="wit-text" style="min-height:90px" placeholder="Record witness account verbatim..."></textarea></div>
       <div style="border:1px solid var(--border-base);border-radius:var(--r-md);padding:12px;background:var(--bg-deep)">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-          <span style="font-family:var(--font-mono);font-size:0.62rem;color:var(--text-muted)">AUDIO RECORDING</span>
+          <span style="font-family:var(--font-mono);font-size:0.62rem;color:var(--text-muted)" id="wit-clock">AUDIO RECORDING · 00:00</span>
           <button class="btn btn-sm" id="audio-toggle" onclick="DispatchApp.toggleAudioRec()" style="background:var(--primary-dim);border:1px solid var(--primary-border);color:var(--primary)">⏺ Start</button>
         </div>
         <div class="audio-indicator" id="audio-bars">
           ${Array.from({length:14},()=>'<div class="audio-bar" style="height:4px;opacity:0.3"></div>').join('')}
         </div>
+        <audio id="wit-play" controls style="width:100%;margin-top:8px;display:none"></audio>
+        <div id="wit-note" style="font-size:0.65rem;color:var(--text-muted);margin-top:6px">The bars show the real microphone level. Get the witness's consent before recording.</div>
       </div>`,
       `<button class="btn btn-ghost" onclick="DispatchApp.closeSheet()">Cancel</button>
-       <button class="btn btn-primary btn-full" onclick="DispatchApp.saveWitness()">💾 Save Statement</button>`);
+       <button class="btn btn-primary btn-full" id="wit-save" onclick="DispatchApp.saveWitness()">💾 Save Statement</button>`);
+    _sheetCleanup = evStopStream;
   }
-
-  let audioRecActive=false;
-  function toggleAudioRec() {
-    audioRecActive=!audioRecActive;
-    const btn=document.getElementById('audio-toggle');
-    if(btn)btn.innerHTML=audioRecActive?'⏹ Stop':'⏺ Start';
-    if(audioRecActive){
-      audioTimer=setInterval(()=>{document.querySelectorAll('.audio-bar').forEach(b=>{
-        b.style.height=(4+Math.random()*22)+'px';b.style.opacity=(0.4+Math.random()*0.6).toFixed(2);});},200);
-    }else{clearInterval(audioTimer);}
+  async function toggleAudioRec() {
+    const btn = document.getElementById('audio-toggle'), note = document.getElementById('wit-note');
+    if (EV.recording) {
+      const rec = EV.rec; clearInterval(EV.timer); EV.recording = false;
+      if (btn) btn.innerHTML = '⏺ Re-record';
+      if (rec && rec.state !== 'inactive') rec.stop();
+      if (EV.stream) EV.stream.getTracks().forEach(t => t.stop());
+      if (EV.raf) cancelAnimationFrame(EV.raf);
+      document.querySelectorAll('.audio-bar').forEach(b => { b.style.height='4px'; b.style.opacity='0.3'; });
+      return;
+    }
+    const bad = evNeedsSecure(); if (bad) { if (note) note.textContent = '⚠ ' + bad + ' You can still save the typed statement.'; return; }
+    if (typeof MediaRecorder === 'undefined') { if (note) note.textContent = '⚠ This browser cannot record audio.'; return; }
+    try { EV.stream = await navigator.mediaDevices.getUserMedia({ audio:true }); }
+    catch (e) { if (note) note.textContent = '⚠ Microphone unavailable (' + (e.name==='NotAllowedError' ? 'permission denied' : e.message) + '). You can still save the typed statement.'; return; }
+    EV.blob = null; EV.chunks = []; const mime = evMime(false);
+    try { EV.rec = mime ? new MediaRecorder(EV.stream,{mimeType:mime}) : new MediaRecorder(EV.stream); } catch (e) { if (note) note.textContent = '⚠ ' + e.message; return; }
+    EV.rec.ondataavailable = ev => { if (ev.data && ev.data.size) EV.chunks.push(ev.data); };
+    EV.rec.onstop = () => {
+      const type = (EV.rec && EV.rec.mimeType || mime || 'audio/webm').split(';')[0];
+      EV.blob = new File(EV.chunks, 'witness.' + (type.includes('mp4')?'m4a':type.includes('ogg')?'ogg':'webm'), { type });
+      const p = document.getElementById('wit-play'); if (p) { p.src = URL.createObjectURL(EV.blob); p.style.display = 'block'; }
+    };
+    EV.rec.start(1000); EV.recording = true; EV.t0 = Date.now();
+    if (btn) btn.innerHTML = '⏹ Stop';
+    const p = document.getElementById('wit-play'); if (p) p.style.display = 'none';
+    EV.timer = setInterval(() => { const c=document.getElementById('wit-clock'); if (c) c.textContent='● RECORDING · '+fmtDur(Date.now()-EV.t0); }, 500);
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext; EV.actx = new AC();
+      const an = EV.actx.createAnalyser(); an.fftSize = 64; EV.actx.createMediaStreamSource(EV.stream).connect(an);
+      const data = new Uint8Array(an.frequencyBinCount);
+      const draw = () => {
+        an.getByteFrequencyData(data);
+        document.querySelectorAll('.audio-bar').forEach((b,i) => { const v = data[i % data.length] / 255; b.style.height = (4 + v*24) + 'px'; b.style.opacity = (0.35 + v*0.65).toFixed(2); });
+        EV.raf = requestAnimationFrame(draw);
+      };
+      draw();
+    } catch (e) {}
   }
-  function saveWitness() {
-    if(audioRecActive)toggleAudioRec();
+  async function saveWitness() {
+    if (EV.recording) { await new Promise(r => { const rec = EV.rec; rec.addEventListener('stop', r, { once:true }); toggleAudioRec(); }); }
+    const name = (document.getElementById('wit-name')?.value || '').trim(), phone = (document.getElementById('wit-phone')?.value || '').trim(), text = (document.getElementById('wit-text')?.value || '').trim();
+    const audio = EV.blob;
+    if (!audio && !text) { showToast('warning','Nothing to save','Record audio or type the statement'); return; }
+    if (!name) { showToast('warning','Name required','Enter the witness name'); return; }
+    const job = DispatchData.currentJob, btn = document.getElementById('wit-save'); if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+    let res = { saved:false, reason:'No incident id' };
+    const meta = { who:'off', evType:'Witness statement', witness:name, witnessPhone:phone, statement:text, officer:DispatchData.officer.name };
+    try {
+      if (job._syncIncId) {
+        if (audio) { meta.sha256 = await evSha(audio); res = await GeamsArchive.addFile(job._syncIncId, audio, meta); }
+        else { const tf = new File([`Witness: ${name}\nPhone: ${phone}\n\n${text}\n`], 'statement-'+name.replace(/\W+/g,'_')+'.txt', { type:'text/plain' }); res = await GeamsArchive.addFile(job._syncIncId, tf, meta); }
+      }
+    } catch (e) { res = { saved:false, reason:e.message }; }
     closeSheet();
-    DispatchData.currentJob.witnessCount++;
-    DispatchData.activityLog.unshift({time:DispatchData.fmt(new Date()),lcrId:DispatchData.officer.controlRoomId,text:`<strong>Witness statement captured</strong> — ${DispatchData.currentJob.witnessCount} witness(es) on record`});
-    showToast('success','Statement Saved','Witness statement uploaded to case record');
+    job.witnessCount++;
+    DispatchData.activityLog.unshift({ time:DispatchData.fmt(new Date()), lcrId:DispatchData.officer.controlRoomId, text:`<strong>Witness statement ${res.saved?'saved':'captured (NOT stored on server)'}</strong> — ${name}${audio?' · audio '+fmtSize(audio.size):''}${text?' · typed':''} · ${job.witnessCount} witness(es) on record` });
+    if (res.saved) showToast('success','Statement saved','Stored on the GEAMS server with job '+job.id);
+    else showToast('warning','Not stored on server',(res.reason||'Upload failed')+'. The statement exists only on this phone.',7000);
+    if(currentScreen==='evidence')ScreenEvidence.render();
+    if(currentScreen==='job')ScreenJob.render();
   }
 
   function makeArrestRecord() {
@@ -3816,7 +4001,7 @@ const DispatchApp = (() => {
     declareUnsafe,confirmUnsafe,runBiometricScan,verifyCivilian,captureVerifyCivilian,onScanTypeChange,startScanCamera,stopScanCamera,
     closeScanSheet,sendOfficerAlert,captureAndMatchFace,runManualIdLookup,runPlateCheck,runPlate,logPlate,
     checkPriorCalls,interceptVehicle,confirmVictimStatus,setVictimStatus,
-    toggleBodyCam,uploadEvidence,confirmUpload,captureWitnessStatement,toggleAudioRec,saveWitness,
+    toggleBodyCam,uploadEvidence,confirmUpload,evTypeChanged,evShoot,evFilePicked,viewEvidence,captureWitnessStatement,toggleAudioRec,saveWitness,
     makeArrestRecord,confirmArrest,sketchScene,saveSketch,closeSketch,toggleSketchFullscreen,reportEquipment,
     transferCase,confirmTransfer,endShift,confirmEndShift,
     startGPSMovement,stopGPSMovement,startCivilianTracking,stopCivilianTracking,
@@ -4521,9 +4706,9 @@ const ScreenEvidence = (() => {
                 <div class="info-body">
                   <div class="info-key">${e.id}</div>
                   <div class="info-val">${e.type}</div>
-                  <div style="font-size:0.65rem;color:var(--text-muted)">${e.time} · ${e.size} · Tamper-sealed</div>
+                  <div style="font-size:0.65rem;color:var(--text-muted)">${e.time} · ${e.size} · ${e.saved?'On server':'<span style="color:var(--red)">Phone only</span>'}${e.sha?' · SHA-256 '+e.sha.slice(0,10)+'…':''}</div>
                 </div>
-                <button class="btn btn-sm btn-ghost" onclick="DispatchApp.showToast('info','View','Opening evidence viewer...')">👁</button>
+                <button class="btn btn-sm btn-ghost" onclick="DispatchApp.viewEvidence(DispatchData.evidence.indexOf(DispatchData.evidence.find(x=>x.id==='${e.id}')))">👁</button>
               </div>`).join('')
             :`<div style="padding:24px;text-align:center;color:var(--text-muted);font-size:0.78rem">
                 No evidence uploaded yet.<br>
