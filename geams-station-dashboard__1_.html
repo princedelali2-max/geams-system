@@ -2108,6 +2108,7 @@ const GeamsStationSync = (() => {
     watchStops = [];
     if (hqStatusTimer) { clearInterval(hqStatusTimer); hqStatusTimer = null; }
     if (typeof StationBackup !== 'undefined' && StationBackup.stop) StationBackup.stop();
+    if (typeof StationHQOps !== 'undefined' && StationHQOps.stop) StationHQOps.stop();
     currentLcrId = null;
   }
 
@@ -2269,6 +2270,7 @@ const GeamsStationSync = (() => {
     StationData.clearDemoOfficers();
     StationData.emit('officer_roster_updated', null);
     if (typeof StationBackup !== 'undefined') StationBackup.start();
+    if (typeof StationHQOps !== 'undefined') StationHQOps.start();
     let lastRosterMap = {}, lastRosterSig = '';
     const applyRoster = () => {
       StationData.mergeLiveOfficers(Object.values(lastRosterMap || {}));
@@ -7859,6 +7861,64 @@ const StationBackup = (() => {
   };
 })();
 
+
+
+/* ─────────────────────────────
+   HQ ORDERS — real cordon / curfew / wanted notices issued by HQ.
+   They arrive through the shared 'hq:tacticalOps' map and stay on screen
+   until HQ lifts them. They are command records: GEAMS does not itself
+   block movement or identify suspects.
+───────────────────────────── */
+const StationHQOps = (() => {
+  const KEY = 'hq:tacticalOps';
+  const ICON = { cordon:'🔴', curfew:'🌙', wanted:'🎯', command:'🔁', mobilise:'📣', caselink:'🔗', emergency:'🚨' };
+  const LABEL = { cordon:'CORDON ORDER', curfew:'CURFEW', wanted:'WANTED NOTICE', command:'COMMAND HANDOVER', mobilise:'MOBILISATION ORDER', caselink:'JOINT CASE', emergency:'EMERGENCY' };
+  let stopW = null, seen = {}, hidden = {}, primed = false, last = [];
+  const esc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const mine = o => o && o.status === 'active' && (!o.station || o.station === 'all' || o.station === StationData.station.id || (Array.isArray(o.stations) && o.stations.includes(StationData.station.id)));
+  function start() {
+    stop();
+    seen = {}; hidden = {}; primed = false;
+    stopW = GeamsSync.watch(KEY, {}, (map) => {
+      last = Object.values(map || {}).filter(mine).sort((a,b) => b.createdAt - a.createdAt);
+      last.forEach(o => {
+        if (seen[o.id]) return;
+        seen[o.id] = 1;
+        if (primed || Date.now() - o.createdAt < 120000) StationApp.showToast('error', '🚨 HQ ' + (LABEL[o.type] || 'ORDER'), o.name, 9000);
+      });
+      primed = true;
+      paint();
+    }, 2000);
+  }
+  function stop() {
+    if (stopW) { try { stopW(); } catch (e) {} stopW = null; }
+    const b = document.getElementById('hq-orders-banner'); if (b) b.remove();
+    last = [];
+  }
+  function hide(id) { hidden[id] = 1; paint(); }
+  function showAll() { hidden = {}; paint(); }
+  function paint() {
+    let b = document.getElementById('hq-orders-banner');
+    if (!last.length) { if (b) b.remove(); return; }
+    if (!b) {
+      b = document.createElement('div'); b.id = 'hq-orders-banner';
+      b.style.cssText = 'position:fixed;top:64px;right:14px;width:340px;max-width:calc(100vw - 28px);max-height:60vh;overflow-y:auto;z-index:8500;display:flex;flex-direction:column;gap:8px';
+      document.body.appendChild(b);
+    }
+    const vis = last.filter(o => !hidden[o.id]), nh = last.length - vis.length;
+    b.innerHTML = vis.map(o => `
+      <div style="background:rgba(127,29,29,.96);border:1px solid #f87171;border-radius:10px;padding:10px 12px;color:#fff;font-size:0.75rem;line-height:1.45;box-shadow:0 4px 18px rgba(0,0,0,.4)">
+        <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
+          <strong style="letter-spacing:.5px">${ICON[o.type] || '🚨'} HQ ${LABEL[o.type] || 'ORDER'}</strong>
+          <span style="cursor:pointer;opacity:.8" title="Hide on this screen" onclick="StationHQOps.hide('${o.id}')">✕</span>
+        </div>
+        <div style="font-weight:700;margin-top:3px">${esc(o.name)}</div>
+        ${o.detail ? `<div style="opacity:.9">${esc(o.detail)}</div>` : ''}
+        <div style="opacity:.7;margin-top:3px">Issued ${new Date(o.createdAt).toLocaleTimeString('en-GB',{hour12:false}).slice(0,5)} · stays active until HQ lifts it</div>
+      </div>`).join('') + (nh ? `<div style="align-self:flex-end;background:rgba(127,29,29,.96);color:#fff;border-radius:16px;padding:4px 12px;font-size:0.7rem;cursor:pointer" onclick="StationHQOps.showAll()">Show ${nh} hidden HQ order${nh>1?'s':''}</div>` : '');
+  }
+  return { start, stop, hide, showAll };
+})();
 
 /* ─────────────────────────────
    REPORTS PAGE

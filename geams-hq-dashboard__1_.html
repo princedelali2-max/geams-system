@@ -2851,11 +2851,11 @@ const GeamsApp = (() => {
      ① DECLARE NATIONAL EMERGENCY
   ════════════════════════════════════ */
   function declareEmergency() {
-    openModal('🚨 National Emergency Declaration', `
-      <div style="text-align:center;padding:12px 0 18px">
-        <div style="font-size:2.4rem;margin-bottom:10px">🚨</div>
-        <div style="font-size:1rem;font-weight:800;color:var(--red);margin-bottom:6px">DECLARE NATIONAL EMERGENCY</div>
-        <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:18px;line-height:1.6">Activates all standby units, notifies every station, alerts all civilian users.<br>This action is irreversible and permanently logged.</div>
+    openModal('🚨 Declare Emergency', `
+      <div style="text-align:center;padding:8px 0 14px">
+        <div style="font-size:2.2rem;margin-bottom:8px">🚨</div>
+        <div style="font-size:1rem;font-weight:800;color:var(--red);margin-bottom:6px">DECLARE EMERGENCY</div>
+        <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:14px;line-height:1.6">Alerts every control room in the zone with an emergency banner that stays until HQ lifts it. It does not itself activate units or alert civilians: the control rooms act on it.</div>
       </div>
       <div class="form-group"><label class="form-label">Emergency Type</label>
         <select class="form-select" id="em-type">
@@ -2865,23 +2865,32 @@ const GeamsApp = (() => {
         </select></div>
       <div class="form-group"><label class="form-label">Affected Zone</label>
         <select class="form-select" id="em-zone">
-          <option>National (All Regions)</option><option>Greater Accra</option><option>Ashanti</option>
-          <option>Northern</option><option>Western</option><option>Central</option>
-          <option>Eastern</option><option>Volta</option><option>Upper East</option>
+          <option>National (All Regions)</option>
+          ${[...new Set(GeamsData.stations.map(s => s.region).filter(Boolean))].map(r => `<option>${r}</option>`).join('')}
         </select></div>
-      <div class="form-group"><label class="form-label">HQ Authorization Code</label>
-        <input type="password" class="form-input" id="em-code" placeholder="Enter HQ authorization code"></div>`,
+      <div class="form-group"><label class="form-label">Instruction to control rooms</label>
+        <input class="form-input" id="em-msg" placeholder="e.g. Stand by all units, report to HQ every 15 minutes"></div>
+      <div class="form-group"><label class="form-label">Type DECLARE to confirm</label>
+        <input class="form-input" id="em-code" placeholder="DECLARE" autocomplete="off"></div>`,
       `<button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal()">Cancel</button>
        <button class="btn btn-emergency" onclick="GeamsApp.confirmEmergency()">🚨 DECLARE EMERGENCY</button>`);
   }
 
   function confirmEmergency() {
-    const code = document.getElementById('em-code');
-    if (!code || code.value.length < 4) { showToast('error','Auth Failed','Enter valid HQ authorization code'); return; }
+    if ((document.getElementById('em-code')?.value || '').trim().toUpperCase() !== 'DECLARE') { showToast('error','Not confirmed','Type DECLARE to confirm'); return; }
     const type = document.getElementById('em-type').value;
     const zone = document.getElementById('em-zone').value;
+    const msg = (document.getElementById('em-msg')?.value || '').trim();
+    let ids = 'all', label = 'All stations';
+    if (!zone.startsWith('National')) {
+      const sts = GeamsData.stations.filter(s => s.region === zone);
+      if (!sts.length) { showToast('error','No station','No registered station in ' + zone); return; }
+      ids = sts.map(s => s.id); label = zone + ' (' + sts.length + ' station' + (sts.length > 1 ? 's' : '') + ')';
+    }
+    GeamsTactical.createOp({ type:'emergency', name: type + ' — ' + zone, station: Array.isArray(ids) ? 'multi' : 'all', stations: Array.isArray(ids) ? ids : undefined,
+      stationName: label, detail: msg });
     closeModal();
-    showToast('error','🚨 NATIONAL EMERGENCY DECLARED', `${type} · ${zone} · All units activated`, 8000);
+    showToast('error','🚨 EMERGENCY DECLARED', `${type} · ${zone} · shown on ${label}`, 8000);
     const topbar = document.getElementById('topbar');
     if (topbar) {
       topbar.style.background = 'rgba(127,0,0,0.4)';
@@ -2897,7 +2906,7 @@ const GeamsApp = (() => {
     const s = stationId ? GeamsData.stations.find(st => st.id === stationId) : null;
     openModal('🔴 Set Cordon Zone', `
       <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:16px;line-height:1.6">
-        Draws a live perimeter on the national map. No dispatch unit may enter without HQ clearance. All units approaching the boundary receive an automatic warning alert.
+        Publishes a cordon order to the assigned station's control room, where it shows as a live alert until HQ lifts it. It is a command record, not a physical barrier: GEAMS cannot stop anyone entering the area.
       </div>
       <div class="form-group"><label class="form-label">Zone Name / Incident Reference</label>
         <input class="form-input" id="cordon-name" placeholder="e.g. Siege at Kwame Nkrumah Ave" value="${s ? 'Cordon — ' + s.name : ''}"></div>
@@ -2907,18 +2916,18 @@ const GeamsApp = (() => {
           <option>1 km — Neighbourhood</option><option>3 km — District</option><option>10 km — Full town</option>
         </select></div>
       <div class="form-group"><label class="form-label">Assigned Station</label>
-        <select class="form-select">
+        <select class="form-select" id="cordon-station">
           ${GeamsData.stations.map(st=>`<option value="${st.id}" ${st.id===stationId?'selected':''}>${st.name}</option>`).join('')}
         </select></div>
       <div class="form-group"><label class="form-label">Entry Access Level</label>
-        <select class="form-select">
+        <select class="form-select" id="cordon-access">
           <option>No entry — HQ clearance required</option>
           <option>Station officers only</option>
           <option>Medical units allowed</option>
           <option>All emergency services</option>
         </select></div>
       <div class="form-group"><label class="form-label">Duration</label>
-        <select class="form-select">
+        <select class="form-select" id="cordon-duration">
           <option>1 hour</option><option>3 hours</option><option>6 hours</option>
           <option>12 hours</option><option>Until manually lifted</option>
         </select></div>`,
@@ -2927,48 +2936,48 @@ const GeamsApp = (() => {
   }
 
   function confirmCordon() {
-    const name   = document.getElementById('cordon-name')?.value || 'Unnamed Zone';
-    const radius = document.getElementById('cordon-radius')?.value || '';
+    const g = id => document.getElementById(id);
+    const name = (g('cordon-name')?.value || '').trim();
+    if (!name) { showToast('error','Name required','Enter the zone name or incident reference'); return; }
+    const sel = g('cordon-station');
+    const st = GeamsData.stations.find(x => x.id === sel?.value);
+    GeamsTactical.createOp({ type:'cordon', name, station: st ? st.id : 'all', stationName: st ? st.name : 'All stations',
+      detail: [g('cordon-radius')?.value, g('cordon-access')?.value, g('cordon-duration')?.value].filter(Boolean).join(' · ') });
     closeModal();
-    showToast('error','Cordon Activated', `"${name}" · ${radius} · All approaching units warned`, 7000);
+    showToast('success','Cordon Published', `"${name}" sent to ${st ? st.name : 'all stations'} and recorded`, 6000);
   }
 
   /* ════════════════════════════════════
      ③ TRANSFER COMMAND AUTHORITY
   ════════════════════════════════════ */
   function transferCommand() {
-    openModal('🔁 Transfer Command Authority', `
-      <div style="background:var(--red-dim);border:1px solid var(--red-border);border-radius:var(--r-md);padding:12px 14px;margin-bottom:16px;font-size:0.78rem;color:var(--red);line-height:1.6">
-        ⚠️ This immediately transfers full national command authority to the designated deputy. Your session will be downgraded to Observer level. Permanently logged.
+    openModal('🔁 Record Command Handover', `
+      <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:16px;line-height:1.6">
+        Records a command handover and announces it on every control room screen until HQ reverts it. It does not change anyone's login permissions: GEAMS has no separate command-level accounts yet.
       </div>
-      <div class="form-group"><label class="form-label">Transfer To</label>
-        <select class="form-select" id="cmd-to">
-          <option>Supt. A. Asante — Deputy National Commander</option>
-          <option>Insp. K. Boateng — Senior Incident Commander</option>
-          <option>Insp. E. Mensah — Regional Commander, Accra</option>
-        </select></div>
+      <div class="form-group"><label class="form-label">Handing command to (rank and name)</label>
+        <input class="form-input" id="cmd-to" placeholder="e.g. Supt. A. Asante, Deputy National Commander"></div>
       <div class="form-group"><label class="form-label">Reason</label>
-        <select class="form-select">
+        <select class="form-select" id="cmd-reason">
           <option>Shift changeover</option><option>Medical incapacitation</option>
           <option>Operational conflict of interest</option>
           <option>Emergency evacuation of HQ</option><option>Scheduled leave</option>
         </select></div>
       <div class="form-group"><label class="form-label">Effective</label>
-        <select class="form-select">
-          <option>Immediately</option><option>In 15 minutes</option><option>At next full hour</option>
-        </select></div>
-      <div class="form-group"><label class="form-label">Your Authorization Code</label>
-        <input type="password" class="form-input" id="cmd-code" placeholder="Confirm with your HQ code"></div>`,
+        <select class="form-select" id="cmd-eff"><option>Immediately</option><option>In 15 minutes</option><option>At next full hour</option></select></div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:0.78rem;cursor:pointer"><input type="checkbox" id="cmd-ok" style="accent-color:var(--gold)"> I confirm this handover</label>`,
       `<button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal()">Cancel</button>
-       <button class="btn btn-danger" onclick="GeamsApp.confirmTransfer()">🔁 Confirm Transfer</button>`);
+       <button class="btn btn-danger" onclick="GeamsApp.confirmTransfer()">🔁 Record Handover</button>`);
   }
 
   function confirmTransfer() {
-    const code = document.getElementById('cmd-code');
-    if (!code || code.value.length < 4) { showToast('error','Auth Failed','Enter valid authorization code'); return; }
-    const to = document.getElementById('cmd-to')?.value.split('—')[0].trim();
+    const to = (document.getElementById('cmd-to')?.value || '').trim();
+    if (!to) { showToast('error','Name required','Enter who command is handed to'); return; }
+    if (!document.getElementById('cmd-ok')?.checked) { showToast('error','Confirm','Tick the confirmation box'); return; }
+    GeamsTactical.createOp({ type:'command', name:'Command handed to ' + to, station:'all', stationName:'All stations',
+      detail:[document.getElementById('cmd-reason')?.value, document.getElementById('cmd-eff')?.value].filter(Boolean).join(' · ') });
     closeModal();
-    showToast('warning','Command Transferred', `Full authority transferred to ${to} · Your session is now Observer`, 8000);
+    showToast('success','Handover Recorded', `Announced to every control room: command with ${to}`, 6000);
   }
 
   /* ════════════════════════════════════
@@ -2977,63 +2986,74 @@ const GeamsApp = (() => {
   function mobiliseReserves(stationId) {
     openModal('📣 Mobilise Reserve Units', `
       <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:16px;line-height:1.6">
-        Sends an immediate push notification to all off-duty officers in the selected stations. Officers must acknowledge within 10 minutes.
+        Alerts the selected control rooms with your instructions, shown on their screens until HQ lifts the order. The control room then calls in its own off-duty officers: GEAMS does not message officers directly.
       </div>
       <div class="form-group"><label class="form-label">Target Stations</label>
         <div style="display:flex;flex-direction:column;gap:5px;max-height:150px;overflow-y:auto;border:1px solid var(--border-base);border-radius:var(--r-md);padding:8px">
           ${GeamsData.stations.map(st=>`
             <label style="display:flex;align-items:center;gap:8px;font-size:0.78rem;cursor:pointer">
-              <input type="checkbox" ${st.id===stationId||!stationId?'checked':''} style="accent-color:var(--gold)">
+              <input type="checkbox" class="mob-st" value="${st.id}" ${st.id===stationId||!stationId?'checked':''} style="accent-color:var(--gold)">
               <span>${st.name}</span>
-              <span style="margin-left:auto;font-family:var(--font-mono);font-size:0.62rem;color:var(--text-muted)">${st.officers - st.onDuty} off-duty</span>
             </label>`).join('')}
         </div></div>
       <div class="form-group"><label class="form-label">Mobilisation Reason</label>
-        <select class="form-select">
+        <select class="form-select" id="mob-reason">
           <option>Mass casualty event</option><option>National emergency</option>
           <option>Major public disorder</option><option>Reinforcement for active siege</option><option>Other</option>
         </select></div>
       <div class="form-group"><label class="form-label">Reporting Location</label>
-        <input class="form-input" placeholder="e.g. Report to Kumasi Central, Gate B"></div>
+        <input class="form-input" id="mob-loc" placeholder="e.g. Report to Kumasi Central, Gate B"></div>
       <div class="form-group"><label class="form-label">Report By (time)</label>
-        <input class="form-input" placeholder="e.g. 16:30 UTC — within 45 minutes"></div>`,
+        <input class="form-input" id="mob-by" placeholder="e.g. 16:30 — within 45 minutes"></div>`,
       `<button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal()">Cancel</button>
        <button class="btn btn-warning" onclick="GeamsApp.confirmMobilise()">📣 Send Mobilisation Order</button>`);
   }
 
   function confirmMobilise() {
+    const ids = [...document.querySelectorAll('.mob-st:checked')].map(e => e.value);
+    if (!ids.length) { showToast('error','No station','Select at least one station'); return; }
+    const names = ids.map(id => (GeamsData.stations.find(x => x.id === id) || {}).name || id);
+    const g = id => (document.getElementById(id)?.value || '').trim();
+    GeamsTactical.createOp({ type:'mobilise', name: g('mob-reason') + (g('mob-loc') ? ' — ' + g('mob-loc') : ''), stations: ids, station:'multi',
+      stationName: names.length > 3 ? names.length + ' stations' : names.join(', '),
+      detail: [g('mob-by') && ('Report by ' + g('mob-by'))].filter(Boolean).join(' · ') });
     closeModal();
-    showToast('warning','Mobilisation Order Sent', 'All selected off-duty officers notified — acknowledgement window: 10 min', 7000);
+    showToast('success','Mobilisation Order Sent', `Shown on ${names.length} control room screen${names.length>1?'s':''}`, 6000);
   }
 
   /* ════════════════════════════════════
      ⑤ CROSS-STATION CASE LINK
   ════════════════════════════════════ */
   function crossStationLink() {
+    const open = GeamsData.incidents.filter(i => i.status !== 'resolved');
+    if (open.length < 2) {
+      openModal('🔗 Cross-Station Case Link', `<div style="font-size:0.82rem;color:var(--text-muted);line-height:1.6">Linking needs at least two open incidents. There ${open.length===1?'is 1':'are '+open.length} right now.</div>`,
+        `<button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal()">Close</button>`);
+      return;
+    }
     openModal('🔗 Cross-Station Case Link', `
       <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:16px;line-height:1.6">
-        Merge incidents from different stations into one joint case file. All linked incidents share a single investigation record, evidence pool, and command chain.
+        Links open incidents into one joint case. Every station involved sees the joint case on its screen, and the link is written to each incident's record. It does not merge the incident files themselves.
       </div>
       <div class="form-group"><label class="form-label">Primary Incident (anchor case)</label>
         <select class="form-select" id="link-primary">
-          ${GeamsData.incidents.filter(i=>i.status!=='resolved').slice(0,10).map(i=>`
-            <option value="${i.id}">${i.id} — ${i.type} · ${i.stationName}</option>`).join('')}
+          ${open.slice(0,20).map(i=>`<option value="${i.id}">${i.id} — ${i.type} · ${i.stationName}</option>`).join('')}
         </select></div>
       <div class="form-group"><label class="form-label">Link Additional Incidents</label>
         <div style="display:flex;flex-direction:column;gap:5px;max-height:130px;overflow-y:auto;border:1px solid var(--border-base);border-radius:var(--r-md);padding:8px">
-          ${GeamsData.incidents.filter(i=>i.status!=='resolved').slice(1,12).map(i=>`
+          ${open.slice(0,20).map(i=>`
             <label style="display:flex;align-items:center;gap:8px;font-size:0.75rem;cursor:pointer">
-              <input type="checkbox" style="accent-color:var(--gold)">
+              <input type="checkbox" class="link-chk" value="${i.id}" style="accent-color:var(--gold)">
               <span style="font-family:var(--font-mono);color:var(--cyan)">${i.id}</span>
               <span>${i.type}</span>
               <span style="margin-left:auto;color:var(--text-muted);font-size:0.65rem">${i.stationName}</span>
             </label>`).join('')}
         </div></div>
       <div class="form-group"><label class="form-label">Joint Case Name</label>
-        <input class="form-input" placeholder="e.g. Operation Kessie — Cross-border robbery network"></div>
+        <input class="form-input" id="link-name" placeholder="e.g. Cross-border robbery network"></div>
       <div class="form-group"><label class="form-label">Lead Station</label>
-        <select class="form-select">
-          ${GeamsData.stations.map(s=>`<option>${s.name} — ${s.id.split('-').slice(0,4).join('-')}</option>`).join('')}
+        <select class="form-select" id="link-lead">
+          ${GeamsData.stations.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')}
         </select></div>`,
       `<button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal()">Cancel</button>
        <button class="btn btn-cyan" onclick="GeamsApp.confirmCaseLink()">🔗 Create Joint Case</button>`);
@@ -3041,8 +3061,20 @@ const GeamsApp = (() => {
 
   function confirmCaseLink() {
     const primary = document.getElementById('link-primary')?.value;
+    const others = [...document.querySelectorAll('.link-chk:checked')].map(e => e.value).filter(v => v !== primary);
+    const name = (document.getElementById('link-name')?.value || '').trim();
+    if (!primary || !others.length) { showToast('error','Select incidents','Pick an anchor and at least one other incident'); return; }
+    if (!name) { showToast('error','Name required','Enter a joint case name'); return; }
+    const lead = GeamsData.stations.find(s => s.id === document.getElementById('link-lead')?.value);
+    const all = [primary].concat(others);
+    const stIds = new Set(); if (lead) stIds.add(lead.id);
+    all.forEach(id => { const i = GeamsData.incidents.find(x => x.id === id); if (i) stIds.add(i.station); });
+    GeamsTactical.createOp({ type:'caselink', name, stations:[...stIds], station:'multi',
+      stationName: [...stIds].map(id => (GeamsData.stations.find(x => x.id === id) || {}).name || id).join(', '),
+      detail: 'Anchor ' + primary + ' · linked ' + others.join(', ') + (lead ? ' · lead ' + lead.name : '') });
+    all.forEach(id => { try { GeamsArchive.log(id, 'hq', 'case_linked', 'Linked into joint case "' + name + '" with ' + all.filter(x => x !== id).join(', ')); } catch (e) {} });
     closeModal();
-    showToast('info','Joint Case Created', `${primary} set as anchor — linked incidents merged into single investigation record`);
+    showToast('success','Joint Case Created', `"${name}" shown to ${stIds.size} station${stIds.size>1?'s':''} and written to ${all.length} incident records`, 6000);
   }
 
   /* ════════════════════════════════════
@@ -3051,42 +3083,49 @@ const GeamsApp = (() => {
   function wantedPersonBroadcast() {
     openModal('🎯 Wanted Person Broadcast', `
       <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:16px;line-height:1.6">
-        Push a suspect profile to all officer devices nationally. Triggers a facial recognition alert on civilian AI and flags the profile on all CCTV feeds.
+        Publishes a wanted notice to the station control rooms, where it stays visible until HQ lifts it. Automatic facial-recognition and CCTV matching are not part of GEAMS today.
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
         <div class="form-group"><label class="form-label">Full Name (if known)</label>
-          <input class="form-input" placeholder="Name or alias"></div>
+          <input class="form-input" id="w-name" placeholder="Name or alias"></div>
         <div class="form-group"><label class="form-label">Physical Description</label>
-          <input class="form-input" placeholder="e.g. Male, ~30, 6ft, scar on left cheek"></div>
+          <input class="form-input" id="w-desc" placeholder="e.g. Male, ~30, 6ft, scar on left cheek"></div>
         <div class="form-group"><label class="form-label">Last Known Location</label>
-          <input class="form-input" placeholder="e.g. Near Kaneshie Market, Accra"></div>
+          <input class="form-input" id="w-loc" placeholder="e.g. Near Kaneshie Market, Accra"></div>
         <div class="form-group"><label class="form-label">Linked Incident</label>
-          <select class="form-select">
-            ${GeamsData.incidents.slice(0,8).map(i=>`<option>${i.id} — ${i.type}</option>`).join('')}
+          <select class="form-select" id="w-inc">
+            <option value="">None</option>
+            ${GeamsData.incidents.slice(0,8).map(i=>`<option value="${i.id}">${i.id} — ${i.type}</option>`).join('')}
           </select></div>
       </div>
       <div class="form-group"><label class="form-label">Danger Level</label>
-        <select class="form-select">
+        <select class="form-select" id="w-danger">
           <option>🔴 Armed and dangerous — do not approach alone</option>
           <option>🟠 Potentially dangerous — approach with caution</option>
           <option>🟡 Wanted for questioning only</option>
         </select></div>
-      <div class="form-group"><label class="form-label">Broadcast Scope</label>
-        <select class="form-select">
-          <option>All officers nationally</option>
-          <option>Regional officers only</option>
-          <option>Neighbouring stations only</option>
+      <div class="form-group"><label class="form-label">Send To</label>
+        <select class="form-select" id="w-scope">
+          <option value="all">All stations</option>
+          ${GeamsData.stations.map(st=>`<option value="${st.id}">${st.name}</option>`).join('')}
         </select></div>
       <div style="background:var(--cyan-dim);border:1px solid var(--cyan-border);border-radius:var(--r-md);padding:10px 12px;font-size:0.72rem;color:var(--text-muted)">
-        ℹ️ Upload a suspect photo via the Evidence module to activate automatic facial recognition matching across CCTV and civilian camera feeds.
+        ℹ️ Photo matching across CCTV and civilian cameras is a future capability (see the automation roadmap below). Today the notice is text only.
       </div>`,
       `<button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal()">Cancel</button>
        <button class="btn btn-danger" onclick="GeamsApp.confirmWanted()">🎯 Issue Wanted Notice</button>`);
   }
 
   function confirmWanted() {
+    const g = id => document.getElementById(id);
+    const name = (g('w-name')?.value || '').trim(), desc = (g('w-desc')?.value || '').trim();
+    if (!name && !desc) { showToast('error','Details required','Enter a name or a physical description'); return; }
+    const scope = g('w-scope')?.value || 'all';
+    const st = GeamsData.stations.find(x => x.id === scope);
+    GeamsTactical.createOp({ type:'wanted', name: name || desc, station: scope, stationName: st ? st.name : 'All stations',
+      detail: [desc && name ? desc : '', g('w-loc')?.value && ('Last seen: ' + g('w-loc').value), g('w-danger')?.value, g('w-inc')?.value && ('Incident ' + g('w-inc').value)].filter(Boolean).join(' · ') });
     closeModal();
-    showToast('error','Wanted Notice Issued', 'Suspect profile pushed to all officer devices · Facial recognition alert active', 7000);
+    showToast('success','Wanted Notice Published', `Sent to ${st ? st.name : 'all stations'} and recorded`, 6000);
   }
 
   /* ════════════════════════════════════
@@ -3095,21 +3134,21 @@ const GeamsApp = (() => {
   function setCurfewZone() {
     openModal('🌙 Set Curfew Zone', `
       <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:16px;line-height:1.6">
-        Restrict civilian movement in a defined area for a set time window. All civilian app users in the zone receive an immediate push alert. Officers are auto-briefed.
+        Records a curfew order and shows it on every station control room's screen until HQ lifts it. Notifying civilian-app users in the zone is planned but not yet connected.
       </div>
       <div class="form-group"><label class="form-label">Affected Zone</label>
-        <select class="form-select">
+        <select class="form-select" id="cf-zone">
           <option>National (All Regions)</option>
           ${GeamsData.stations.map(s=>`<option>${s.town}, ${s.region}</option>`).join('')}
         </select></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
         <div class="form-group"><label class="form-label">Curfew Starts</label>
-          <input type="time" class="form-input" value="22:00"></div>
+          <input type="time" class="form-input" id="cf-start" value="22:00"></div>
         <div class="form-group"><label class="form-label">Curfew Ends</label>
-          <input type="time" class="form-input" value="06:00"></div>
+          <input type="time" class="form-input" id="cf-end" value="06:00"></div>
       </div>
       <div class="form-group"><label class="form-label">Duration</label>
-        <select class="form-select">
+        <select class="form-select" id="cf-dur">
           <option>Tonight only</option><option>3 days</option>
           <option>7 days</option><option>Until manually lifted</option>
         </select></div>
@@ -3120,162 +3159,152 @@ const GeamsApp = (() => {
               <input type="checkbox" checked style="accent-color:var(--gold)"> ${e}
             </label>`).join('')}
         </div></div>
-      <div class="form-group"><label class="form-label">Public Message (sent to civilian app)</label>
-        <textarea class="form-textarea" rows="2" placeholder="e.g. A curfew is in effect in your area from 22:00–06:00 due to ongoing security operations. Stay indoors."></textarea></div>`,
+      <div class="form-group"><label class="form-label">Public Message (shown to control rooms)</label>
+        <textarea class="form-textarea" id="cf-msg" rows="2" placeholder="e.g. A curfew is in effect in your area from 22:00–06:00 due to ongoing security operations. Stay indoors."></textarea></div>`,
       `<button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal()">Cancel</button>
        <button class="btn btn-warning" onclick="GeamsApp.confirmCurfew()">🌙 Activate Curfew</button>`);
   }
 
   function confirmCurfew() {
+    const g = id => document.getElementById(id);
+    const zone = g('cf-zone')?.value || 'National (All Regions)';
+    GeamsTactical.createOp({ type:'curfew', name: zone + ' — ' + (g('cf-start')?.value||'') + ' to ' + (g('cf-end')?.value||''), station:'all', stationName:'All stations',
+      detail: [g('cf-dur')?.value, (g('cf-msg')?.value||'').trim()].filter(Boolean).join(' · ') });
     closeModal();
-    showToast('warning','Curfew Activated', 'Civilian app users in zone notified · Officers briefed · Zone now active', 7000);
+    showToast('success','Curfew Published', 'Shown on every control room screen and recorded', 6000);
   }
 
   /* ════════════════════════════════════
      ⑧ PATCH LIVE AUDIO FEED
   ════════════════════════════════════ */
   function patchAudioFeed() {
-    openModal('🎙 Patch Live Audio Feed', `
+    const live = GeamsData.incidents.filter(i => i.status === 'active' || i.status === 'dispatched');
+    openModal('🎙 Live Incident Audio & Video', `
       <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:16px;line-height:1.6">
-        Listen in on a live audio channel from any active incident, officer radio, or station comms room. The channel is not interrupted. This monitoring session is logged.
+        Opens the live camera and audio a civilian is sharing for an active incident. It only works while the civilian has started live video. Officer radio and station comms rooms are not available in GEAMS.
       </div>
-      <div class="form-group"><label class="form-label">Select Channel</label>
-        <select class="form-select">
-          <optgroup label="Active Incident Channels">
-            ${GeamsData.incidents.filter(i=>i.status==='active'||i.status==='dispatched').slice(0,6).map(i=>`
-              <option>INC — ${i.id} · ${i.type} · ${i.stationName}</option>`).join('')}
-          </optgroup>
-          <optgroup label="Station Comms Rooms">
-            ${GeamsData.stations.filter(s=>s.status!=='offline').map(s=>`
-              <option>STATION — ${s.name} (${s.id.split('-').slice(0,4).join('-')})</option>`).join('')}
-          </optgroup>
-        </select></div>
-      <div style="background:var(--bg-deep);border:1px solid var(--border-base);border-radius:var(--r-md);padding:18px;text-align:center;margin-top:4px">
-        <div style="font-family:var(--font-mono);font-size:0.65rem;color:var(--text-muted);letter-spacing:1.5px;margin-bottom:12px">AUDIO MONITOR — INACTIVE</div>
-        <div style="display:flex;align-items:flex-end;justify-content:center;gap:3px;height:32px;margin-bottom:10px">
-          ${Array.from({length:20},()=>`<div style="width:3px;height:${4+Math.random()*24}px;background:var(--cyan);border-radius:1px;opacity:0.3"></div>`).join('')}
-        </div>
-        <div style="font-size:0.68rem;color:var(--text-ghost)">Select a channel above and click Start Monitoring</div>
-      </div>`,
+      ${live.length ? `<div class="form-group"><label class="form-label">Active incident</label>
+        <select class="form-select" id="aud-inc">
+          ${live.slice(0,30).map(i=>`<option value="${i.id}">${i.id} — ${i.type} · ${i.stationName}</option>`).join('')}
+        </select></div>` : `<div style="padding:14px;background:var(--bg-deep);border-radius:var(--r-md);font-size:0.8rem;color:var(--text-muted)">There are no active incidents right now.</div>`}`,
       `<button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal()">Close</button>
-       <button class="btn btn-cyan" onclick="GeamsApp.showToast('info','Audio Patched','Now monitoring selected channel — session logged');GeamsApp.closeModal()">🎙 Start Monitoring</button>`);
+       ${live.length ? `<button class="btn btn-cyan" onclick="GeamsApp.startAudioMonitor()">📡 Open Live View</button>` : ''}`);
+  }
+  function startAudioMonitor() {
+    const id = document.getElementById('aud-inc')?.value; if (!id) return;
+    closeModal();
+    try { GeamsData.logAudit('HQ', 'HQ opened live view of <strong>' + id + '</strong>'); } catch (e) {}
+    GeamsLiveView.open(id);
   }
 
   /* ════════════════════════════════════
      ⑨ COURT-READY REPORT
   ════════════════════════════════════ */
   function generateCourtReport() {
-    openModal('⚖️ Generate Court-Ready Report', `
+    const list = GeamsData.incidents.slice(0, 40);
+    if (!list.length) {
+      openModal('⚖️ Incident Report', `<div style="font-size:0.82rem;color:var(--text-muted);line-height:1.6">No incidents have been received yet, so there is nothing to report on.</div>`,
+        `<button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal()">Close</button>`);
+      return;
+    }
+    openModal('⚖️ Incident Report for Court', `
       <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:16px;line-height:1.6">
-        Produces a tamper-evident, digitally signed PDF formatted for legal proceedings. Includes full chain of custody, evidence log, officer statements, and audit trail. Admissible in court.
+        Builds a printable report from the incident's real record: details, timeline, chat and file list. It is sealed with a SHA-256 fingerprint of its data so any later change can be detected. This is not a certified digital signature, and a court may require more.
       </div>
-      <div class="form-group"><label class="form-label">Report Type</label>
-        <select class="form-select">
-          <option>Single Incident Report</option><option>Joint / Linked Case Report</option>
-          <option>Officer Conduct Report</option><option>Station Performance Report</option>
-          <option>Evidence Chain of Custody</option>
+      <div class="form-group"><label class="form-label">Incident</label>
+        <select class="form-select" id="cr-inc">
+          ${list.map(i=>`<option value="${i.id}">${i.id} — ${i.type} · ${i.stationName} · ${i.status}</option>`).join('')}
         </select></div>
-      <div class="form-group"><label class="form-label">Select Incident / Case</label>
-        <select class="form-select">
-          ${GeamsData.incidents.slice(0,12).map(i=>`<option>${i.id} — ${i.type} · ${i.stationName}</option>`).join('')}
-        </select></div>
-      <div class="form-group"><label class="form-label">Include Sections</label>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
-          ${['Incident timeline','Officer GPS logs','Evidence files','Witness statements','Biometric records','Civilian communications','Dispatch records','Full audit trail'].map(sec=>`
-            <label style="display:flex;align-items:center;gap:7px;font-size:0.75rem;cursor:pointer">
-              <input type="checkbox" checked style="accent-color:var(--gold)"> ${sec}
-            </label>`).join('')}
-        </div></div>
-      <div class="form-group"><label class="form-label">Signing Authority</label>
-        <select class="form-select">
-          <option>Supt. G. Acheampong — National Commander</option>
-          <option>Insp. A. Asante — Deputy Commander</option>
-        </select></div>`,
+      <div class="form-group"><label class="form-label">Include</label>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">
+          <label style="font-size:0.75rem"><input type="checkbox" id="cr-tl" checked style="accent-color:var(--gold)"> Timeline</label>
+          <label style="font-size:0.75rem"><input type="checkbox" id="cr-chat" checked style="accent-color:var(--gold)"> Chat</label>
+          <label style="font-size:0.75rem"><input type="checkbox" id="cr-files" checked style="accent-color:var(--gold)"> Files</label>
+        </div></div>`,
       `<button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal()">Cancel</button>
-       <button class="btn btn-primary" onclick="GeamsApp.showToast('success','Court Report Generated','Digitally signed PDF ready · SHA-256 hash logged in audit trail');GeamsApp.closeModal()">⚖️ Generate & Sign Report</button>`);
+       <button class="btn btn-primary" onclick="GeamsApp.buildCourtReport()">⚖️ Build Report</button>`);
+  }
+  async function buildCourtReport() {
+    const id = document.getElementById('cr-inc')?.value; if (!id) return;
+    const want = { tl: document.getElementById('cr-tl')?.checked, chat: document.getElementById('cr-chat')?.checked, files: document.getElementById('cr-files')?.checked };
+    const inc = GeamsData.incidents.find(i => i.id === id); if (!inc) return;
+    closeModal();
+    showToast('info','Building report','Reading the incident record…',3000);
+    let B;
+    try { B = await GeamsArchive.loadBundle(inc.station, id); } catch (e) { showToast('error','Failed','Could not read the incident record'); return; }
+    const esc = GeamsTactical.esc, tm = t => t ? new Date(t).toISOString().replace('T',' ').slice(0,19) + ' UTC' : '—';
+    const r = B.rec || {};
+    const ev = (B.events || []).slice().sort((a,b) => (a.t||0) - (b.t||0));
+    const data = { incident: { id, type: inc.type, priority: inc.priority, status: inc.status, station: inc.stationName, location: r.location || inc.location,
+        lat: r.lat, lng: r.lng, civilian: r.civilianName, civilianPhone: r.civilianPhone, officer: r.officerName, officerBadge: r.officerBadge, created: r.createdAt, resolved: r.resolvedAt },
+      events: want.tl ? ev : undefined, chat: want.chat ? B.chat : undefined,
+      files: want.files ? (B.media || []).map(m => ({ name: m.name, type: m.type, size: m.size, by: m.by, ts: m.ts })) : undefined };
+    const json = JSON.stringify(data);
+    let hash = 'unavailable (SHA-256 needs a secure https page)';
+    try { if (window.crypto && crypto.subtle) hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json)))].map(b => b.toString(16).padStart(2,'0')).join(''); } catch (e) {}
+    const row = (k, v) => `<tr><th>${esc(k)}</th><td>${esc(v == null || v === '' ? '—' : v)}</td></tr>`;
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>GEAMS Incident Report ${esc(id)}</title>
+<style>body{font:14px/1.5 Arial,sans-serif;max-width:860px;margin:30px auto;padding:0 20px;color:#111}h1{font-size:22px;margin:0 0 4px}h2{font-size:16px;margin:26px 0 8px;border-bottom:1px solid #999;padding-bottom:4px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #bbb;padding:5px 8px;text-align:left;vertical-align:top;font-size:13px}th{background:#f1f1f1;width:190px}.seal{margin-top:28px;padding:10px;border:2px solid #333;font:12px monospace;word-break:break-all}.note{color:#555;font-size:12px}@media print{.noprint{display:none}}</style></head><body>
+<div class="noprint"><button onclick="window.print()">Print / Save as PDF</button></div>
+<h1>GEAMS Incident Report</h1><div class="note">Ghana Emergency and Accident Management System · generated ${esc(tm(Date.now()))} from the shared incident record</div>
+<h2>Incident</h2><table>${row('Incident ID',id)}${row('Type',inc.type)}${row('Priority',inc.priority)}${row('Status',inc.status)}${row('Station',inc.stationName)}${row('Location',r.location||inc.location)}${row('GPS',r.lat!=null?r.lat+', '+r.lng:'')}${row('Civilian',r.civilianName)}${row('Civilian phone',r.civilianPhone)}${row('Officer',(r.officerName||'')+(r.officerBadge?' ('+r.officerBadge+')':''))}${row('Created',r.createdAt)}${row('Resolved',r.resolvedAt)}</table>
+${want.tl ? `<h2>Timeline (${ev.length} events)</h2><table><tr><th style="width:150px">Time</th><th style="width:60px">Who</th><th>Event</th></tr>${ev.map(e=>`<tr><td>${esc(tm(e.t))}</td><td>${esc(e.who)}</td><td>${esc(e.text)}</td></tr>`).join('')||'<tr><td colspan=3>No events recorded</td></tr>'}</table>` : ''}
+${want.chat ? `<h2>Chat (${(B.chat||[]).length} messages)</h2><table><tr><th style="width:150px">Time</th><th style="width:110px">From</th><th>Message</th></tr>${(B.chat||[]).map(m=>`<tr><td>${esc(tm(m.ts||m.t))}</td><td>${esc(m.from||m.sender||m.name||'')}</td><td>${esc(m.text||'')}</td></tr>`).join('')||'<tr><td colspan=3>No messages</td></tr>'}</table>` : ''}
+${want.files ? `<h2>Attached files (${(B.media||[]).length})</h2><table><tr><th>Name</th><th style="width:110px">Type</th><th style="width:90px">Size</th><th style="width:150px">Added</th></tr>${(B.media||[]).map(m=>`<tr><td>${esc(m.name)}</td><td>${esc(m.type)}</td><td>${esc(m.size)}</td><td>${esc(tm(m.ts))}</td></tr>`).join('')||'<tr><td colspan=4>No files</td></tr>'}</table><div class="note">File contents are stored on the GEAMS server; this report lists them.</div>` : ''}
+<div class="seal"><b>SHA-256 fingerprint of the report data:</b><br>${esc(hash)}<br><br><span style="font-family:Arial">Recomputing this fingerprint over the same data must give the same value; any change gives a different one. This is a tamper-evidence aid, not a certified digital signature.</span></div></body></html>`;
+    const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+    const w = window.open(url, '_blank');
+    if (!w) { const a = document.createElement('a'); a.href = url; a.download = 'GEAMS-report-' + id + '.html'; document.body.appendChild(a); a.click(); a.remove(); }
+    try { GeamsData.logAudit('HQ', 'Report built for <strong>' + id + '</strong> · SHA-256 ' + hash.slice(0,12) + '…'); GeamsArchive.log(id, 'hq', 'report', 'Court report built · SHA-256 ' + hash.slice(0,16) + '…'); } catch (e) {}
+    showToast('success','Report ready','Opened in a new tab · use Print to save as PDF', 6000);
   }
 
   /* ════════════════════════════════════
      ⑩ SYNC NATIONAL WATCHLIST
   ════════════════════════════════════ */
   function syncWatchlist() {
-    openModal('🔄 Sync National Watchlist', `
-      <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:16px;line-height:1.6">
-        Pushes the latest wanted persons, flagged vehicles, and biometric alerts to all station nodes. Auto-syncs every 6 hours — use this for an urgent out-of-cycle manual push.
+    const esc = GeamsTactical.esc;
+    const list = GeamsTactical.list().filter(o => o.type === 'wanted' && o.status === 'active');
+    openModal('🎯 National Watchlist', `
+      <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:14px;line-height:1.6">
+        These are the wanted notices stations can see right now. Notices reach stations live as soon as they are issued, so there is nothing to sync. Vehicle plates, fraud and biometric lists are not part of GEAMS.
       </div>
-      <div class="form-group"><label class="form-label">Select Sync Packages</label>
-        <div style="display:flex;flex-direction:column;gap:6px">
-          ${[
-            {label:'Wanted persons list',              sub:'Current: 847 entries',   checked:true},
-            {label:'Flagged vehicle plates',           sub:'Current: 1,204 entries', checked:true},
-            {label:'Biometric watchlist (face+print)', sub:'Current: 312 profiles',  checked:true},
-            {label:'Financial / fraud alerts',         sub:'Current: 89 entries',    checked:false},
-            {label:'Missing persons',                  sub:'Current: 156 active',    checked:true},
-          ].map(i=>`
-            <label style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--bg-deep);border-radius:var(--r-sm);cursor:pointer;font-size:0.78rem">
-              <input type="checkbox" ${i.checked?'checked':''} style="accent-color:var(--gold)">
-              <div style="flex:1">
-                <div>${i.label}</div>
-                <div style="font-size:0.62rem;color:var(--text-muted);font-family:var(--font-mono);margin-top:1px">${i.sub}</div>
-              </div>
-            </label>`).join('')}
-        </div></div>
-      <div class="form-group"><label class="form-label">Push To</label>
-        <select class="form-select">
-          <option>All Stations (${GeamsData.stations.length} nodes)</option>
-          ${GeamsData.stations.map(s=>`<option>${s.name}</option>`).join('')}
-        </select></div>`,
-      `<button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal()">Cancel</button>
-       <button class="btn btn-cyan" onclick="GeamsApp.confirmWatchlistSync()">🔄 Push Sync Now</button>`);
-  }
-
-  function confirmWatchlistSync() {
-    closeModal();
-    showToast('info','Watchlist Sync Initiated', `Pushing to ${GeamsData.stations.filter(s=>s.status!=='offline').length} online stations — ETA ~30 seconds`, 6000);
-    setTimeout(() => showToast('success','Watchlist Synced', 'All online stations updated · 1 offline station queued for next connection'), 3500);
+      ${list.length ? list.map(o => `
+        <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;padding:10px 12px;background:var(--bg-deep);border-radius:var(--r-sm);margin-bottom:8px">
+          <div style="font-size:0.78rem;line-height:1.5"><strong>${esc(o.name)}</strong><br><span style="color:var(--text-muted)">${esc(o.stationName)}${o.detail ? ' · ' + esc(o.detail) : ''}</span></div>
+          <button class="btn btn-success btn-sm" onclick="GeamsTactical.lift('${o.id}');GeamsApp.syncWatchlist()">✓ Lift</button>
+        </div>`).join('') : `<div style="padding:14px;background:var(--bg-deep);border-radius:var(--r-md);font-size:0.8rem;color:var(--text-muted)">The watchlist is empty. Issue a wanted notice from the Tactical Ops grid.</div>`}`,
+      `<button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal()">Close</button>
+       <button class="btn btn-danger btn-sm" onclick="GeamsApp.closeModal();GeamsApp.wantedPersonBroadcast()">🎯 New Wanted Notice</button>`);
   }
 
   /* ════════════════════════════════════
      ⑪ ARCHIVE & PURGE OLD CASES
   ════════════════════════════════════ */
   function archivePurge() {
-    const resolved = GeamsData.incidents.filter(i=>i.status==='resolved').length;
-    openModal('🗄 Archive & Purge Old Cases', `
-      <div style="background:var(--orange-dim);border:1px solid var(--orange-border);border-radius:var(--r-md);padding:10px 14px;margin-bottom:16px;font-size:0.78rem;color:var(--orange);line-height:1.6">
-        ⚠️ Archived cases move to cold storage — no longer in the live system but recoverable via Legal Archive. Purged data is permanently deleted per data retention policy.
+    const res = GeamsData.incidents.filter(i => i.status === 'resolved');
+    openModal('🗄 Export Resolved Cases', `
+      <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:14px;line-height:1.6">
+        Downloads the resolved incidents received in this session as a spreadsheet (CSV). GEAMS does not delete or move evidence: files stay on the server, and permanent deletion needs a retention policy approved by the agencies first.
       </div>
-      <div class="form-group"><label class="form-label">Archive Threshold</label>
-        <select class="form-select">
-          <option>Cases resolved over 30 days ago</option>
-          <option>Cases resolved over 90 days ago</option>
-          <option>Cases resolved over 1 year ago</option>
-          <option>All resolved cases</option>
-        </select></div>
-      <div class="form-group"><label class="form-label">Action</label>
-        <select class="form-select">
-          <option>Archive only — move to cold storage (recoverable)</option>
-          <option>Archive + anonymise civilian data (GDPR compliance)</option>
-          <option>Purge — permanent deletion (requires senior auth)</option>
-        </select></div>
-      <div style="background:var(--bg-deep);border-radius:var(--r-md);padding:12px 14px;margin-bottom:12px">
-        <div style="font-family:var(--font-mono);font-size:0.62rem;color:var(--text-muted);letter-spacing:1px;margin-bottom:8px">ESTIMATED IMPACT</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:0.75rem">
-          <div><span style="color:var(--text-muted)">Eligible records: </span><span style="color:var(--orange)">${resolved} cases</span></div>
-          <div><span style="color:var(--text-muted)">Storage freed: </span><span style="color:var(--green)">~${resolved*4} MB</span></div>
-          <div><span style="color:var(--text-muted)">Evidence files: </span><span style="color:var(--cyan)">${resolved*3} files</span></div>
-          <div><span style="color:var(--text-muted)">Retention period: </span><span style="color:var(--gold)">7 years</span></div>
-        </div>
-      </div>
-      <div class="form-group"><label class="form-label">Authorization Code</label>
-        <input type="password" class="form-input" placeholder="Required for all archive operations"></div>`,
-      `<button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal()">Cancel</button>
-       <button class="btn btn-warning" onclick="GeamsApp.confirmArchive()">🗄 Run Archive Job</button>`);
+      <div style="padding:12px 14px;background:var(--bg-deep);border-radius:var(--r-md);font-size:0.82rem">
+        Resolved incidents available: <strong style="color:var(--gold)">${res.length}</strong>
+      </div>`,
+      `<button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal()">Close</button>
+       ${res.length ? `<button class="btn btn-warning" onclick="GeamsApp.confirmArchive()">⬇ Download CSV</button>` : ''}`);
   }
 
   function confirmArchive() {
+    const res = GeamsData.incidents.filter(i => i.status === 'resolved');
+    if (!res.length) return;
+    const q = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+    const rows = [['Incident ID','Type','Priority','Station','Location','Status','Created','Officer'].map(q).join(',')]
+      .concat(res.map(i => [i.id, i.type, i.priority, i.stationName, i.location, i.status, i.createdAt ? new Date(i.createdAt).toISOString() : '', i.officerName].map(q).join(',')));
+    const url = URL.createObjectURL(new Blob([rows.join('\n')], { type: 'text/csv' }));
+    const a = document.createElement('a'); a.href = url; a.download = 'GEAMS-resolved-cases.csv'; document.body.appendChild(a); a.click(); a.remove();
+    try { GeamsData.logAudit('HQ', 'Exported <strong>' + res.length + '</strong> resolved cases to CSV'); } catch (e) {}
     closeModal();
-    showToast('info','Archive Job Queued', 'Processing in background — estimated 2–5 minutes', 6000);
-    setTimeout(() => showToast('success','Archive Complete', 'Cases moved to cold storage · Audit entry recorded · Storage reclaimed'), 4000);
+    showToast('success','Export ready', res.length + ' resolved cases downloaded', 5000);
   }
 
   /* ════════════════════════════════════
@@ -3306,9 +3335,9 @@ const GeamsApp = (() => {
                      crossStationLink, confirmCaseLink,
                      wantedPersonBroadcast, confirmWanted,
                      setCurfewZone, confirmCurfew,
-                     patchAudioFeed,
-    /* Technical */  generateCourtReport,
-                     syncWatchlist, confirmWatchlistSync,
+                     patchAudioFeed, startAudioMonitor,
+    /* Technical */  generateCourtReport, buildCourtReport,
+                     syncWatchlist,
                      archivePurge, confirmArchive,
     boot
   };
@@ -5228,6 +5257,33 @@ const GeamsOfficers = (() => {
 ───────────────────────────────────────── */
 const GeamsTactical = (() => {
 
+  /* Real tactical operations. HQ creates them; they are stored in the shared
+     'hq:tacticalOps' map, every LCR shows them while active, and HQ lifts them. */
+  const OPS_KEY = 'hq:tacticalOps';
+  let ops = {};
+  const TYPE = { cordon:'🔴 Cordon', curfew:'🌙 Curfew', wanted:'🎯 Wanted', command:'🔁 Command', mobilise:'📣 Mobilise', caselink:'🔗 Joint case', emergency:'🚨 Emergency' };
+  const esc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  function createOp(o) {
+    const id = 'TAC-' + Date.now().toString(36) + Math.random().toString(36).slice(2,5);
+    const rec = { id, type:o.type, name:o.name, detail:o.detail||'', station:o.station||'all', stationName:o.stationName||'All stations',
+      stations: Array.isArray(o.stations) ? o.stations : undefined,
+      by:'HQ Command', status:'active', createdAt:Date.now() };
+    ops[id] = rec;
+    GeamsSync.mergeShared(OPS_KEY, {}, m => { m = m || {}; m[id] = rec; return m; });
+    try { GeamsData.logAudit('HQ', '<strong>' + esc(TYPE[o.type] || o.type) + '</strong> issued — ' + esc(o.name)); } catch (e) {}
+    refresh();
+  }
+  function lift(id) {
+    const o = ops[id]; if (!o) return;
+    o.status = 'lifted'; o.liftedAt = Date.now();
+    GeamsSync.mergeShared(OPS_KEY, {}, m => { m = m || {}; if (m[id]) { m[id].status = 'lifted'; m[id].liftedAt = Date.now(); } return m; });
+    try { GeamsData.logAudit('HQ', '<strong>' + esc(TYPE[o.type] || o.type) + '</strong> lifted — ' + esc(o.name)); } catch (e) {}
+    GeamsApp.showToast('success','Lifted', 'Operation lifted and stations notified');
+    refresh();
+  }
+  function refresh() { const p = document.getElementById('page-tactical'); if (p && p.classList.contains('active')) render(); }
+  GeamsSync.watch(OPS_KEY, {}, (m) => { ops = m || {}; refresh(); }, 2000);
+
   function render() {
     const el = document.getElementById('page-tactical');
     if (!el) return;
@@ -5242,17 +5298,17 @@ const GeamsTactical = (() => {
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:var(--gap-md)">
 
         ${[
-          { icon:'🔴', label:'Cordon Zone',           sub:'Draw a live perimeter on the map — restrict entry without HQ clearance',           color:'red',     fn:'GeamsApp.cordonZone(null)' },
-          { icon:'🔁', label:'Transfer Command',       sub:'Hand full national command authority to a designated deputy immediately',          color:'orange',  fn:'GeamsApp.transferCommand()' },
-          { icon:'📣', label:'Mobilise Reserve Units', sub:'Activate off-duty officers across selected stations with push instructions',       color:'orange',  fn:'GeamsApp.mobiliseReserves(null)' },
-          { icon:'🔗', label:'Cross-Station Case Link',sub:'Merge incidents from different stations into one joint investigation file',        color:'cyan',    fn:'GeamsApp.crossStationLink()' },
-          { icon:'🎯', label:'Wanted Person Broadcast',sub:'Push a suspect profile to all officer devices with facial recognition alert',      color:'red',     fn:'GeamsApp.wantedPersonBroadcast()' },
-          { icon:'🌙', label:'Set Curfew Zone',         sub:'Restrict civilian movement in a defined area and notify all users in the zone',   color:'orange',  fn:'GeamsApp.setCurfewZone()' },
-          { icon:'🎙', label:'Patch Live Audio Feed',   sub:'Listen in on any active incident, officer radio, or station comms room silently', color:'cyan',    fn:'GeamsApp.patchAudioFeed()' },
-          { icon:'⚖️', label:'Court-Ready Report',     sub:'Generate a digitally signed, tamper-evident PDF for legal proceedings',           color:'gold',    fn:'GeamsApp.generateCourtReport()' },
-          { icon:'🔄', label:'Sync National Watchlist',sub:'Push latest wanted persons, flagged vehicles, and biometrics to all stations',    color:'cyan',    fn:'GeamsApp.syncWatchlist()' },
-          { icon:'🗄', label:'Archive & Purge Cases',  sub:'Move resolved cases to cold storage per data retention and GDPR policy',          color:'orange',  fn:'GeamsApp.archivePurge()' },
-          { icon:'🚨', label:'Declare Emergency',       sub:'Activate all standby units and trigger national emergency protocol immediately',   color:'red',     fn:'GeamsApp.declareEmergency()' },
+          { icon:'🔴', label:'Cordon Zone',           sub:'Publish a cordon order to a station control room until HQ lifts it',               color:'red',     fn:'GeamsApp.cordonZone(null)' },
+          { icon:'🔁', label:'Transfer Command',       sub:'Record a command handover and announce it on every control room screen',          color:'orange',  fn:'GeamsApp.transferCommand()' },
+          { icon:'📣', label:'Mobilise Reserve Units', sub:'Alert selected control rooms to call in their off-duty officers',                  color:'orange',  fn:'GeamsApp.mobiliseReserves(null)' },
+          { icon:'🔗', label:'Cross-Station Case Link',sub:'Link incidents from different stations into one joint case the stations can see',  color:'cyan',    fn:'GeamsApp.crossStationLink()' },
+          { icon:'🎯', label:'Wanted Person Broadcast',sub:'Publish a wanted notice to station control rooms until HQ lifts it',               color:'red',     fn:'GeamsApp.wantedPersonBroadcast()' },
+          { icon:'🌙', label:'Set Curfew Zone',         sub:'Record a curfew order and show it on every control room screen',                  color:'orange',  fn:'GeamsApp.setCurfewZone()' },
+          { icon:'🎙', label:'Live Incident Audio & Video', sub:'Open the live camera and audio a civilian is sharing on an active incident',  color:'cyan',    fn:'GeamsApp.patchAudioFeed()' },
+          { icon:'⚖️', label:'Incident Report for Court', sub:'Printable report with timeline, chat and file list, sealed with a SHA-256 fingerprint', color:'gold', fn:'GeamsApp.generateCourtReport()' },
+          { icon:'📋', label:'National Watchlist',     sub:'View and lift the wanted notices that stations can see right now',                color:'cyan',    fn:'GeamsApp.syncWatchlist()' },
+          { icon:'🗄', label:'Export Resolved Cases',  sub:'Download resolved incidents as a CSV. GEAMS never deletes evidence',              color:'orange',  fn:'GeamsApp.archivePurge()' },
+          { icon:'🚨', label:'Declare Emergency',       sub:'Alert every control room in a zone with an emergency banner until HQ lifts it',    color:'red',     fn:'GeamsApp.declareEmergency()' },
         ].map(a=>`
           <div class="panel" style="cursor:pointer;transition:border-color 0.15s;border-color:var(--border-base)"
             onmouseenter="this.style.borderColor='var(--border-bright)'"
@@ -5280,20 +5336,20 @@ const GeamsTactical = (() => {
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:var(--gap-md)">
         ${[
           { icon:'📍', label:'Multi-Source Device Location Fusion',
-            sub:'Combine GPS, Wi-Fi, cellular tower, and IP address signals from smartphones and computers to reach ~99% location accuracy.',
+            sub:'Combine GPS, Wi-Fi, cellular tower, and IP address signals from smartphones and computers to improve location accuracy. Target to be validated in the pilot.',
             status:'Vendor Evaluation' },
           { icon:'📹', label:'National CCTV Database Integration',
             sub:'Unified access layer connecting municipal, transport, and partner-operated CCTV camera feeds into a single searchable network.',
-            status:'Pilot Phase' },
+            status:'Concept' },
           { icon:'🚁', label:'Autonomous Drone First Responders (DFR)',
             sub:'Automatic launch of a localised drone station on incident trigger, reaching the scene ahead of ground units to feed responding officers live aerial intelligence.',
-            status:'R&D — Regulatory Review' },
+            status:'Subject to Regulatory & Legal Review' },
           { icon:'🚦', label:'Bi-Directional Smart City Control',
-            sub:'Dispatch-triggered control of city infrastructure — pre-empting traffic signals to green for responding units, clearing digital highway signage, and locking down building access to contain a fleeing suspect.',
-            status:'Policy Framework Pending' },
+            sub:'Dispatch-triggered control of city infrastructure — pre-empting traffic signals to green for responding units and clearing digital highway signage.',
+            status:'Subject to Policy & Legal Review' },
           { icon:'❤️', label:'Officer Vitals & Threat Telemetry',
             sub:'Wearable and smart-holster monitoring of heart rate, stress indicators, and weapon-draw state, automatically dispatching backup the moment vitals spike or a weapon is unholstered — no radio call required.',
-            status:'Vendor Evaluation' },
+            status:'Subject to Privacy & Legal Review' },
           { icon:'☎️', label:'Non-Smartphone Caller Location Detection',
             sub:'When a report comes in from a basic feature phone or a fixed landline (no GPS-capable app to push coordinates), automatically locate the caller via cellular tower triangulation and carrier network signalling, and continue tracking their movement in real time as the call progresses — matching the accuracy civilians on the app already get.',
             status:'Carrier Partnership Required' },
@@ -5319,29 +5375,28 @@ const GeamsTactical = (() => {
           <table class="data-table">
             <thead><tr><th>Type</th><th>Name</th><th>Initiated By</th><th>Time</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
-              ${[
-                {type:'🔴 Cordon',  name:'Siege — Ring Rd Central, Accra', by:'Supt. Acheampong', time:'13:45', status:'active'},
-                {type:'🌙 Curfew',  name:'Northern Region — 22:00–06:00',  by:'Insp. Asante',     time:'08:00', status:'active'},
-                {type:'🎯 Wanted',  name:'Kwame A. — Armed Robbery suspect',by:'Sgt. Mensah',     time:'11:22', status:'active'},
-              ].map(op=>`
+              ${(() => {
+                const act = Object.values(ops).filter(o => o.status === 'active').sort((a,b) => b.createdAt - a.createdAt);
+                if (!act.length) return `<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:24px">No active tactical operations. Issue a cordon, curfew or wanted notice above — it appears here and on the station control rooms.</td></tr>`;
+                return act.map(op => `
                 <tr>
-                  <td style="font-weight:600">${op.type}</td>
-                  <td>${op.name}</td>
-                  <td class="td-muted">${op.by}</td>
-                  <td class="td-mono td-muted">${op.time}</td>
+                  <td style="font-weight:600">${esc(TYPE[op.type] || op.type)}</td>
+                  <td>${esc(op.name)}<div style="font-size:0.68rem;color:var(--text-muted)">${esc(op.stationName)}${op.detail ? ' · ' + esc(op.detail) : ''}</div></td>
+                  <td class="td-muted">${esc(op.by)}</td>
+                  <td class="td-mono td-muted">${new Date(op.createdAt).toLocaleTimeString('en-GB',{hour12:false}).slice(0,5)}</td>
                   <td><span class="badge badge-critical">ACTIVE</span></td>
                   <td><div style="display:flex;gap:4px">
-                    <button class="btn btn-ghost btn-sm" onclick="GeamsApp.showToast('info','Detail','Opening tactical detail...')">👁</button>
-                    <button class="btn btn-success btn-sm" onclick="GeamsApp.showToast('success','Lifted','Tactical operation lifted and logged')">✓ Lift</button>
+                    <button class="btn btn-success btn-sm" onclick="GeamsTactical.lift('${op.id}')">✓ Lift</button>
                   </div></td>
-                </tr>`).join('')}
+                </tr>`).join('');
+              })()}
             </tbody>
           </table>
         </div>
       </div>`;
   }
 
-  return { render };
+  return { render, createOp, lift, esc, list: () => Object.values(ops) };
 })();
 
 

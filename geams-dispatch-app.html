@@ -1825,7 +1825,7 @@ const GeamsDispatchSync = (() => {
           id: rec.id, type: rec.type, priority: rec.priority || 'critical',
           location: rec.location, address: rec.location,
           lat: rec.lat, lng: rec.lng,
-          civilian: rec.civilianName, civilianPhone: rec.civilianPhone,
+          civilian: rec.civilianName, civilianPhone: rec.civilianPhone, _civilianId: rec.civilianId || null,
           civilianLat: rec.civilianLat, civilianLng: rec.civilianLng,
           status: 'pending', receivedAt: new Date(),
           controlRoomId: DispatchData.officer.controlRoomId,
@@ -2695,6 +2695,60 @@ const DispatchApp = (() => {
   function closeScanSheet() {
     stopScanCamera();
     closeSheet();
+  }
+
+
+  // ── VERIFY THE CIVILIAN WHO RAISED THIS ALERT (1-to-1 face check) ──
+  // Compares the face in front of the officer's camera with the Face ID that
+  // the incident's own civilian enrolled. Everything is computed on this
+  // device; only the result (match / no match, distance) is logged.
+  let _verifyEntry = null;
+  async function verifyCivilian() {
+    const job = DispatchData.currentJob;
+    if (!job || job.id === '—' || job._syncSource !== 'civilian-app') {
+      showToast('warning','No civilian alert','Open a job raised from the Civilian app first'); return;
+    }
+    const registry = await GeamsSync.getShared('registry:faces', {});
+    let entry = job._civilianId && registry ? registry[job._civilianId] : null;
+    if (!entry && job.civilianPhone) entry = Object.values(registry || {}).find(e => e.phone && e.phone === job.civilianPhone);
+    if (!entry || !entry.descriptor) {
+      openSheet('🧬 Verify Civilian', `<div style="font-size:0.8rem;line-height:1.6;color:var(--text-muted)">
+        This alert cannot be verified by face. Either it was sent anonymously, or ${job.civilian ? '<b>' + job.civilian + '</b>' : 'the civilian'} has no Face ID enrolled
+        (or enrolled it on another backend). Ask for a Ghana Card and use <b>Biometric Scan → Manual ID</b>.</div>`,
+        `<button class="btn btn-primary btn-full" onclick="DispatchApp.closeSheet()">Close</button>`);
+      return;
+    }
+    _verifyEntry = entry;
+    openSheet('🧬 Verify Civilian — ' + (entry.name || job.civilian || ''), `
+      <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:8px;line-height:1.5">
+        Point the camera at the person who says they raised this alert. GEAMS compares their face with the Face ID registered to this account. The result is a guide, not proof of identity.</div>
+      <div id="scan-camera-area" style="border-radius:var(--r-lg);overflow:hidden;background:#000;margin-bottom:10px;position:relative;min-height:220px;display:flex;align-items:center;justify-content:center">
+        <div style="color:var(--text-muted);font-size:0.78rem;text-align:center;padding:20px">📷 Requesting camera access…</div>
+      </div>
+      <div id="scan-status" style="text-align:center;font-size:0.76rem;color:var(--text-muted);min-height:18px">Loading face recognition model…</div>
+      <div id="scan-result" style="font-size:0.8rem;margin-top:8px"></div>`,
+      `<button class="btn btn-ghost" onclick="DispatchApp.closeScanSheet()">Cancel</button>
+       <button class="btn btn-primary btn-full" id="scan-capture-btn" onclick="DispatchApp.captureVerifyCivilian()" disabled>🧬 Capture &amp; Verify</button>`);
+    startScanCamera();
+  }
+  function captureVerifyCivilian() {
+    const job = DispatchData.currentJob;
+    if (!_scanLiveDescriptor || !_verifyEntry) { showToast('warning','No Face Detected','Align the face in the frame first'); return; }
+    const d = FaceEngine.distance(Array.from(_scanLiveDescriptor), _verifyEntry.descriptor);
+    const ok = d <= FaceEngine.MATCH_THRESHOLD;
+    const name = _verifyEntry.name || job.civilian || 'the civilian';
+    stopScanCamera();
+    const area = document.getElementById('scan-camera-area'); if (area) area.innerHTML = '';
+    const result = document.getElementById('scan-result');
+    if (result) result.innerHTML = ok
+      ? `<div style="padding:10px 12px;background:var(--primary-dim);border:1px solid var(--primary-border);border-radius:var(--r-md)"><div style="font-weight:700;color:var(--green)">✅ Face matches the account holder</div><div style="margin-top:4px">${name}</div><div style="color:var(--text-muted);font-size:0.68rem;margin-top:4px">Distance ${d.toFixed(3)} (match at ${FaceEngine.MATCH_THRESHOLD} or lower). A guide, not proof of identity.</div></div>`
+      : `<div style="padding:10px 12px;background:var(--bg-raised);border:1px solid var(--red);border-radius:var(--r-md)"><div style="font-weight:700;color:var(--red)">❌ Face does NOT match ${name}</div><div style="color:var(--text-muted);font-size:0.68rem;margin-top:4px">Distance ${d.toFixed(3)} (match needs ${FaceEngine.MATCH_THRESHOLD} or lower). Poor light, angle or a different person can cause this: try again, then confirm with ID.</div></div>`;
+    const text = `Civilian identity check by face: ${ok ? 'MATCH' : 'NO MATCH'} (${name}, distance ${d.toFixed(3)})`;
+    DispatchData.activityLog.unshift({ time: DispatchData.fmt(new Date()), lcrId: DispatchData.officer.controlRoomId, text: '<strong>' + text + '</strong>' });
+    try { GeamsArchive.log(job._syncIncId, 'off', 'civilian_verified', text); } catch (e) {}
+    try { GeamsDispatchSync.pushUpdate(job._syncIncId, { civilianVerified: { result: ok ? 'match' : 'no_match', at: Date.now(), by: DispatchData.officer.name } }); } catch (e) {}
+    const footer = document.getElementById('sheet-footer');
+    if (footer) footer.innerHTML = `<button class="btn btn-ghost" onclick="DispatchApp.verifyCivilian()">↻ Try again</button><button class="btn btn-primary btn-full" onclick="DispatchApp.closeSheet()">✅ Done</button>`;
   }
 
   async function captureAndMatchFace() {
@@ -3759,7 +3813,7 @@ const DispatchApp = (() => {
     pullNextJob,acceptJob,confirmAccept,rejectJob,confirmReject,
     arriveOnScene,confirmArrival,secureScene,confirmSecure,closeCase,confirmCloseCase,
     officerSOS,activateSOS,requestBackup,confirmBackup,requestForensics,confirmForensics,
-    declareUnsafe,confirmUnsafe,runBiometricScan,onScanTypeChange,startScanCamera,stopScanCamera,
+    declareUnsafe,confirmUnsafe,runBiometricScan,verifyCivilian,captureVerifyCivilian,onScanTypeChange,startScanCamera,stopScanCamera,
     closeScanSheet,sendOfficerAlert,captureAndMatchFace,runManualIdLookup,runPlateCheck,runPlate,logPlate,
     checkPriorCalls,interceptVehicle,confirmVictimStatus,setVictimStatus,
     toggleBodyCam,uploadEvidence,confirmUpload,captureWitnessStatement,toggleAudioRec,saveWitness,
@@ -4186,6 +4240,7 @@ const ScreenJob = (() => {
       <div style="padding:10px 16px 0">
         <div style="font-family:var(--font-mono);font-size:0.6rem;letter-spacing:1.5px;color:var(--text-muted);margin-bottom:8px">IDENTIFICATION</div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <button class="btn btn-ghost btn-full" onclick="DispatchApp.verifyCivilian()">🧬 Verify Civilian (Face)</button>
           <button class="btn btn-ghost btn-full" onclick="DispatchApp.runBiometricScan()">🧬 Biometric Scan</button>
           <button class="btn btn-ghost btn-full" onclick="DispatchApp.runPlateCheck()">🚗 Plate Check</button>
           <button class="btn btn-ghost btn-full" onclick="DispatchApp.interceptVehicle()">🚨 Intercept Vehicle</button>
@@ -4450,7 +4505,8 @@ const ScreenEvidence = (() => {
       <div style="margin:10px 16px 0;display:grid;grid-template-columns:1fr 1fr;gap:8px">
         <button class="btn btn-ghost btn-full" onclick="DispatchApp.uploadEvidence()">📷 Photo / Video</button>
         <button class="btn btn-ghost btn-full" onclick="DispatchApp.captureWitnessStatement()">🎤 Witness</button>
-        <button class="btn btn-ghost btn-full" onclick="DispatchApp.runBiometricScan()">🧬 Biometric Scan</button>
+        <button class="btn btn-ghost btn-full" onclick="DispatchApp.verifyCivilian()">🧬 Verify Civilian (Face)</button>
+          <button class="btn btn-ghost btn-full" onclick="DispatchApp.runBiometricScan()">🧬 Biometric Scan</button>
         <button class="btn btn-ghost btn-full" onclick="DispatchApp.runPlateCheck()">🚗 Plate Check</button>
         <button class="btn btn-ghost btn-full" onclick="DispatchApp.makeArrestRecord()">📋 Arrest Record</button>
         <button class="btn btn-ghost btn-full" onclick="DispatchApp.sketchScene()">✏️ Scene Sketch</button>
