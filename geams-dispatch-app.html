@@ -1470,6 +1470,63 @@ const GeamsArchive = (() => {
   });
 })();
 
+/* ── GeamsJurisdiction: automatic, non-overlapping LCR boundaries ──
+   Each LCR starts with a circle of its own radius. Wherever another LCR's
+   circle overlaps it (two control rooms in one district or big city), the
+   overlap is split along the line halfway between the two stations, so every
+   point belongs to exactly one LCR: the nearest one. This matches how the
+   Civilian app already routes an SOS (nearest station). It recomputes whenever
+   any station location changes, so no manual boundary editing is needed. */
+const GeamsJurisdiction = (() => {
+  const rad = d => d * Math.PI / 180, KY = 110540;
+  function clip(poly, nx, ny, c) {            // keep points with nx*x + ny*y <= c
+    const out = [];
+    for (let i = 0; i < poly.length; i++) {
+      const p = poly[i], q = poly[(i + 1) % poly.length];
+      const dp = nx * p[0] + ny * p[1] - c, dq = nx * q[0] + ny * q[1] - c;
+      if (dp <= 0) out.push(p);
+      if ((dp < 0 && dq > 0) || (dp > 0 && dq < 0)) { const t = dp / (dp - dq); out.push([p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1])]); }
+    }
+    return out;
+  }
+  function area(poly) { let s = 0; for (let i = 0; i < poly.length; i++) { const p = poly[i], q = poly[(i + 1) % poly.length]; s += p[0] * q[1] - q[0] * p[1]; } return Math.abs(s) / 2; }
+  // list: [{id,name,lat,lng,radiusM}] -> { cells:{id:{polygon,bounds,keptPct,neighbours}}, overlaps:[{a,b,aName,bName,distM,overlapM}] }
+  function compute(list) {
+    const cells = {}, overlaps = [], seen = {};
+    list.forEach(a => {
+      const r = a.radiusM || 3000, kx = 111320 * Math.cos(rad(a.lat));
+      let poly = []; for (let i = 0; i < 72; i++) { const t = i / 72 * 2 * Math.PI; poly.push([r * Math.cos(t), r * Math.sin(t)]); }
+      const neighbours = [];
+      list.forEach(b => {
+        if (b.id === a.id) return;
+        const bx = (b.lng - a.lng) * kx, by = (b.lat - a.lat) * KY, d = Math.hypot(bx, by), rb = b.radiusM || 3000;
+        if (d > 1 && d < 2 * r) poly = clip(poly, bx / d, by / d, d / 2);
+        if (d < r + rb) {
+          neighbours.push({ id: b.id, name: b.name, distM: Math.round(d), overlapM: Math.round(r + rb - d) });
+          const k = [a.id, b.id].sort().join('|');
+          if (!seen[k]) { seen[k] = 1; overlaps.push({ a: a.id, b: b.id, aName: a.name, bName: b.name, distM: Math.round(d), overlapM: Math.round(r + rb - d) }); }
+        }
+      });
+      const ll = poly.map(p => [a.lat + p[1] / KY, a.lng + p[0] / kx]);
+      const lats = ll.map(p => p[0]), lngs = ll.map(p => p[1]);
+      cells[a.id] = { polygon: ll, bounds: [Math.min(...lats), Math.min(...lngs), Math.max(...lats), Math.max(...lngs)],
+        keptPct: Math.round(area(poly) / (Math.PI * r * r) * 100), neighbours };
+    });
+    return { cells, overlaps };
+  }
+  function inCell(lat, lng, cell) {
+    if (!cell) return false;
+    const [s, w, n, e] = cell.bounds; if (lat < s || lat > n || lng < w || lng > e) return false;
+    const P = cell.polygon; let inside = false;
+    for (let i = 0, j = P.length - 1; i < P.length; j = i++) {
+      if (((P[i][0] > lat) !== (P[j][0] > lat)) && (lng < (P[j][1] - P[i][1]) * (lat - P[i][0]) / (P[j][0] - P[i][0]) + P[i][1])) inside = !inside;
+    }
+    return inside;
+  }
+  function ownerOf(lat, lng, cells) { for (const id in cells) if (inCell(lat, lng, cells[id])) return id; return null; }
+  return { compute, inCell, ownerOf };
+})();
+
 const DispatchData=((  )=>{
   // The officer's assigned Local Control Room (LCR). Every incident the
   // officer can see/accept must originate from this control room — incidents
@@ -1508,15 +1565,25 @@ const DispatchData=((  )=>{
   CANON.forEach(([id,name,region,lat,lng,r])=>{
     LCR_REGISTRY[id]={id,name:name+' LCR',station:name,stationId:id,lat,lng,region,radiusM:r,bounds:boundsFor(lat,lng,r)};
   });
+  // Automatic jurisdiction boundaries: recomputed from every LCR's position
+  // and radius, so two control rooms in one district never overlap.
+  let JCELLS={}, JOVERLAPS=[];
+  function recomputeJurisdictions(){
+    const res=GeamsJurisdiction.compute(Object.values(LCR_REGISTRY).map(l=>({id:l.id,name:l.name,lat:l.lat,lng:l.lng,radiusM:l.radiusM})));
+    JCELLS=res.cells; JOVERLAPS=res.overlaps;
+    Object.values(LCR_REGISTRY).forEach(l=>{ l.bounds=JCELLS[l.id].bounds; l.jur=JCELLS[l.id]; });
+  }
   function applyLocationOverrides(map){
     if(!map)return;
     Object.values(LCR_REGISTRY).forEach(l=>{
       const o=map[l.id];
       if(o&&typeof o.lat==='number'&&typeof o.lng==='number'){
-        l.lat=o.lat;l.lng=o.lng;l.bounds=boundsFor(o.lat,o.lng,l.radiusM);
+        l.lat=o.lat;l.lng=o.lng;
       }
     });
+    recomputeJurisdictions();
   }
+  recomputeJurisdictions();
   if(typeof GeamsSync!=='undefined'){
     GeamsSync.getShared('registry:stationLocations',{}).then(applyLocationOverrides);
     GeamsSync.watch('registry:stationLocations',{},applyLocationOverrides,4000);
@@ -1542,16 +1609,14 @@ const DispatchData=((  )=>{
     return lat>=s && lat<=n && lng>=w && lng<=e;
   }
   function resolveJurisdictionFromCoords(lat, lng){
-    let best=null, bestArea=Infinity;
-    for(const lcr of Object.values(LCR_REGISTRY)){
-      if(isInsideBounds(lat, lng, lcr.bounds)){
-        const [s,w,n,e]=lcr.bounds;
-        const area=(n-s)*(e-w);
-        if(area<bestArea){ bestArea=area; best=lcr; }
-      }
-    }
-    return best; // null if outside all known jurisdictions
+    // Boundaries never overlap (see GeamsJurisdiction), so at most one LCR owns a point.
+    const id=GeamsJurisdiction.ownerOf(lat,lng,JCELLS);
+    return id?LCR_REGISTRY[id]:null; // null if outside all known jurisdictions
   }
+  function getJurisdictionPolygon(lcrId){ return JCELLS[lcrId]?JCELLS[lcrId].polygon:null; }
+  // Auto-detection report for one LCR: neighbours whose area overlapped and how much of its own circle it keeps.
+  function getJurisdictionInfo(lcrId){ const c=JCELLS[lcrId]; return c?{keptPct:c.keptPct,neighbours:c.neighbours}:null; }
+  function getAdjacentPolygons(lcrId){ return Object.values(LCR_REGISTRY).filter(l=>l.id!==lcrId&&JCELLS[lcrId]&&JCELLS[lcrId].neighbours.some(n=>n.id===l.id)).map(l=>({id:l.id,name:l.name,polygon:JCELLS[l.id].polygon})); }
   // Returns true only if this officer's LCR is the correct jurisdiction for
   // the given coordinates. Used as the gate for all alert/dispatch paths.
   function isOwnJurisdiction(lat, lng){
@@ -1796,7 +1861,7 @@ const DispatchData=((  )=>{
   return{officer,currentJob,jobQueue,chatHistory,evidence,activityLog,arrivalChecklist,route,
     rnd,rndInt,fmt,makeJob,advanceRoute,getRouteProgress,onUpdate,emit,startSim,pullNextPendingJob,setOfficerFix,etaMinutes,etaText,distToJobM,distM,refreshRoute,resetCurrentJob,target,onRoute,routeSource,routeForShare,fetchRoadRoute,
     setActiveOfficer,LCR_REGISTRY,HOME_CONTROL_ROOM,
-    getJurisdictionBounds,clampToBounds,getActivityLog,
+    getJurisdictionBounds,getJurisdictionPolygon,getJurisdictionInfo,getAdjacentPolygons,clampToBounds,getActivityLog,
     isInsideBounds,resolveJurisdictionFromCoords,isOwnJurisdiction,syncLcrId};
 })();
 
@@ -3347,7 +3412,9 @@ const DispatchApp = (() => {
 
     // Jurisdiction boundary ring
     if(jBounds){
-      L.rectangle(jBounds,{color:'#38bdf8',weight:1.5,dashArray:'6 5',fill:false,opacity:0.45,interactive:false}).addTo(skMap);
+      const _jp=DispatchData.getJurisdictionPolygon(off.controlRoomId);
+      if(_jp) L.polygon(_jp,{color:'#38bdf8',weight:1.5,dashArray:'6 5',fill:false,opacity:0.45,interactive:false}).addTo(skMap);
+      else L.rectangle(jBounds,{color:'#38bdf8',weight:1.5,dashArray:'6 5',fill:false,opacity:0.45,interactive:false}).addTo(skMap);
     }
 
     // ── LIVE PINS ─────────────────────────────────────────────────────────
@@ -4045,7 +4112,8 @@ const DispatchMap = (() => {
     // A dashed rectangle showing the exact LCR operational boundary.
     // Makes the jurisdiction limit visible and unambiguous to the operator.
     if(jBounds){
-      L.rectangle(jBounds,{
+      DispatchData.getAdjacentPolygons(lcr.id).forEach(a=>L.polygon(a.polygon,{color:'#94a3b8',weight:1,dashArray:'3 5',fill:false,opacity:0.5,interactive:false}).addTo(map).bindTooltip('Adjacent: '+a.name,{sticky:true}));
+      L.polygon(DispatchData.getJurisdictionPolygon(lcr.id)||[[jBounds[0][0],jBounds[0][1]],[jBounds[0][0],jBounds[1][1]],[jBounds[1][0],jBounds[1][1]],[jBounds[1][0],jBounds[0][1]]],{
         color:'#38bdf8', weight:2, dashArray:'8 6',
         fill:false, opacity:0.7,
         interactive:false
@@ -4060,7 +4128,7 @@ const DispatchMap = (() => {
       onAdd:function(){
         const d=L.DomUtil.create('div');
         d.style.cssText='background:rgba(4,12,24,0.88);border:1px solid #38bdf8;border-radius:6px;padding:6px 10px;font-family:monospace;font-size:10px;color:#38bdf8;letter-spacing:1px;pointer-events:none;line-height:1.6';
-        d.innerHTML=`<div style="font-weight:900;letter-spacing:2px">⊡ JURISDICTION</div><div style="color:#7dd3fc">${lcr.name}</div><div style="color:rgba(125,211,252,0.6);font-size:9px">${lcr.stationId}</div>`;
+        d.innerHTML=`<div style="font-weight:900;letter-spacing:2px">⊡ JURISDICTION</div><div style="color:#7dd3fc">${lcr.name}</div><div style="color:rgba(125,211,252,0.6);font-size:9px">${lcr.stationId}</div>${(()=>{const i=DispatchData.getJurisdictionInfo(lcr.id);return i&&i.neighbours.length?`<div style="color:#fbbf24;font-size:9px;margin-top:2px">⇄ Auto-adjusted with ${i.neighbours.map(n=>n.name.replace(/ LCR$/,'')).join(', ')} · keeps ${i.keptPct}%</div>`:'';})()}`;
         return d;
       }
     });

@@ -2340,6 +2340,64 @@ const GeamsStationSync = (() => {
   return { start, stop, pushHQStatus, pushIncidentUpdate, pushChat, watchChat };
 })();
 
+/* ── GeamsJurisdiction: automatic, non-overlapping LCR boundaries ──
+   Each LCR starts with a circle of its own radius. Wherever another LCR's
+   circle overlaps it (two control rooms in one district or big city), the
+   overlap is split along the line halfway between the two stations, so every
+   point belongs to exactly one LCR: the nearest one. This matches how the
+   Civilian app already routes an SOS (nearest station). It recomputes whenever
+   any station location changes, so no manual boundary editing is needed. */
+const GeamsJurisdiction = (() => {
+  const rad = d => d * Math.PI / 180, KY = 110540;
+  function clip(poly, nx, ny, c) {            // keep points with nx*x + ny*y <= c
+    const out = [];
+    for (let i = 0; i < poly.length; i++) {
+      const p = poly[i], q = poly[(i + 1) % poly.length];
+      const dp = nx * p[0] + ny * p[1] - c, dq = nx * q[0] + ny * q[1] - c;
+      if (dp <= 0) out.push(p);
+      if ((dp < 0 && dq > 0) || (dp > 0 && dq < 0)) { const t = dp / (dp - dq); out.push([p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1])]); }
+    }
+    return out;
+  }
+  function area(poly) { let s = 0; for (let i = 0; i < poly.length; i++) { const p = poly[i], q = poly[(i + 1) % poly.length]; s += p[0] * q[1] - q[0] * p[1]; } return Math.abs(s) / 2; }
+  // list: [{id,name,lat,lng,radiusM}] -> { cells:{id:{polygon,bounds,keptPct,neighbours}}, overlaps:[{a,b,aName,bName,distM,overlapM}] }
+  function compute(list) {
+    const cells = {}, overlaps = [], seen = {};
+    list.forEach(a => {
+      const r = a.radiusM || 3000, kx = 111320 * Math.cos(rad(a.lat));
+      let poly = []; for (let i = 0; i < 72; i++) { const t = i / 72 * 2 * Math.PI; poly.push([r * Math.cos(t), r * Math.sin(t)]); }
+      const neighbours = [];
+      list.forEach(b => {
+        if (b.id === a.id) return;
+        const bx = (b.lng - a.lng) * kx, by = (b.lat - a.lat) * KY, d = Math.hypot(bx, by), rb = b.radiusM || 3000;
+        if (d > 1 && d < 2 * r) poly = clip(poly, bx / d, by / d, d / 2);
+        if (d < r + rb) {
+          neighbours.push({ id: b.id, name: b.name, distM: Math.round(d), overlapM: Math.round(r + rb - d) });
+          const k = [a.id, b.id].sort().join('|');
+          if (!seen[k]) { seen[k] = 1; overlaps.push({ a: a.id, b: b.id, aName: a.name, bName: b.name, distM: Math.round(d), overlapM: Math.round(r + rb - d) }); }
+        }
+      });
+      const ll = poly.map(p => [a.lat + p[1] / KY, a.lng + p[0] / kx]);
+      const lats = ll.map(p => p[0]), lngs = ll.map(p => p[1]);
+      cells[a.id] = { polygon: ll, bounds: [Math.min(...lats), Math.min(...lngs), Math.max(...lats), Math.max(...lngs)],
+        keptPct: Math.round(area(poly) / (Math.PI * r * r) * 100), neighbours };
+    });
+    return { cells, overlaps };
+  }
+  function inCell(lat, lng, cell) {
+    if (!cell) return false;
+    const [s, w, n, e] = cell.bounds; if (lat < s || lat > n || lng < w || lng > e) return false;
+    const P = cell.polygon; let inside = false;
+    for (let i = 0, j = P.length - 1; i < P.length; j = i++) {
+      if (((P[i][0] > lat) !== (P[j][0] > lat)) && (lng < (P[j][1] - P[i][1]) * (lat - P[i][0]) / (P[j][0] - P[i][0]) + P[i][1])) inside = !inside;
+    }
+    return inside;
+  }
+  function ownerOf(lat, lng, cells) { for (const id in cells) if (inCell(lat, lng, cells[id])) return id; return null; }
+  return { compute, inCell, ownerOf };
+})();
+
+let STATION_JCELLS = {}, STATION_JOVERLAPS = [];
 const StationAuth = (() => {
 
   // One directory entry per registered Local Control Room.
@@ -2371,6 +2429,12 @@ const StationAuth = (() => {
   // was already verified in an earlier session starts correct on login,
   // and keep watching so a correction made elsewhere (e.g. from HQ, or by
   // this same station in another tab) updates this directory live.
+  // Automatic jurisdiction boundaries: recomputed whenever any station's
+  // position changes, so LCRs in one district or city never overlap.
+  function recomputeJurisdictions() {
+    const res = GeamsJurisdiction.compute(STATION_DIRECTORY.map(s => ({ id:s.id, name:s.name, lat:s.lat, lng:s.lng, radiusM:s.jurisdictionRadiusM })));
+    STATION_JCELLS = res.cells; STATION_JOVERLAPS = res.overlaps;
+  }
   function applyLocationOverrides(map) {
     if (!map) return;
     STATION_DIRECTORY.forEach(s => {
@@ -2382,7 +2446,9 @@ const StationAuth = (() => {
         s.locationVerifiedAt = o.verifiedAt || null;
       }
     });
+    recomputeJurisdictions();
   }
+  recomputeJurisdictions();
   GeamsSync.getShared('registry:stationLocations', {}).then(applyLocationOverrides);
   GeamsSync.watch('registry:stationLocations', {}, (map) => {
     applyLocationOverrides(map);
@@ -2863,6 +2929,8 @@ const StationData = (() => {
   }
 
   function isWithinJurisdiction(lat, lng) {
+    const cell = STATION_JCELLS[station.id];
+    if (cell) return GeamsJurisdiction.inCell(lat, lng, cell);
     const dist = StationAuth.haversineMeters(station.lat, station.lng, lat, lng);
     return dist <= (station.jurisdictionRadiusM || 3000);
   }
@@ -4257,7 +4325,7 @@ const StationPlaceSearch = (() => {
   function jurisdictionBBox(padFactor) {
     const s = StationData.station;
     const padDeg = (s.jurisdictionRadiusM * (padFactor || 1.3)) / 111000;
-    return `${s.lng-padDeg},${s.lat-padDeg},${s.lng+padDeg},${s.lat+padDeg}`;
+    return `${s.lng-padDeg},${s.lat-padDeg},${s.lng+padDeg},${s.lat+padDeg}`; // search box stays rectangular; isWithinJurisdiction applies the exact boundary
   }
 
   async function query(text, restrictToJurisdiction) {
@@ -4671,10 +4739,10 @@ const StationMap = (() => {
     // Padding = radius + 20% so the boundary ring is always fully visible,
     // but the operator cannot pan beyond it to see other stations' areas.
     const padDeg = (s.jurisdictionRadiusM * 1.2) / 111000;
-    const jurisdictionBounds = L.latLngBounds(
-      [s.lat - padDeg, s.lng - padDeg],
-      [s.lat + padDeg, s.lng + padDeg]
-    );
+    const _cell = STATION_JCELLS[s.id];
+    const jurisdictionBounds = _cell
+      ? L.latLngBounds([_cell.bounds[0], _cell.bounds[1]], [_cell.bounds[2], _cell.bounds[3]]).pad(0.2)
+      : L.latLngBounds([s.lat - padDeg, s.lng - padDeg], [s.lat + padDeg, s.lng + padDeg]);
     homeBounds = jurisdictionBounds;
 
     map = L.map(containerId, {
@@ -4714,13 +4782,17 @@ const StationMap = (() => {
     // rather than a fixed decorative value. Incidents and resources
     // outside this boundary are not this station's to manage (see
     // isWithinJurisdiction / renderJurisdictionGate).
-    L.circle([s.lat, s.lng], {
-      radius: s.jurisdictionRadiusM || 3000,
-      color: '#38bdf8',
-      fillColor: 'rgba(56,189,248,0.05)',
-      weight: 2,
-      dashArray: '8 5',
-    }).addTo(map).bindPopup(`<b>Jurisdiction Boundary</b><br><small>Radius: ${((s.jurisdictionRadiusM||3000)/1000).toFixed(1)} km — enforced operational area</small>`);
+    // Neighbouring LCRs whose area overlapped ours are drawn faintly: the shared
+    // edge is the automatic split halfway between the two stations.
+    (_cell ? _cell.neighbours : []).forEach(n => {
+      const nc = STATION_JCELLS[n.id];
+      if (nc) L.polygon(nc.polygon, { color:'#94a3b8', weight:1, dashArray:'3 5', fill:false, opacity:0.55, interactive:false }).addTo(map).bindTooltip('Adjacent: ' + n.name, { sticky:true });
+    });
+    const _adj = _cell && _cell.neighbours.length
+      ? `<br><small style="color:#b45309">⇄ Auto-adjusted with ${_cell.neighbours.map(n => n.name).join(', ')} — keeps ${_cell.keptPct}% of its ${((s.jurisdictionRadiusM||3000)/1000).toFixed(1)} km circle</small>` : '';
+    (_cell ? L.polygon(_cell.polygon, { color:'#38bdf8', fillColor:'rgba(56,189,248,0.05)', fillOpacity:1, weight:2, dashArray:'8 5' })
+           : L.circle([s.lat, s.lng], { radius: s.jurisdictionRadiusM || 3000, color:'#38bdf8', fillColor:'rgba(56,189,248,0.05)', weight:2, dashArray:'8 5' }))
+      .addTo(map).bindPopup(`<b>Jurisdiction Boundary</b><br><small>Radius: ${((s.jurisdictionRadiusM||3000)/1000).toFixed(1)} km — enforced operational area</small>${_adj}`);
 
     // Officer pins
     StationData.officers.filter(o => o.status !== 'off-duty' && o.lat != null && o.lng != null).forEach(o => {
@@ -4858,13 +4930,10 @@ const StationMap = (() => {
     sharedLayerGroup = L.layerGroup().addTo(map);
 
     // partner jurisdiction boundary — distinct dash/color from our own
-    L.circle([partner.lat, partner.lng], {
-      radius: partner.jurisdictionRadiusM || 3000,
-      color: '#fb923c',
-      fillColor: 'rgba(251,146,60,0.05)',
-      weight: 2,
-      dashArray: '3 6',
-    }).addTo(sharedLayerGroup).bindPopup(`<b>${partner.name}</b><br><small style="color:#fb923c">Shared jurisdiction — active backup session</small>`);
+    (STATION_JCELLS[partner.id]
+      ? L.polygon(STATION_JCELLS[partner.id].polygon, { color:'#fb923c', fillColor:'rgba(251,146,60,0.05)', fillOpacity:1, weight:2, dashArray:'3 6' })
+      : L.circle([partner.lat, partner.lng], { radius: partner.jurisdictionRadiusM || 3000, color:'#fb923c', fillColor:'rgba(251,146,60,0.05)', weight:2, dashArray:'3 6' }))
+      .addTo(sharedLayerGroup).bindPopup(`<b>${partner.name}</b><br><small style="color:#fb923c">Shared jurisdiction — active backup session</small>`);
 
     // partner station marker
     const partnerIcon = L.divIcon({
