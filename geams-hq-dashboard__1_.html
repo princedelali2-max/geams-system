@@ -1611,7 +1611,7 @@ option { background: var(--bg-deep); }
               <span style="font-size:1rem">🗺</span>
               <span class="panel-title">Live National Map — Station Network</span>
               <div style="display:flex;gap:6px;margin-left:auto">
-                <button class="btn btn-ghost btn-sm" onclick="GeamsMap.refresh()">🔄 Refresh</button>
+                <button class="btn btn-ghost btn-sm" onclick="GeamsMap.refresh(true)">🔄 Refresh</button>
                 <button class="btn btn-cyan btn-sm" id="btn-satellite" onclick="GeamsMap.toggleSatellite()">🛰 Satellite</button>
                 <button class="btn btn-primary btn-sm" id="btn-fullscreen" onclick="GeamsMap.toggleFullscreen()">⛶ Fullscreen</button>
               </div>
@@ -4080,7 +4080,17 @@ const GeamsMap = (() => {
     if (tt) tt.style.display = 'none';
   }
 
-  function refresh() { if (container) render(); }
+  function refresh(manual) {
+    if (!container) return;
+    render();                                   // stylised map: pins, incidents, counts
+    if (isSatellite && typeof initSatelliteMap === 'function' && satelliteMap) { initSatelliteMap(); satelliteMap.invalidateSize(); }
+    try { GeamsApp.updateKPIs(); } catch (e) {}
+    if (manual === true) {
+      const st = GeamsData.stations, on = st.filter(x => x.status !== 'offline').length;
+      const act = GeamsData.incidents.filter(i => i.status !== 'resolved').length;
+      GeamsApp.showToast('success', 'Map refreshed', on + '/' + st.length + ' stations online · ' + act + ' open incident' + (act === 1 ? '' : 's') + ' · ' + new Date().toTimeString().slice(0, 8));
+    }
+  }
   function reset()   {
     if (isSatellite && satelliteMap) {
       if (jurLayer) { try { satelliteMap.removeLayer(jurLayer); } catch (e) {} jurLayer = null; }
@@ -4088,10 +4098,13 @@ const GeamsMap = (() => {
     }
     render();
   }
-  function zoomIn()  {
-    GeamsApp.showToast('info', 'Map', 'Integrate Leaflet.js + OpenStreetMap for real interactive zoom in production');
+  // + / − act on the real map; the stylised outline has no zoom, so they open the satellite map first
+  function zoomBy(d) {
+    if (!isSatellite) { toggleSatellite(true); setTimeout(() => { if (satelliteMap) satelliteMap.setZoom(satelliteMap.getZoom() + d); }, 400); return; }
+    if (satelliteMap) satelliteMap.setZoom(satelliteMap.getZoom() + d);
   }
-  function zoomOut() { zoomIn(); }
+  function zoomIn()  { zoomBy(1); }
+  function zoomOut() { zoomBy(-1); }
 
   /* ── SATELLITE TOGGLE (real Leaflet + ESRI World Imagery) ── */
   function toggleSatellite(quiet) {
