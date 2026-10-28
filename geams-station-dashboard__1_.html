@@ -8051,8 +8051,8 @@ const StationBackup = (() => {
 ───────────────────────────── */
 const StationHQOps = (() => {
   const KEY = 'hq:tacticalOps';
-  const ICON = { cordon:'🔴', curfew:'🌙', wanted:'🎯', command:'🔁', mobilise:'📣', caselink:'🔗', emergency:'🚨' };
-  const LABEL = { cordon:'CORDON ORDER', curfew:'CURFEW', wanted:'WANTED NOTICE', command:'COMMAND HANDOVER', mobilise:'MOBILISATION ORDER', caselink:'JOINT CASE', emergency:'EMERGENCY' };
+  const ICON = { cordon:'🔴', curfew:'🌙', wanted:'🎯', command:'🔁', mobilise:'📣', caselink:'🔗', emergency:'🚨', broadcast:'📡' };
+  const LABEL = { cordon:'CORDON ORDER', curfew:'CURFEW', wanted:'WANTED NOTICE', command:'COMMAND HANDOVER', mobilise:'MOBILISATION ORDER', caselink:'JOINT CASE', emergency:'EMERGENCY', broadcast:'BROADCAST' };
   let stopW = null, seen = {}, hidden = {}, primed = false, last = [];
   const esc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const mine = o => o && o.status === 'active' && (!o.station || o.station === 'all' || o.station === StationData.station.id || (Array.isArray(o.stations) && o.stations.includes(StationData.station.id)));

@@ -451,7 +451,7 @@ body::after {
 /* ── OVERVIEW GRID (main page) ── */
 .overview-grid {
   display: grid;
-  grid-template-columns: 3fr 2fr;
+  grid-template-columns: minmax(0, 7fr) minmax(300px, 3fr);
   grid-template-rows: auto 1fr;
   gap: var(--gap-lg);
   flex: 1;
@@ -1468,12 +1468,12 @@ option { background: var(--bg-deep); }
       <div class="nav-item ripple-host" data-page="incidents" onclick="GeamsApp.navigate('incidents')">
         <span class="nav-icon">🚨</span>
         <span class="nav-label">Incidents</span>
-        <span class="nav-badge red" id="nav-badge-incidents">24</span>
+        <span class="nav-badge red" id="nav-badge-incidents" style="display:none">0</span>
       </div>
       <div class="nav-item ripple-host" data-page="stations" onclick="GeamsApp.navigate('stations')">
         <span class="nav-icon">🏠</span>
         <span class="nav-label">Stations</span>
-        <span class="nav-badge cyan">12</span>
+        <span class="nav-badge cyan" id="nav-badge-stations" style="display:none">0</span>
       </div>
       <div class="nav-item ripple-host" data-page="officers" onclick="GeamsApp.navigate('officers')">
         <span class="nav-icon">👮</span>
@@ -1488,19 +1488,17 @@ option { background: var(--bg-deep); }
       <div class="nav-item ripple-host" data-page="broadcast" onclick="GeamsApp.navigate('broadcast')">
         <span class="nav-icon">📡</span>
         <span class="nav-label">Broadcast</span>
-        <span class="nav-badge orange">3</span>
       </div>
       <div class="nav-item ripple-host" data-page="security" onclick="GeamsApp.navigate('security')">
         <span class="nav-icon">🔐</span>
         <span class="nav-label">Security</span>
-        <span class="nav-badge red">2</span>
       </div>
 
       <div class="sidebar-section-label">Operations</div>
       <div class="nav-item ripple-host" data-page="tactical" onclick="GeamsApp.navigate('tactical')">
         <span class="nav-icon">🎯</span>
         <span class="nav-label">Tactical Ops</span>
-        <span class="nav-badge orange">3</span>
+        <span class="nav-badge orange" id="nav-badge-tactical" style="display:none">0</span>
       </div>
       <div class="nav-item ripple-host" data-page="replay" onclick="GeamsApp.navigate('replay')">
         <span class="nav-icon">🎬</span>
@@ -1521,8 +1519,8 @@ option { background: var(--bg-deep); }
     <div class="sidebar-bottom">
       <div class="sidebar-sys-info">
         <div class="sys-info-row"><span>NODE ID</span><span>HQ-NODE-001</span></div>
-        <div class="sys-info-row"><span>STATIONS</span><span>12 / 12</span></div>
-        <div class="sys-info-row"><span>UPTIME</span><span>99.9%</span></div>
+        <div class="sys-info-row"><span>STATIONS</span><span id="sys-stations">—</span></div>
+        <div class="sys-info-row"><span>SESSION</span><span id="sys-session">0m</span></div>
         <div class="sys-info-row"><span>BUILD</span><span>v3.0.1</span></div>
       </div>
     </div>
@@ -1539,16 +1537,16 @@ option { background: var(--bg-deep); }
     <div class="topbar-spacer"></div>
 
     <div class="topbar-status-pills">
-      <div class="status-pill online"><div class="dot"></div>ALL SYSTEMS NOMINAL</div>
-      <div class="status-pill warning"><div class="dot"></div>1 STATION OFFLINE</div>
-      <div class="status-pill alert blink"><div class="dot"></div>2 CRITICAL INCIDENTS</div>
+      <div class="status-pill online" id="pill-sync"><div class="dot"></div><span>CONNECTING…</span></div>
+      <div class="status-pill warning" id="pill-stations"><div class="dot"></div><span>0 STATIONS ONLINE</span></div>
+      <div class="status-pill alert blink" id="pill-critical" style="display:none"><div class="dot"></div><span>0 CRITICAL INCIDENTS</span></div>
     </div>
 
     <div class="topbar-clock" id="hq-clock">--:--:-- UTC</div>
 
     <div class="topbar-alert-btn" onclick="GeamsApp.navigate('incidents')">
       🔔
-      <div class="alert-badge" id="alert-badge">2</div>
+      <div class="alert-badge" id="alert-badge" style="display:none">0</div>
     </div>
 
     <div class="topbar-user" onclick="HqAuth.openMenu()" style="cursor:pointer" title="Account">
@@ -1589,13 +1587,13 @@ option { background: var(--bg-deep); }
           <div class="kpi-label">Total Incidents</div>
           <div class="kpi-value" id="kpi-total">—</div>
           <div class="kpi-sub">Today</div>
-          <span class="kpi-trend up">▲ 12%</span>
+          <span class="kpi-trend flat">→ This session</span>
         </div>
         <div class="kpi-card green anim-slide-up">
           <div class="kpi-label">Resolved</div>
           <div class="kpi-value" id="kpi-resolved">—</div>
-          <div class="kpi-sub">Closed today</div>
-          <span class="kpi-trend up">▲ Good</span>
+          <div class="kpi-sub">Closed this session</div>
+          <span class="kpi-trend flat">→ This session</span>
         </div>
       </div>
 
@@ -1608,7 +1606,7 @@ option { background: var(--bg-deep); }
                column with the map, it left a dead strip of empty space
                underneath whenever the column was taller than both
                panels combined. -->
-          <div class="panel map-wrapper" style="flex:1;min-height:280px" id="overview-map-wrapper">
+          <div class="panel map-wrapper" style="flex:1;min-height:clamp(460px, calc(100vh - 250px), 960px)" id="overview-map-wrapper">
             <div class="panel-header">
               <span style="font-size:1rem">🗺</span>
               <span class="panel-title">Live National Map — Station Network</span>
@@ -2485,7 +2483,7 @@ const GeamsData = (() => {
   // ── KPIs ──
   function getKPIs() {
     const active    = incidents.filter(i => i.status === 'active').length;
-    const critical  = incidents.filter(i => i.priority === 'critical').length;
+    const critical  = incidents.filter(i => i.priority === 'critical' && i.status !== 'resolved').length;
     const online    = stations.filter(s => s.status !== 'offline').length;
     const totalInc  = incidents.length;
     const resolved  = incidents.filter(i => i.status === 'resolved').length;
@@ -2902,7 +2900,25 @@ const GeamsApp = (() => {
     set('kpi-total',    kpi.totalInc);
     set('kpi-resolved', kpi.resolved);
     updateAlertBadge(kpi.critical);
+    // sidebar, top bar and footer: every number comes from live data
+    const badge = (id, n) => { const el = document.getElementById(id); if (el) { el.textContent = n; el.style.display = n > 0 ? '' : 'none'; } };
+    badge('nav-badge-incidents', kpi.active);
+    badge('nav-badge-stations', kpi.online);
+    let tac = 0; try { tac = GeamsTactical.list().filter(o => o.status === 'active').length; } catch (e) {}
+    badge('nav-badge-tactical', tac);
+    const pill = (id, txt, show) => { const el = document.getElementById(id); if (!el) return; el.style.display = show ? '' : 'none'; const sp = el.querySelector('span'); if (sp) sp.textContent = txt; };
+    const live = GeamsSync.mode === 'server' || GeamsSync.mode === 'artifact';
+    pill('pill-sync', live ? 'LIVE SYNC · ' + String(GeamsSync.mode).toUpperCase() : 'NO LIVE BACKEND', true);
+    const sp = document.getElementById('pill-sync'); if (sp) sp.className = 'status-pill ' + (live ? 'online' : 'warning');
+    const off = kpi.totalStations - kpi.online;
+    pill('pill-stations', kpi.online + '/' + kpi.totalStations + ' STATIONS ONLINE' + (off && kpi.online ? ' · ' + off + ' OFFLINE' : ''), true);
+    pill('pill-critical', kpi.critical + ' CRITICAL INCIDENT' + (kpi.critical === 1 ? '' : 'S'), kpi.critical > 0);
+    const ss = document.getElementById('sys-stations'); if (ss) ss.textContent = kpi.online + ' / ' + kpi.totalStations + ' online';
+    const m = Math.floor((Date.now() - SESSION_T0) / 60000), se = document.getElementById('sys-session');
+    if (se) se.textContent = m >= 60 ? Math.floor(m / 60) + 'h ' + (m % 60) + 'm' : m + 'm';
   }
+  const SESSION_T0 = Date.now();
+  setInterval(() => { try { updateKPIs(); } catch (e) {} }, 3000);
 
   /* ── STATION DETAIL ── */
   function openStationDetail(stationId) {
@@ -2920,7 +2936,7 @@ const GeamsApp = (() => {
         <div class="detail-field"><div class="detail-key">Active Incidents</div><div class="detail-val text-orange">${s.incidents}</div></div>
         <div class="detail-field"><div class="detail-key">Avg Response</div><div class="detail-val">${s.avgResponse > 0 ? s.avgResponse + ' min' : 'No data'}</div></div>
         <div class="detail-field"><div class="detail-key">Connection</div><div class="detail-val">${s.liveSync ? 'Connected' : 'No live connection'}</div></div>
-        <div class="detail-field"><div class="detail-key">Install Date</div><div class="detail-val mono text-muted">2024-03-15</div></div>
+        <div class="detail-field"><div class="detail-key">Last Heartbeat</div><div class="detail-val mono text-muted">${s.lastLiveUpdate ? new Date(s.lastLiveUpdate).toTimeString().slice(0,8) : 'Never'}</div></div>
         <div class="detail-field"><div class="detail-key">GPS Location</div><div class="detail-val mono">${s.lat.toFixed(4)}, ${s.lng.toFixed(4)}</div></div>
         <div class="detail-field"><div class="detail-key">Location Status</div><div class="detail-val">${s.locationVerified
           ? `<span class="badge badge-resolved">✓ Verified by station</span>`
@@ -3513,6 +3529,63 @@ ${want.files ? `<h2>Attached files (${(B.media||[]).length})</h2><table><tr><th>
    All 16 regions · Rivers · Grid lines · Compass
    ============================================================ */
 
+/* ── GeamsJurisdiction: automatic, non-overlapping LCR boundaries ──
+   Each LCR starts with a circle of its own radius. Wherever another LCR's
+   circle overlaps it (two control rooms in one district or big city), the
+   overlap is split along the line halfway between the two stations, so every
+   point belongs to exactly one LCR: the nearest one. This matches how the
+   Civilian app already routes an SOS (nearest station). It recomputes whenever
+   any station location changes, so no manual boundary editing is needed. */
+const GeamsJurisdiction = (() => {
+  const rad = d => d * Math.PI / 180, KY = 110540;
+  function clip(poly, nx, ny, c) {            // keep points with nx*x + ny*y <= c
+    const out = [];
+    for (let i = 0; i < poly.length; i++) {
+      const p = poly[i], q = poly[(i + 1) % poly.length];
+      const dp = nx * p[0] + ny * p[1] - c, dq = nx * q[0] + ny * q[1] - c;
+      if (dp <= 0) out.push(p);
+      if ((dp < 0 && dq > 0) || (dp > 0 && dq < 0)) { const t = dp / (dp - dq); out.push([p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1])]); }
+    }
+    return out;
+  }
+  function area(poly) { let s = 0; for (let i = 0; i < poly.length; i++) { const p = poly[i], q = poly[(i + 1) % poly.length]; s += p[0] * q[1] - q[0] * p[1]; } return Math.abs(s) / 2; }
+  // list: [{id,name,lat,lng,radiusM}] -> { cells:{id:{polygon,bounds,keptPct,neighbours}}, overlaps:[{a,b,aName,bName,distM,overlapM}] }
+  function compute(list) {
+    const cells = {}, overlaps = [], seen = {};
+    list.forEach(a => {
+      const r = a.radiusM || 3000, kx = 111320 * Math.cos(rad(a.lat));
+      let poly = []; for (let i = 0; i < 72; i++) { const t = i / 72 * 2 * Math.PI; poly.push([r * Math.cos(t), r * Math.sin(t)]); }
+      const neighbours = [];
+      list.forEach(b => {
+        if (b.id === a.id) return;
+        const bx = (b.lng - a.lng) * kx, by = (b.lat - a.lat) * KY, d = Math.hypot(bx, by), rb = b.radiusM || 3000;
+        if (d > 1 && d < 2 * r) poly = clip(poly, bx / d, by / d, d / 2);
+        if (d < r + rb) {
+          neighbours.push({ id: b.id, name: b.name, distM: Math.round(d), overlapM: Math.round(r + rb - d) });
+          const k = [a.id, b.id].sort().join('|');
+          if (!seen[k]) { seen[k] = 1; overlaps.push({ a: a.id, b: b.id, aName: a.name, bName: b.name, distM: Math.round(d), overlapM: Math.round(r + rb - d) }); }
+        }
+      });
+      const ll = poly.map(p => [a.lat + p[1] / KY, a.lng + p[0] / kx]);
+      const lats = ll.map(p => p[0]), lngs = ll.map(p => p[1]);
+      cells[a.id] = { polygon: ll, bounds: [Math.min(...lats), Math.min(...lngs), Math.max(...lats), Math.max(...lngs)],
+        keptPct: Math.round(area(poly) / (Math.PI * r * r) * 100), neighbours };
+    });
+    return { cells, overlaps };
+  }
+  function inCell(lat, lng, cell) {
+    if (!cell) return false;
+    const [s, w, n, e] = cell.bounds; if (lat < s || lat > n || lng < w || lng > e) return false;
+    const P = cell.polygon; let inside = false;
+    for (let i = 0, j = P.length - 1; i < P.length; j = i++) {
+      if (((P[i][0] > lat) !== (P[j][0] > lat)) && (lng < (P[j][1] - P[i][1]) * (lat - P[i][0]) / (P[j][0] - P[i][0]) + P[i][1])) inside = !inside;
+    }
+    return inside;
+  }
+  function ownerOf(lat, lng, cells) { for (const id in cells) if (inCell(lat, lng, cells[id])) return id; return null; }
+  return { compute, inCell, ownerOf };
+})();
+
 const GeamsMap = (() => {
 
   let container = null;
@@ -3520,6 +3593,11 @@ const GeamsMap = (() => {
   let satMarkers = [];
   let isSatellite = false;
   let isFullscreen = false;
+  let jurLayer = null, focusId = null, clickTimer = null;
+  // Built-in stations' jurisdiction radius (same values the LCR and Dispatch apps use)
+  const RADIUS_M = { 'GH-GA-ACC-001-B9C1':3000, 'GH-GA-ACC-007-F2A3':3500, 'GH-AS-KUM-001-A4F2':4000, 'GH-AS-KUM-002-C7D9':2800, 'GH-WR-TAK-001-D2E8':3200,
+    'GH-CR-CAP-001-E5F1':2600, 'GH-NR-TAM-001-G3H6':4500, 'GH-UE-BOL-001-H8I2':5000, 'GH-VR-HO-001-J4K7':3000, 'GH-VR-HOH-001-P3Q7':3500,
+    'GH-BA-SUN-001-K9L3':3500, 'GH-AH-KOF-001-L1M5':3200, 'GH-SW-SEK-001-M6N9':2800 };
 
   // ── COORDINATE SYSTEM ──
   // SVG viewport 800×900 | Padding 40px
@@ -3532,6 +3610,23 @@ const GeamsMap = (() => {
     const x = PAD + (lon - LON_MIN) / (LON_MAX - LON_MIN) * (SVG_W - 2 * PAD);
     const y = SVG_H - PAD - (lat - LAT_MIN) / (LAT_MAX - LAT_MIN) * (SVG_H - 2 * PAD);
     return [Math.round(x * 10) / 10, Math.round(y * 10) / 10];
+  }
+
+  function posOfStation(s) {
+    if (s.locationVerified) return { lon: s.lng, lat: s.lat };
+    if (STATION_GPS[s.id]) return STATION_GPS[s.id];
+    if (s.gpsLon !== undefined) return { lon: s.gpsLon, lat: s.gpsLat };
+    if (s.lat != null && s.lng != null) return { lon: s.lng, lat: s.lat };
+    return null;
+  }
+  function kmBetween(lat1, lon1, lat2, lon2) {
+    const R = 6371, t = d => d * Math.PI / 180, a = Math.sin(t(lat2 - lat1) / 2) ** 2 + Math.cos(t(lat1)) * Math.cos(t(lat2)) * Math.sin(t(lon2 - lon1) / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(a));
+  }
+  function nearestStationTo(lat, lon, maxKm) {
+    let best = null, bd = Infinity;
+    GeamsData.stations.forEach(s => { if (s.disabled) return; const p = posOfStation(s); if (!p) return; const d = kmBetween(lat, lon, p.lat, p.lon); if (d < bd) { bd = d; best = s; } });
+    return best && bd <= maxKm ? { station: best, km: bd } : null;
   }
 
   // ── ACCURATE GHANA BORDER (derived from real GPS points) ──
@@ -3655,8 +3750,7 @@ const GeamsMap = (() => {
     // this falls back to the best-available town-level estimate in
     // STATION_GPS/gpsLat/gpsLon, same as before.
     const stationPinsHTML = GeamsData.stations.map(s => {
-      const gps = s.locationVerified ? { lon: s.lng, lat: s.lat }
-        : (STATION_GPS[s.id] || (s.gpsLon !== undefined ? { lon: s.gpsLon, lat: s.gpsLat } : null));
+      const gps = posOfStation(s);
       if (!gps) return '';
       const [svgX, svgY] = toSVG(gps.lon, gps.lat);
       const px = (svgX / SVG_W * 100).toFixed(2);
@@ -3723,6 +3817,7 @@ const GeamsMap = (() => {
     }).join('\n');
 
     container.innerHTML = `
+      <div id="map-frame" style="position:absolute">
       <!-- GHANA MAP SVG -->
       <svg viewBox="0 0 ${SVG_W} ${SVG_H}" preserveAspectRatio="xMidYMid meet"
         style="position:absolute;inset:0;width:100%;height:100%"
@@ -3828,6 +3923,7 @@ const GeamsMap = (() => {
       <!-- STATION PINS (HTML overlay) -->
       ${stationPinsHTML}
       ${incidentPinsHTML}
+      </div>
 
       <!-- TITLE OVERLAY -->
       <div style="position:absolute;top:10px;left:10px;
@@ -3835,7 +3931,7 @@ const GeamsMap = (() => {
         color:var(--text-muted);text-transform:uppercase;
         background:rgba(2,6,13,0.9);padding:5px 12px;
         border-radius:4px;border:1px solid var(--border-base)">
-        🗺 GHANA · LIVE STATION NETWORK
+        🗺 GHANA · LIVE STATION NETWORK <span style="opacity:.6;letter-spacing:1px;text-transform:none">· double-click to zoom to an LCR</span>
       </div>
 
       <!-- ONLINE COUNT -->
@@ -3893,8 +3989,53 @@ const GeamsMap = (() => {
     container.querySelectorAll('.map-pin[data-id]').forEach(pin => {
       pin.addEventListener('mouseenter', () => showTooltip(pin));
       pin.addEventListener('mouseleave', hideTooltip);
-      pin.addEventListener('click', () => GeamsApp.openStationDetail(pin.dataset.id));
+      // a double-click zooms; only a lone click opens the station detail
+      pin.addEventListener('click', () => { clearTimeout(clickTimer); clickTimer = setTimeout(() => GeamsApp.openStationDetail(pin.dataset.id), 280); });
+      pin.addEventListener('dblclick', (e) => { e.stopPropagation(); clearTimeout(clickTimer); hideTooltip(); zoomToLcr(pin.dataset.id); });
     });
+    fitFrame();
+    const frame = container.querySelector('#map-frame');
+    if (frame) frame.addEventListener('dblclick', (e) => {
+      const r = frame.getBoundingClientRect();
+      const x = (e.clientX - r.left) / r.width * SVG_W, y = (e.clientY - r.top) / r.height * SVG_H;
+      const lon = LON_MIN + (x - PAD) / (SVG_W - 2 * PAD) * (LON_MAX - LON_MIN);
+      const lat = LAT_MIN + (SVG_H - PAD - y) / (SVG_H - 2 * PAD) * (LAT_MAX - LAT_MIN);
+      const n = nearestStationTo(lat, lon, 120);
+      if (n) zoomToLcr(n.station.id); else GeamsApp.showToast('info', 'No LCR here', 'Double-click closer to a control room pin');
+    });
+    if (!window._hqMapResize) { window._hqMapResize = true; window.addEventListener('resize', () => { fitFrame(); if (satelliteMap) satelliteMap.invalidateSize(); }); }
+  }
+
+  // The drawn map keeps its 8:9 shape and is centred; pins live inside the same frame so they always line up with it.
+  function fitFrame() {
+    const fr = container && container.querySelector('#map-frame'); if (!fr) return;
+    const w = container.clientWidth, h = container.clientHeight; if (!w || !h) return;
+    const sc = Math.min(w / SVG_W, h / SVG_H), fw = SVG_W * sc, fh = SVG_H * sc;
+    fr.style.width = fw + 'px'; fr.style.height = fh + 'px'; fr.style.left = ((w - fw) / 2) + 'px'; fr.style.top = ((h - fh) / 2) + 'px';
+  }
+
+  // ── DOUBLE-CLICK: zoom to an LCR on the real satellite map and outline its jurisdiction ──
+  function zoomToLcr(id) {
+    const s = GeamsData.stations.find(x => x.id === id); if (!s) return;
+    const p = posOfStation(s); if (!p) return;
+    if (!isSatellite) toggleSatellite(true);
+    const go = () => {
+      if (!satelliteMap) return;
+      satelliteMap.invalidateSize();
+      if (jurLayer) { try { satelliteMap.removeLayer(jurLayer); } catch (e) {} jurLayer = null; }
+      const cells = GeamsJurisdiction.compute(GeamsData.stations.filter(x => !x.disabled && posOfStation(x)).map(x => { const q = posOfStation(x); return { id:x.id, name:x.name, lat:q.lat, lng:q.lon, radiusM:x.jurisdictionRadiusM || RADIUS_M[x.id] || 3000 }; })).cells;
+      const cell = cells[id]; focusId = id;
+      const group = L.layerGroup();
+      (cell ? cell.neighbours : []).forEach(n => { const nc = cells[n.id]; if (nc) L.polygon(nc.polygon, { color:'#94a3b8', weight:1, dashArray:'3 5', fill:false, opacity:.6, interactive:false }).addTo(group).bindTooltip('Adjacent: ' + n.name, { sticky:true }); });
+      if (cell) L.polygon(cell.polygon, { color:'#38bdf8', weight:2, dashArray:'8 5', fillColor:'#38bdf8', fillOpacity:.06 }).addTo(group)
+        .bindTooltip('<b>' + s.name + '</b><br><small>Jurisdiction boundary' + (cell.neighbours.length ? ' · auto-adjusted with ' + cell.neighbours.map(n => n.name).join(', ') : '') + '</small>', { sticky:true });
+      group.addTo(satelliteMap); jurLayer = group;
+      if (cell) satelliteMap.flyToBounds(L.latLngBounds(cell.polygon).pad(0.15), { maxZoom:16, duration:1.1 });
+      else satelliteMap.flyTo([p.lat, p.lon], 15, { duration:1.1 });
+      const mk = satMarkers.find(m => m._stationId === id); if (mk) setTimeout(() => mk.openPopup(), 1200);
+      GeamsApp.showToast('info', s.name, 'Zoomed to this LCR. Double-click another LCR, or press ⌖ to return to the national view.');
+    };
+    setTimeout(go, 160);
   }
 
   function showTooltip(pin) {
@@ -3921,7 +4062,7 @@ const GeamsMap = (() => {
           <div style="color:var(--cyan);font-weight:700;font-family:var(--font-mono)">${pin.dataset.officers}</div></div>
       </div>
       <div style="font-family:var(--font-mono);font-size:0.58rem;color:var(--text-ghost)">${lat}°N · ${lonStr}</div>
-      <div style="margin-top:6px;font-size:0.62rem;color:var(--cyan);opacity:0.6">Click to open station →</div>
+      <div style="margin-top:6px;font-size:0.62rem;color:var(--cyan);opacity:0.6">Click to open station · double-click to zoom in</div>
     `;
     const rect    = container.getBoundingClientRect();
     const pinRect = pin.getBoundingClientRect();
@@ -3940,14 +4081,20 @@ const GeamsMap = (() => {
   }
 
   function refresh() { if (container) render(); }
-  function reset()   { render(); }
+  function reset()   {
+    if (isSatellite && satelliteMap) {
+      if (jurLayer) { try { satelliteMap.removeLayer(jurLayer); } catch (e) {} jurLayer = null; }
+      focusId = null; satelliteMap.flyTo([7.9, -1.0], 7, { duration: .9 }); return;
+    }
+    render();
+  }
   function zoomIn()  {
     GeamsApp.showToast('info', 'Map', 'Integrate Leaflet.js + OpenStreetMap for real interactive zoom in production');
   }
   function zoomOut() { zoomIn(); }
 
   /* ── SATELLITE TOGGLE (real Leaflet + ESRI World Imagery) ── */
-  function toggleSatellite() {
+  function toggleSatellite(quiet) {
     isSatellite = !isSatellite;
     const svgEl = document.getElementById('live-map');
     const satEl = document.getElementById('live-map-sat');
@@ -3959,7 +4106,7 @@ const GeamsMap = (() => {
       satEl.classList.add('active');
       if (btn) { btn.classList.remove('btn-cyan'); btn.classList.add('btn-primary'); btn.innerHTML = '🗺 Stylised View'; }
       initSatelliteMap();
-      GeamsApp.showToast('success', 'Satellite', 'Live satellite imagery — ESRI World Imagery');
+      if (quiet !== true) GeamsApp.showToast('success', 'Satellite', 'Live satellite imagery — ESRI World Imagery');
     } else {
       svgEl.classList.remove('sat-hidden');
       satEl.classList.remove('active');
@@ -3983,6 +4130,11 @@ const GeamsMap = (() => {
         zoom: 7,
         zoomControl: true,
         attributionControl: true,
+        doubleClickZoom: false,   // double-click is used to jump to the nearest LCR
+      });
+      satelliteMap.on('dblclick', (e) => {
+        const n = nearestStationTo(e.latlng.lat, e.latlng.lng, satelliteMap.getZoom() >= 13 ? 15 : 60);
+        if (n) zoomToLcr(n.station.id); else satelliteMap.setZoomAround(e.latlng, satelliteMap.getZoom() + 1);
       });
 
       L.tileLayer(
@@ -4001,7 +4153,7 @@ const GeamsMap = (() => {
     satMarkers = [];
 
     GeamsData.stations.forEach(s => {
-      const gps = STATION_GPS[s.id] || (s.gpsLon !== undefined ? { lon: s.gpsLon, lat: s.gpsLat } : null);
+      const gps = posOfStation(s);
       if (!gps) return;
       const color = s.status === 'online' ? '#4ade80' : s.status === 'busy' ? '#fb923c' : '#5e6f8e';
       const icon = L.divIcon({
@@ -4018,6 +4170,8 @@ const GeamsMap = (() => {
           <small>${s.region} &middot; ${s.status.toUpperCase()}</small><br>
           <small>${s.onDuty}/${s.officers} officers on duty &middot; ${s.incidents} active incidents</small>
         `);
+      marker._stationId = s.id;
+      marker.on('dblclick', (ev) => { L.DomEvent.stop(ev); zoomToLcr(s.id); });
       satMarkers.push(marker);
     });
   }
@@ -4044,6 +4198,7 @@ const GeamsMap = (() => {
 
     // both map renderers need a nudge once their container's real size changes
     setTimeout(() => {
+      fitFrame();
       if (isSatellite && satelliteMap) satelliteMap.invalidateSize();
     }, 220);
   }
@@ -4052,7 +4207,7 @@ const GeamsMap = (() => {
     if (e.key === 'Escape' && isFullscreen) toggleFullscreen();
   }
 
-  return { init, destroy, refresh, render, reset, zoomIn, zoomOut, toSVG, toggleSatellite, toggleFullscreen };
+  return { init, destroy, refresh, render, reset, zoomIn, zoomOut, toSVG, toggleSatellite, toggleFullscreen, zoomToLcr, posOfStation };
 })();
 /* ============================================================
    GEAMS HQ — liveview.js  v2.0
@@ -5308,7 +5463,7 @@ const GeamsBroadcast = (() => {
           <div class="panel-header"><span>📢</span><span class="panel-title">Compose Alert</span></div>
           <div class="panel-body">
             <div class="form-group"><label class="form-label">Alert Type</label>
-              <select class="form-select">
+              <select class="form-select" id="bc-type">
                 <option>⚠️ General Warning</option><option>🚨 Emergency Alert</option>
                 <option>🔴 National Emergency</option><option>📢 Public Announcement</option>
                 <option>🏃 Evacuation Order</option><option>🌧 Disaster Warning</option>
@@ -5316,60 +5471,66 @@ const GeamsBroadcast = (() => {
               </select></div>
             <div class="form-group"><label class="form-label">Target Audience</label>
               <div class="broadcast-target-grid">
-                <div class="broadcast-target selected" onclick="this.classList.toggle('selected')">
-                  <div class="bt-icon">📱</div><div class="bt-label">All Civilians</div><div class="bt-count">2.4M users</div>
+                <div class="broadcast-target selected" style="cursor:default">
+                  <div class="bt-icon">🏠</div><div class="bt-label">Stations (LCRs)</div><div class="bt-count">${GeamsData.stations.filter(x=>!x.disabled).length} registered</div>
                 </div>
-                <div class="broadcast-target" onclick="this.classList.toggle('selected')">
-                  <div class="bt-icon">🏠</div><div class="bt-label">All Stations</div><div class="bt-count">12 stations</div>
+                <div class="broadcast-target" style="opacity:.45;cursor:not-allowed" title="Not delivered yet">
+                  <div class="bt-icon">📱</div><div class="bt-label">Civilians</div><div class="bt-count">not wired yet</div>
                 </div>
-                <div class="broadcast-target" onclick="this.classList.toggle('selected')">
-                  <div class="bt-icon">🚓</div><div class="bt-label">All Officers</div><div class="bt-count">148 officers</div>
+                <div class="broadcast-target" style="opacity:.45;cursor:not-allowed" title="Not delivered yet">
+                  <div class="bt-icon">🚓</div><div class="bt-label">Officers</div><div class="bt-count">not wired yet</div>
                 </div>
               </div></div>
             <div class="form-group"><label class="form-label">Region</label>
-              <select class="form-select">
+              <select class="form-select" id="bc-region">
                 <option>All Regions (National)</option>
                 ${GeamsData.stations.map(s=>`<option>${s.region}</option>`).filter((v,i,a)=>a.indexOf(v)===i).join('')}
               </select></div>
             <div class="form-group"><label class="form-label">Message</label>
-              <textarea class="form-textarea" rows="3" placeholder="Type your broadcast message..."></textarea></div>
+              <textarea class="form-textarea" id="bc-msg" rows="3" placeholder="Type your broadcast message..."></textarea></div>
             <div class="form-group"><label class="form-label">Priority</label>
-              <select class="form-select">
+              <select class="form-select" id="bc-prio">
                 <option>🟡 Medium — Normal notification</option>
                 <option>🟠 High — Push + sound</option>
                 <option>🔴 Critical — Override all sounds</option>
               </select></div>
             <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">
-              <button class="btn btn-ghost btn-sm">💾 Save Draft</button>
-              <button class="btn btn-warning btn-sm" onclick="GeamsApp.showToast('warning','Preview','Opening broadcast preview...')">👁 Preview</button>
-              <button class="btn btn-primary" onclick="GeamsApp.showToast('success','Broadcast Sent','Alert dispatched to all selected targets')">📡 Send Broadcast</button>
+              <button class="btn btn-primary" onclick="GeamsBroadcast.send()">📡 Send to Stations</button>
             </div>
           </div>
         </div>
         <div class="panel">
           <div class="panel-header"><span>📋</span><span class="panel-title">Broadcast History</span></div>
           <div class="panel-body no-pad">
-            ${[
-              {time:'14:20',type:'⚠️ Warning',    msg:'Elevated crime in Accra Central — civilians advised caution',zone:'Greater Accra',by:'Supt. Acheampong'},
-              {time:'13:05',type:'📢 Announcement',msg:'National Police Week — contact your local station for services',zone:'National',by:'HQ Admin'},
-              {time:'11:30',type:'🏃 Evacuation',  msg:'Flash flood warning — Volta low-lying areas evacuate now',zone:'Volta Region',by:'Supt. Asante'},
-              {time:'09:15',type:'🚨 Emergency',   msg:'Armed robbery suspects at large in Kumasi — police cordon active',zone:'Ashanti',by:'Insp. Mensah'},
-              {time:'Yesterday',type:'🌙 Curfew',  msg:'Security curfew 22:00–06:00 lifted — normal movement restored',zone:'Northern',by:'HQ Command'},
-            ].map(b=>`
-              <div style="padding:10px 14px;border-bottom:1px solid var(--border-dim)">
+            ${(()=>{ const h=GeamsTactical.list().filter(o=>o.type==='broadcast').sort((x,y)=>y.createdAt-x.createdAt);
+              if(!h.length) return '<div style="padding:18px 14px;font-size:0.75rem;color:var(--text-muted)">No broadcasts sent yet.</div>';
+              return h.map(b=>`
+              <div style="padding:10px 14px;border-bottom:1px solid var(--border-dim);${b.status!=='active'?'opacity:.55':''}">
                 <div style="display:flex;justify-content:space-between;margin-bottom:3px">
-                  <span style="font-size:0.78rem;font-weight:600">${b.type}</span>
-                  <span class="td-mono td-muted">${b.time}</span>
+                  <span style="font-size:0.78rem;font-weight:600">${GeamsTactical.esc(b.detail||'')}</span>
+                  <span class="td-mono td-muted">${new Date(b.createdAt).toTimeString().slice(0,5)}</span>
                 </div>
-                <div style="font-size:0.75rem;color:var(--text-base);margin-bottom:5px;line-height:1.4">${b.msg}</div>
+                <div style="font-size:0.75rem;color:var(--text-base);margin-bottom:5px;line-height:1.4">${GeamsTactical.esc(b.name)}</div>
                 <div style="display:flex;gap:10px;font-size:0.65rem;color:var(--text-muted);font-family:var(--font-mono)">
-                  <span>📍 ${b.zone}</span><span>👤 ${b.by}</span>
-                  <button class="btn btn-ghost" style="font-size:0.6rem;padding:1px 8px;margin-left:auto" onclick="GeamsApp.showToast('warning','Recalled','Broadcast recalled and suppressed')">🔇 Recall</button>
+                  <span>📍 ${GeamsTactical.esc(b.stationName)}</span><span>👤 ${GeamsTactical.esc(b.by)}</span>
+                  ${b.status==='active'?`<button class="btn btn-ghost" style="font-size:0.6rem;padding:1px 8px;margin-left:auto" onclick="GeamsTactical.lift('${b.id}');setTimeout(GeamsBroadcast.render,100)">🔇 Recall</button>`:'<span style="margin-left:auto">RECALLED</span>'}
                 </div>
-              </div>`).join('')}
+              </div>`).join(''); })()}
           </div>
         </div>
       </div>`;
+  }
+
+  function send() {
+    const msg = (document.getElementById('bc-msg').value || '').trim();
+    if (!msg) { GeamsApp.showToast('warning','Message needed','Type the broadcast message first'); return; }
+    const region = document.getElementById('bc-region').value, type = document.getElementById('bc-type').value, prio = document.getElementById('bc-prio').value;
+    const st = GeamsData.stations.filter(x => !x.disabled && (region.startsWith('All Regions') || x.region === region));
+    if (!st.length) { GeamsApp.showToast('warning','No stations','No stations in that region'); return; }
+    GeamsTactical.createOp({ type:'broadcast', name:msg, detail:type + ' · ' + prio.replace(/^\S+\s/, '').split(' — ')[0], station:region.startsWith('All Regions')?'all':'', stations:st.map(x=>x.id), stationName:region.startsWith('All Regions')?'All stations':region });
+    document.getElementById('bc-msg').value = '';
+    GeamsApp.showToast('success','Broadcast sent','Delivered to '+st.length+' station(s) through live sync. Online stations show it now; offline ones when they reconnect.');
+    setTimeout(render, 150);
   }
 
   function openQuickBroadcast(stationId) {
@@ -5377,7 +5538,7 @@ const GeamsBroadcast = (() => {
     GeamsApp.showToast('info','Broadcast','Quick broadcast opened for station ' + stationId);
   }
 
-  return { render, openQuickBroadcast };
+  return { render, send, openQuickBroadcast };
 })();
 
 
@@ -5526,7 +5687,7 @@ const GeamsTactical = (() => {
      'hq:tacticalOps' map, every LCR shows them while active, and HQ lifts them. */
   const OPS_KEY = 'hq:tacticalOps';
   let ops = {};
-  const TYPE = { cordon:'🔴 Cordon', curfew:'🌙 Curfew', wanted:'🎯 Wanted', command:'🔁 Command', mobilise:'📣 Mobilise', caselink:'🔗 Joint case', emergency:'🚨 Emergency' };
+  const TYPE = { cordon:'🔴 Cordon', curfew:'🌙 Curfew', wanted:'🎯 Wanted', command:'🔁 Command', mobilise:'📣 Mobilise', caselink:'🔗 Joint case', emergency:'🚨 Emergency', broadcast:'📡 Broadcast' };
   const esc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   function createOp(o) {
     const id = 'TAC-' + Date.now().toString(36) + Math.random().toString(36).slice(2,5);
