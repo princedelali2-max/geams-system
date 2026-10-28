@@ -1098,12 +1098,26 @@ body.dfs-active { overflow:hidden; }
 
     <div class="form-group">
       <label class="form-label">Station ID</label>
-      <input class="form-input" id="login-station-id" placeholder="e.g. GH-GA-ACC-001-B9C1" autocomplete="off">
+      <input class="form-input" id="login-station-id" placeholder="e.g. GH-GA-ACC-001-B9C1" autocomplete="off" onchange="StationAuth.prefillCommander()">
     </div>
     <div class="form-group">
       <label class="form-label">Passphrase</label>
       <input class="form-input" type="password" id="login-passphrase" placeholder="Enter secure passphrase" autocomplete="off">
     </div>
+    <div class="form-group">
+      <label class="form-label">Commander on duty — full name</label>
+      <input class="form-input" id="login-cmd-name" placeholder="Your full name" autocomplete="name">
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="form-group"><label class="form-label">Rank</label>
+        <select class="form-select" id="login-cmd-rank">
+          <option>Officer in Charge</option><option>Chief Superintendent</option><option>Superintendent</option><option>Deputy Superintendent</option>
+          <option>Chief Inspector</option><option>Inspector</option><option>Sergeant</option><option>Duty Officer</option>
+        </select></div>
+      <div class="form-group"><label class="form-label">Phone</label>
+        <input class="form-input" id="login-cmd-phone" type="tel" placeholder="+233…" autocomplete="tel"></div>
+    </div>
+    <div style="font-size:0.65rem;color:var(--text-muted);margin:-4px 0 10px;line-height:1.5">The name you enter is recorded on every action you take and shown to partner control rooms. It is self-declared: the station passphrase proves the control room, not the person.</div>
 
     <div class="login-btn-row">
       <button class="btn btn-primary" onclick="StationAuth.attemptLogin()">🔐 Authenticate</button>
@@ -2404,19 +2418,19 @@ const StationAuth = (() => {
   // jurisdictionRadiusM defines the enforced operational boundary
   // shown on the map and used to gate what this station can manage.
   const STATION_DIRECTORY = [
-    { id:'GH-GA-ACC-001-B9C1', passphrase:'accra2024',    name:'Accra Central Police Station',   region:'Greater Accra', town:'Accra',      address:'Ring Road Central, Accra, Ghana',   commanderName:'Supt. K. Mensah',      commanderRank:'Superintendent', lat:5.5560,  lng:-0.2040, jurisdictionRadiusM:3000 },
-    { id:'GH-GA-ACC-007-F2A3', passphrase:'tema2024',     name:'Tema Port Station',               region:'Greater Accra', town:'Tema',       address:'Harbour Road, Tema, Ghana',         commanderName:'Insp. A. Owusu',       commanderRank:'Inspector',      lat:5.6698,  lng:-0.0167, jurisdictionRadiusM:3500 },
-    { id:'GH-AS-KUM-001-A4F2', passphrase:'kumasi2024',   name:'Kumasi Central Police Station',   region:'Ashanti',       town:'Kumasi',     address:'Adum, Kumasi, Ghana',                commanderName:'Supt. F. Adjei',       commanderRank:'Superintendent', lat:6.6885,  lng:-1.6244, jurisdictionRadiusM:4000 },
-    { id:'GH-AS-KUM-002-C7D9', passphrase:'suame2024',    name:'Suame District Station',          region:'Ashanti',       town:'Kumasi',     address:'Suame, Kumasi, Ghana',               commanderName:'Insp. B. Asante',      commanderRank:'Inspector',      lat:6.7228,  lng:-1.6131, jurisdictionRadiusM:2800 },
-    { id:'GH-WR-TAK-001-D2E8', passphrase:'takoradi2024', name:'Takoradi Central Station',        region:'Western',       town:'Takoradi',   address:'Market Circle, Takoradi, Ghana',     commanderName:'Insp. E. Darko',       commanderRank:'Inspector',      lat:4.8993,  lng:-1.7557, jurisdictionRadiusM:3200 },
-    { id:'GH-CR-CAP-001-E5F1', passphrase:'capecoast2024',name:'Cape Coast Central Station',      region:'Central',       town:'Cape Coast', address:'Commercial St, Cape Coast, Ghana',   commanderName:'Insp. G. Mensah-Bonsu',commanderRank:'Inspector',      lat:5.1054,  lng:-1.2466, jurisdictionRadiusM:2600 },
-    { id:'GH-NR-TAM-001-G3H6', passphrase:'tamale2024',   name:'Tamale Central Station',           region:'Northern',      town:'Tamale',     address:'Central Market Rd, Tamale, Ghana',   commanderName:'Supt. I. Salifu',      commanderRank:'Superintendent', lat:9.4008,  lng:-0.8393, jurisdictionRadiusM:4500 },
-    { id:'GH-UE-BOL-001-H8I2', passphrase:'bolga2024',    name:'Bolgatanga Station',               region:'Upper East',    town:'Bolgatanga', address:'Bolgatanga Township, Ghana',         commanderName:'Insp. J. Atia',        commanderRank:'Inspector',      lat:10.7853, lng:-0.8514, jurisdictionRadiusM:5000 },
-    { id:'GH-VR-HO-001-J4K7',  passphrase:'ho2024',       name:'Ho Central Station',               region:'Volta',         town:'Ho',         address:'Ho Township, Ghana',                 commanderName:'Insp. L. Agbeko',      commanderRank:'Inspector',      lat:6.6011,  lng:0.4714,  jurisdictionRadiusM:3000 },
-    { id:'GH-VR-HOH-001-P3Q7', passphrase:'hohoe2024',    name:'Hohoe Local Control Room',         region:'Volta',         town:'Hohoe',      address:'Hohoe Township, Hohoe, Volta Region',commanderName:'Insp. R. Dzidzor',     commanderRank:'Inspector',      lat:7.15162, lng:0.47368, locationVerified:true, locationSource:'osm-mapped', jurisdictionRadiusM:3500 },
-    { id:'GH-BA-SUN-001-K9L3', passphrase:'sunyani2024',  name:'Sunyani Station',                  region:'Bono',          town:'Sunyani',    address:'Sunyani Township, Ghana',            commanderName:'Insp. M. Boateng',     commanderRank:'Inspector',      lat:7.3349,  lng:-2.3264, jurisdictionRadiusM:3500 },
-    { id:'GH-AH-KOF-001-L1M5', passphrase:'koforidua2024',name:'Koforidua Station',                region:'Eastern',       town:'Koforidua',  address:'Koforidua Township, Ghana',          commanderName:'Insp. N. Ofori',       commanderRank:'Inspector',      lat:6.0944,  lng:-0.2590, jurisdictionRadiusM:3200 },
-    { id:'GH-SW-SEK-001-M6N9', passphrase:'sekondi2024',  name:'Sekondi Station',                  region:'Western',       town:'Sekondi',    address:'Sekondi Township, Ghana',            commanderName:'Insp. O. Quaye',       commanderRank:'Inspector',      lat:4.9340,  lng:-1.7039, jurisdictionRadiusM:2800 },
+    { id:'GH-GA-ACC-001-B9C1', passphrase:'accra2024',    name:'Accra Central Police Station',   region:'Greater Accra', town:'Accra',      address:'Ring Road Central, Accra, Ghana',   commanderName:'',      commanderRank:'', lat:5.5560,  lng:-0.2040, jurisdictionRadiusM:3000 },
+    { id:'GH-GA-ACC-007-F2A3', passphrase:'tema2024',     name:'Tema Port Station',               region:'Greater Accra', town:'Tema',       address:'Harbour Road, Tema, Ghana',         commanderName:'',       commanderRank:'',      lat:5.6698,  lng:-0.0167, jurisdictionRadiusM:3500 },
+    { id:'GH-AS-KUM-001-A4F2', passphrase:'kumasi2024',   name:'Kumasi Central Police Station',   region:'Ashanti',       town:'Kumasi',     address:'Adum, Kumasi, Ghana',                commanderName:'',       commanderRank:'', lat:6.6885,  lng:-1.6244, jurisdictionRadiusM:4000 },
+    { id:'GH-AS-KUM-002-C7D9', passphrase:'suame2024',    name:'Suame District Station',          region:'Ashanti',       town:'Kumasi',     address:'Suame, Kumasi, Ghana',               commanderName:'',      commanderRank:'',      lat:6.7228,  lng:-1.6131, jurisdictionRadiusM:2800 },
+    { id:'GH-WR-TAK-001-D2E8', passphrase:'takoradi2024', name:'Takoradi Central Station',        region:'Western',       town:'Takoradi',   address:'Market Circle, Takoradi, Ghana',     commanderName:'',       commanderRank:'',      lat:4.8993,  lng:-1.7557, jurisdictionRadiusM:3200 },
+    { id:'GH-CR-CAP-001-E5F1', passphrase:'capecoast2024',name:'Cape Coast Central Station',      region:'Central',       town:'Cape Coast', address:'Commercial St, Cape Coast, Ghana',   commanderName:'',commanderRank:'',      lat:5.1054,  lng:-1.2466, jurisdictionRadiusM:2600 },
+    { id:'GH-NR-TAM-001-G3H6', passphrase:'tamale2024',   name:'Tamale Central Station',           region:'Northern',      town:'Tamale',     address:'Central Market Rd, Tamale, Ghana',   commanderName:'',      commanderRank:'', lat:9.4008,  lng:-0.8393, jurisdictionRadiusM:4500 },
+    { id:'GH-UE-BOL-001-H8I2', passphrase:'bolga2024',    name:'Bolgatanga Station',               region:'Upper East',    town:'Bolgatanga', address:'Bolgatanga Township, Ghana',         commanderName:'',        commanderRank:'',      lat:10.7853, lng:-0.8514, jurisdictionRadiusM:5000 },
+    { id:'GH-VR-HO-001-J4K7',  passphrase:'ho2024',       name:'Ho Central Station',               region:'Volta',         town:'Ho',         address:'Ho Township, Ghana',                 commanderName:'',      commanderRank:'',      lat:6.6011,  lng:0.4714,  jurisdictionRadiusM:3000 },
+    { id:'GH-VR-HOH-001-P3Q7', passphrase:'hohoe2024',    name:'Hohoe Local Control Room',         region:'Volta',         town:'Hohoe',      address:'Hohoe Township, Hohoe, Volta Region',commanderName:'',     commanderRank:'',      lat:7.15162, lng:0.47368, locationVerified:true, locationSource:'osm-mapped', jurisdictionRadiusM:3500 },
+    { id:'GH-BA-SUN-001-K9L3', passphrase:'sunyani2024',  name:'Sunyani Station',                  region:'Bono',          town:'Sunyani',    address:'Sunyani Township, Ghana',            commanderName:'',     commanderRank:'',      lat:7.3349,  lng:-2.3264, jurisdictionRadiusM:3500 },
+    { id:'GH-AH-KOF-001-L1M5', passphrase:'koforidua2024',name:'Koforidua Station',                region:'Eastern',       town:'Koforidua',  address:'Koforidua Township, Ghana',          commanderName:'',       commanderRank:'',      lat:6.0944,  lng:-0.2590, jurisdictionRadiusM:3200 },
+    { id:'GH-SW-SEK-001-M6N9', passphrase:'sekondi2024',  name:'Sekondi Station',                  region:'Western',       town:'Sekondi',    address:'Sekondi Township, Ghana',            commanderName:'',       commanderRank:'',      lat:4.9340,  lng:-1.7039, jurisdictionRadiusM:2800 },
   ];
 
   // ── VERIFIED LOCATION OVERRIDES ──
@@ -2435,6 +2449,36 @@ const StationAuth = (() => {
     const res = GeamsJurisdiction.compute(STATION_DIRECTORY.map(s => ({ id:s.id, name:s.name, lat:s.lat, lng:s.lng, radiusM:s.jurisdictionRadiusM })));
     STATION_JCELLS = res.cells; STATION_JOVERLAPS = res.overlaps;
   }
+  // ── LCRs created by HQ (shared 'registry:stations') join the directory ──
+  function applyDynamicStations(map) {
+    if (!map) return;
+    Object.values(map).forEach(r => {
+      if (!r || !r.id) return;
+      let e = STATION_DIRECTORY.find(x => x.id === r.id);
+      if (!e) {
+        e = { id:r.id, name:r.name, region:r.region, town:r.town, address:r.address || '', commanderName:'', commanderRank:'', lat:r.lat, lng:r.lng, jurisdictionRadiusM:r.jurisdictionRadiusM || 3000, dynamic:true };
+        STATION_DIRECTORY.push(e);
+      }
+      if (e.dynamic) { e.name = r.name; e.address = r.address || e.address; e.jurisdictionRadiusM = r.jurisdictionRadiusM || 3000; if (!e.locationVerified) { e.lat = r.lat; e.lng = r.lng; } }
+      e.disabled = !!r.disabled;
+    });
+    recomputeJurisdictions();
+    if (session && session.station && session.station.disabled) {
+      alert('HQ has disabled this control room. You have been signed out.');
+      logout();
+    }
+  }
+  async function refreshDynamicStations() { applyDynamicStations(await GeamsSync.getShared('registry:stations', {})); }
+  // HQ-issued passphrases are verified by the GEAMS server; hashes never reach the browser.
+  async function checkPassphrase(match, pass) {
+    if (!match.dynamic) return match.passphrase === pass;
+    await GeamsSync.ready;
+    if (GeamsSync.mode !== 'server') throw new Error('This control room needs the GEAMS server connection to sign in');
+    const r = await fetch(GeamsSync.base + '/api/lcr/login', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ stationId: match.id, passphrase: pass }) });
+    let j = {}; try { j = await r.json(); } catch (e) {}
+    if (r.status === 429 || r.status === 403) throw new Error(j.error || 'Sign-in refused');
+    return r.ok;
+  }
   function applyLocationOverrides(map) {
     if (!map) return;
     STATION_DIRECTORY.forEach(s => {
@@ -2449,6 +2493,8 @@ const StationAuth = (() => {
     recomputeJurisdictions();
   }
   recomputeJurisdictions();
+  GeamsSync.getShared('registry:stations', {}).then(applyDynamicStations);
+  GeamsSync.watch('registry:stations', {}, applyDynamicStations, 4000);
   GeamsSync.getShared('registry:stationLocations', {}).then(applyLocationOverrides);
   GeamsSync.watch('registry:stationLocations', {}, (map) => {
     applyLocationOverrides(map);
@@ -2487,6 +2533,45 @@ const StationAuth = (() => {
   function fillDemo(id, pass) {
     document.getElementById('login-station-id').value = id;
     document.getElementById('login-passphrase').value = pass;
+    prefillCommander();
+  }
+
+  // ── STATION COMMANDERS: real people who sign in, never invented names ──
+  // The commander who last signed in at each station is kept in the shared
+  // 'registry:lcrCommanders' key so partner control rooms see who is on duty.
+  function cmdLocalKey(id) { return 'geams:lcrCommander:' + id; }
+  function prefillCommander() {
+    const st = findStation(document.getElementById('login-station-id').value); if (!st) return;
+    let c = null; try { c = JSON.parse(localStorage.getItem(cmdLocalKey(st.id)) || 'null'); } catch (e) {}
+    if (!c && st.commanderName) c = { name: st.commanderName, rank: st.commanderRank, phone: st.phone };
+    const nm = document.getElementById('login-cmd-name');
+    if (c && nm && !nm.value.trim()) {
+      nm.value = c.name || '';
+      const rk = document.getElementById('login-cmd-rank'); if (rk && c.rank) rk.value = c.rank;
+      const ph = document.getElementById('login-cmd-phone'); if (ph) ph.value = c.phone || '';
+    }
+  }
+  function applyCommanders(map) {
+    if (!map) return;
+    STATION_DIRECTORY.forEach(s => {
+      const c = map[s.id];
+      if (c && c.name) { s.commanderName = c.name; s.commanderRank = c.rank || ''; s.phone = c.phone || s.phone || ''; }
+    });
+    if (typeof StationData !== 'undefined' && session && map[session.station.id] && map[session.station.id].name) {
+      const c = map[session.station.id], st = StationData.station;
+      if (st.commanderName !== c.name) { st.commanderName = c.name; st.commanderRank = c.rank || ''; if (typeof StationApp !== 'undefined' && StationApp.refreshIdentity) StationApp.refreshIdentity(); }
+    }
+  }
+  GeamsSync.getShared('registry:lcrCommanders', {}).then(applyCommanders);
+  GeamsSync.watch('registry:lcrCommanders', {}, applyCommanders, 4000);
+  // Record who is in command. Used at sign-in and at shift handover.
+  async function setCommander(stationId, c) {
+    const rec = { name: c.name.trim(), rank: c.rank || '', phone: (c.phone || '').trim(), since: Date.now() };
+    const entry = findStation(stationId);
+    if (entry) { entry.commanderName = rec.name; entry.commanderRank = rec.rank; entry.phone = rec.phone || entry.phone || ''; }
+    try { localStorage.setItem(cmdLocalKey(stationId), JSON.stringify(rec)); } catch (e) {}
+    try { await GeamsSync.mergeShared('registry:lcrCommanders', {}, m => { m = m || {}; m[stationId] = rec; return m; }); } catch (e) {}
+    return rec;
   }
 
   function showError(msg) {
@@ -2513,7 +2598,7 @@ const StationAuth = (() => {
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
   }
 
-  function attemptLogin() {
+  async function attemptLogin() {
     hideError();
     const idInput   = document.getElementById('login-station-id').value;
     const passInput = document.getElementById('login-passphrase').value;
@@ -2522,13 +2607,21 @@ const StationAuth = (() => {
       showError('Enter both Station ID and passphrase'); return;
     }
 
-    const match = findStation(idInput);
+    let match = findStation(idInput);
+    if (!match) { await refreshDynamicStations(); match = findStation(idInput); }
     if (!match) {
       showError('Station ID not found in registry'); return;
     }
-    if (match.passphrase !== passInput) {
+    if (match.disabled) { showError('This control room has been disabled by HQ'); return; }
+    let passOk = false;
+    try { passOk = await checkPassphrase(match, passInput); } catch (e) { showError(e.message || 'Could not verify the passphrase'); return; }
+    if (!passOk) {
       showError('Incorrect passphrase for this Station ID'); return;
     }
+
+    const cmdName = (document.getElementById('login-cmd-name').value || '').trim();
+    if (cmdName.length < 3 || !/\s/.test(cmdName)) { showError('Enter your full name (first and last) as commander on duty'); return; }
+    setCommander(match.id, { name: cmdName, rank: document.getElementById('login-cmd-rank').value, phone: document.getElementById('login-cmd-phone').value });
 
     // Authenticated — capture device geolocation to verify against
     // this station's registered jurisdiction before granting access.
@@ -2596,11 +2689,13 @@ const StationAuth = (() => {
     document.getElementById('app').style.display = 'none';
     document.getElementById('login-station-id').value = '';
     document.getElementById('login-passphrase').value = '';
+    document.getElementById('login-cmd-name').value = '';
+    document.getElementById('login-cmd-phone').value = '';
     setGeoStatus('', 'Location not yet verified');
     document.getElementById('login-screen').classList.add('active');
   }
 
-  return { initLoginScreen, fillDemo, attemptLogin, getSession, getDirectory, getOtherStations, logout, findStation, haversineMeters };
+  return { initLoginScreen, fillDemo, prefillCommander, setCommander, attemptLogin, getSession, getDirectory, getOtherStations, logout, findStation, haversineMeters };
 })();
 
 /* ============================================================
@@ -2693,8 +2788,8 @@ const StationData = (() => {
     region:      'Greater Accra',
     town:        'Accra',
     address:     'Ring Road Central, Accra, Ghana',
-    commanderName:  'Supt. K. Mensah',
-    commanderRank:  'Superintendent',
+    commanderName:'',
+    commanderRank:'',
     lat:  5.5560,
     lng: -0.2040,
     jurisdictionRadiusM: 3000,
@@ -3899,20 +3994,36 @@ const StationApp = (() => {
       </div>
       <div class="form-group"><label class="form-label">Outgoing Commander</label>
         <input class="form-input" value="${StationData.station.commanderName}" disabled></div>
-      <div class="form-group"><label class="form-label">Incoming Commander</label>
-        <select class="form-select">
-          ${StationData.officerOptionsHTML()}
-        </select></div>
+      <div class="form-group"><label class="form-label">Incoming Commander — full name</label>
+        <input class="form-input" id="ho-name" placeholder="Full name of the officer taking command" list="ho-officers">
+        <datalist id="ho-officers">${StationData.officers.map(o => `<option value="${o.name}">`).join('')}</datalist></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div class="form-group"><label class="form-label">Rank</label>
+          <select class="form-select" id="ho-rank"><option>Officer in Charge</option><option>Chief Superintendent</option><option>Superintendent</option><option>Deputy Superintendent</option><option>Chief Inspector</option><option>Inspector</option><option>Sergeant</option><option>Duty Officer</option></select></div>
+        <div class="form-group"><label class="form-label">Phone</label><input class="form-input" id="ho-phone" type="tel" placeholder="+233…"></div>
+      </div>
       <div class="form-group"><label class="form-label">Incoming Shift</label>
-        <select class="form-select">
+        <select class="form-select" id="ho-shift">
           <option>Night Shift (18:00 – 06:00)</option>
           <option>Day Shift (06:00 – 18:00)</option>
         </select></div>
       <div class="form-group"><label class="form-label">Handover Notes</label>
-        <textarea class="form-textarea" placeholder="Key incidents, persons of interest, ongoing operations..."></textarea></div>`,
+        <textarea class="form-textarea" id="ho-notes" placeholder="Key incidents, persons of interest, ongoing operations..."></textarea></div>`,
       `<button class="btn btn-ghost btn-sm" onclick="StationApp.closeModal()">Cancel</button>
-       <button class="btn btn-primary" onclick="StationApp.showToast('success','Handover Complete','Shift transferred — incoming commander briefed');StationApp.closeModal()">🔄 Complete Handover</button>`);
+       <button class="btn btn-primary" onclick="StationApp.completeHandover()">🔄 Complete Handover</button>`);
   }
+  async function completeHandover() {
+    const name = (document.getElementById('ho-name')?.value || '').trim();
+    if (name.length < 3 || !/\s/.test(name)) { showToast('error','Name required','Enter the incoming commander\'s full name'); return; }
+    const out = StationData.station.commanderName, st = StationData.station;
+    const rec = await StationAuth.setCommander(st.id, { name, rank: document.getElementById('ho-rank').value, phone: document.getElementById('ho-phone').value });
+    st.commanderName = rec.name; st.commanderRank = rec.rank; st.shift = document.getElementById('ho-shift').value;
+    const notes = (document.getElementById('ho-notes')?.value || '').trim();
+    StationData.logActivity('SHIFT', 'HANDOVER', `Command handed from ${out} to ${rec.name} (${rec.rank}) · ${st.shift}${notes ? ' · Notes: ' + notes : ''}`, out);
+    refreshIdentity(); closeModal();
+    showToast('success','Handover recorded', rec.name + ' is now commander on duty. Partner control rooms can see this.');
+  }
+  function refreshIdentity() { applyIdentityToChrome(); }
 
   function stationLockdown() {
     openModal('🔒 Station Lockdown Mode', `
@@ -4220,7 +4331,7 @@ const StationApp = (() => {
   function applyIdentityToChrome() {
     const s = StationData.station;
     const shortId = s.id.split('-').slice(0,4).join('-'); // GH-GA-ACC-001 — drop the checksum suffix for the compact sidebar display
-    const initials = s.commanderName.replace(/^(Supt\.|Insp\.|Cpl\.|Sgt\.|Const\.)\s*/,'').split(' ').map(p=>p[0]).join('').slice(0,2).toUpperCase();
+    const initials = (s.commanderName || 'C').replace(/^(Supt\.|Insp\.|Cpl\.|Sgt\.|Const\.)\s*/,'').split(' ').map(p=>p[0]).join('').slice(0,2).toUpperCase();
 
     const topbarId = document.getElementById('topbar-station-id');
     if (topbarId) topbarId.textContent = s.id;
@@ -4229,7 +4340,7 @@ const StationApp = (() => {
     const avatar = document.getElementById('topbar-user-avatar');
     if (avatar) avatar.textContent = initials;
     const userName = document.getElementById('topbar-user-name');
-    if (userName) userName.textContent = s.commanderName;
+    if (userName) userName.textContent = s.commanderName || 'Commander';
   }
 
   return {
@@ -4242,7 +4353,7 @@ const StationApp = (() => {
                      confirmDispatchMedicalFire,
     /* comms */      callBackCivilian, requestScenePhoto,
     /* station */    checkHospitalCapacity, loadJurisdictionHospitals,
-                     searchOtherJurisdictionHospitals, shiftHandover,
+                     searchOtherJurisdictionHospitals, shiftHandover, completeHandover, refreshIdentity,
                      stationLockdown, confirmLockdown, logIntelligence,
                      registerComplainant, printDocket, findAndPrintDocket,
                      renderDocketSearchResults, testConnection,
@@ -7567,7 +7678,7 @@ const StationBackup = (() => {
     if (!session) { StationApp.showToast('error','No Session','Start or accept a backup request first'); return; }
     StationApp.openModal(`💬 LCR Chat — ${session.partner.name}`, `
       <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:10px;line-height:1.5">
-        Secure inter-station channel with <strong>${session.partner.commanderName}</strong> (${session.partner.name}).
+        Secure inter-station channel with <strong>${session.partner.commanderName || 'the duty commander'}</strong> (${session.partner.name}).
         Visible only for the duration of this backup session.
         <span style="display:block;margin-top:4px;color:${GeamsSync.mode==='server'?'var(--green)':'var(--gold)'}">${GeamsSync.mode==='server'?'● Live — messages are delivered instantly through the backend':'⚠ Backend not connected — messages only reach tabs on this device'}</span>
       </div>
@@ -7721,7 +7832,7 @@ const StationBackup = (() => {
     const live = GeamsSync.mode === 'server';
     StationApp.openModal(`📞 Call — ${partner.name}`, `
       <div style="padding:4px 0 8px;font-size:0.8rem;line-height:1.6;color:var(--text-muted)">
-        Real in-app call to <strong style="color:var(--text-bright)">${partner.commanderName}</strong> (${partner.name}). The other control room must have its dashboard open — it rings there immediately.
+        Real in-app call to <strong style="color:var(--text-bright)">${partner.commanderName || 'the duty commander'}</strong> (${partner.name}). The other control room must have its dashboard open — it rings there immediately.
         ${live ? '' : '<div style="color:var(--gold);margin-top:6px">⚠ Backend not connected — only a dashboard open on this same device can receive the call.</div>'}
         <div style="margin-top:6px;font-size:0.7rem;color:var(--text-ghost)">Needs microphone${'' } (and camera for video) permission and an https:// page. Some strict mobile networks block direct calls (no relay server is configured).</div>
         ${phone ? `<div style="margin-top:8px"><a class="btn btn-ghost btn-sm" href="tel:${phone}">📱 Or dial ${phone}</a></div>` : ''}
@@ -7752,7 +7863,7 @@ const StationBackup = (() => {
     call = { id, role: 'caller', pc, local: m.stream, video: !!video && !m.noVideo, rid };
     m.stream.getTracks().forEach(t => pc.addTrack(t, m.stream));
     wirePc(pc);
-    showCallUI(`Calling ${partner.commanderName} · ${partner.name}…`);
+    showCallUI(`Calling ${partner.commanderName || 'duty commander'} · ${partner.name}…`);
     try {
       const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: !!video });
       await pc.setLocalDescription(offer);
@@ -7861,7 +7972,7 @@ const StationBackup = (() => {
     const partner = session ? session.partner : { name: '', commanderName: '' };
     callOverlay().innerHTML = `
       <div style="background:var(--bg-panel,#101a2b);border:1px solid var(--border-base);border-radius:14px;padding:16px;max-width:520px;width:100%;text-align:center">
-        <div style="font-weight:700;color:var(--text-bright)">${partner.commanderName} · ${partner.name}</div>
+        <div style="font-weight:700;color:var(--text-bright)">${partner.commanderName || 'Duty commander'} · ${partner.name}</div>
         <div id="bk-call-status" style="font-size:0.78rem;color:var(--text-muted);margin:4px 0 10px;min-height:1.2em">${status}</div>
         <div id="bk-call-stage" style="position:relative;background:#000;border-radius:10px;overflow:hidden;height:70px">
           <video id="bk-call-remote" autoplay playsinline style="width:100%;height:100%;object-fit:contain;display:block"></video>
@@ -8083,7 +8194,7 @@ const StationSettings = (() => {
               <div class="detail-field"><div class="detail-key">Region</div><div class="detail-val">${s.region}</div></div>
               <div class="detail-field"><div class="detail-key">Installed</div><div class="detail-val mono">${s.installedDate || 'Not recorded'}</div></div>
               <div class="detail-field"><div class="detail-key">Current Shift</div><div class="detail-val">${s.shift}</div></div>
-              <div class="detail-field"><div class="detail-key">Commander</div><div class="detail-val">${s.commanderName}</div></div>
+              <div class="detail-field"><div class="detail-key">Commander</div><div class="detail-val">${s.commanderName ? s.commanderName + (s.commanderRank ? ' · ' + s.commanderRank : '') : 'Not signed in yet'}</div></div>
               <div class="detail-field"><div class="detail-key">Phone</div><div class="detail-val mono">${s.phone || "Not recorded"}</div></div>
             </div>
             <div style="display:flex;flex-direction:column;gap:8px">
@@ -8290,6 +8401,62 @@ const StationSettings = (() => {
   };
 })();
 document.addEventListener('DOMContentLoaded', () => { StationAuth.initLoginScreen(); });
+</script>
+<script>
+/* ── GeamsWake: keep the screen on while GEAMS is open ──
+   Uses the Screen Wake Lock API (Chrome, Edge, Android, Safari 16.4+). Where it
+   is missing or refused, a tiny muted looping video keeps most phones awake.
+   Limits: the page must be visible and in the foreground, the browser needs a
+   secure (https) page, and battery-saver modes or an OS policy can still dim
+   the screen. A packaged Android/iOS app can hold a stronger lock. */
+(function () {
+  var lock = null, video = null, active = false, pill = null, gestured = false, method = 'none';
+  function setPill(show) {
+    try {
+      if (!show) { if (pill) { pill.remove(); pill = null; } return; }
+      if (pill) return;
+      pill = document.createElement('div');
+      pill.textContent = '⚠ Screen may go to sleep — tap here to keep it awake';
+      pill.style.cssText = 'position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom,0px) + 70px);transform:translateX(-50%);z-index:2147483000;background:#7c2d12;color:#fff;font:600 12px/1.3 system-ui,sans-serif;padding:8px 14px;border-radius:18px;box-shadow:0 4px 16px rgba(0,0,0,.4);cursor:pointer;max-width:90vw;text-align:center';
+      pill.onclick = function () { gestured = true; acquire(true); };
+      (document.body || document.documentElement).appendChild(pill);
+    } catch (e) {}
+  }
+  function startVideo() {
+    try {
+      if (video) { if (video.paused) video.play().catch(function () {}); return; }
+      video = document.createElement('video');
+      video.setAttribute('playsinline', ''); video.setAttribute('muted', ''); video.muted = true; video.loop = true;
+      video.style.cssText = 'position:fixed;width:1px;height:1px;opacity:.01;pointer-events:none;left:0;top:0';
+      var m = document.createElement('source'); m.src = 'data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAMsbW9vdgAAAGxtdmhkAAAAAAAAAAAAAAAAAAAD6AAAA+gAAQAAAQAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAlZ0cmFrAAAAXHRraGQAAAADAAAAAAAAAAAAAAABAAAAAAAAA+gAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAAAEAAAABAAAAAAAAkZWR0cwAAABxlbHN0AAAAAAAAAAEAAAPoAAAAAAABAAAAAAHObWRpYQAAACBtZGhkAAAAAAAAAAAAAAAAAABAAAAAQABVxAAAAAAALWhkbHIAAAAAAAAAAHZpZGUAAAAAAAAAAAAAAABWaWRlb0hhbmRsZXIAAAABeW1pbmYAAAAUdm1oZAAAAAEAAAAAAAAAAAAAACRkaW5mAAAAHGRyZWYAAAAAAAAAAQAAAAx1cmwgAAAAAQAAATlzdGJsAAAAuXN0c2QAAAAAAAAAAQAAAKlhdmMxAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAEAAQABIAAAASAAAAAAAAAABFUxhdmM2MC4zMS4xMDIgbGlieDI2NAAAAAAAAAAAAAAAGP//AAAAL2F2Y0MBQsAK/+EAF2dCwArZBCbARAAAAwAEAAADABA8SJkgAQAFaMuDyyAAAAAQcGFzcAAAAAEAAAABAAAAFGJ0cnQAAAAAAAAUyAAAFMgAAAAYc3R0cwAAAAAAAAABAAAAAgAAIAAAAAAUc3RzcwAAAAAAAAABAAAAAQAAABxzdHNjAAAAAAAAAAEAAAABAAAAAgAAAAEAAAAcc3RzegAAAAAAAAAAAAAAAgAAAo8AAAAKAAAAFHN0Y28AAAAAAAAAAQAAA1wAAABidWR0YQAAAFptZXRhAAAAAAAAACFoZGxyAAAAAAAAAABtZGlyYXBwbAAAAAAAAAAAAAAAAC1pbHN0AAAAJal0b28AAAAdZGF0YQAAAAEAAAAATGF2ZjYwLjE2LjEwMAAAAAhmcmVlAAACoW1kYXQAAAJwBgX//2zcRem95tlIt5Ys2CDZI+7veDI2NCAtIGNvcmUgMTY0IHIzMTA4IDMxZTE5ZjkgLSBILjI2NC9NUEVHLTQgQVZDIGNvZGVjIC0gQ29weWxlZnQgMjAwMy0yMDIzIC0gaHR0cDovL3d3dy52aWRlb2xhbi5vcmcveDI2NC5odG1sIC0gb3B0aW9uczogY2FiYWM9MCByZWY9MyBkZWJsb2NrPTE6MDowIGFuYWx5c2U9MHgxOjB4MTExIG1lPWhleCBzdWJtZT03IHBzeT0xIHBzeV9yZD0xLjAwOjAuMDAgbWl4ZWRfcmVmPTEgbWVfcmFuZ2U9MTYgY2hyb21hX21lPTEgdHJlbGxpcz0xIDh4OGRjdD0wIGNxbT0wIGRlYWR6b25lPTIxLDExIGZhc3RfcHNraXA9MSBjaHJvbWFfcXBfb2Zmc2V0PS0yIHRocmVhZHM9MiBsb29rYWhlYWRfdGhyZWFkcz0xIHNsaWNlZF90aHJlYWRzPTAgbnI9MCBkZWNpbWF0ZT0xIGludGVybGFjZWQ9MCBibHVyYXlfY29tcGF0PTAgY29uc3RyYWluZWRfaW50cmE9MCBiZnJhbWVzPTAgd2VpZ2h0cD0wIGtleWludD0yNTAga2V5aW50X21pbj0yIHNjZW5lY3V0PTQwIGludHJhX3JlZnJlc2g9MCByY19sb29rYWhlYWQ9NDAgcmM9Y3JmIG1idHJlZT0xIGNyZj0yMy4wIHFjb21wPTAuNjAgcXBtaW49MCBxcG1heD02OSBxcHN0ZXA9NCBpcF9yYXRpbz0xLjQwIGFxPTE6MS4wMACAAAAAF2WIhAU8mKAAP78nJyddddddddddddeAAAAABkGaOAl4Rg=='; m.type = 'video/mp4';
+      var w = document.createElement('source'); w.src = 'data:video/webm;base64,GkXfo59ChoEBQveBAULygQRC84EIQoKEd2VibUKHgQJChYECGFOAZwEAAAAAAAIBEU2bdLpNu4tTq4QVSalmU6yBoU27i1OrhBZUrmtTrIHYTbuMU6uEElTDZ1OsggEeTbuMU6uEHFO7a1OsggHr7AEAAAAAAABZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVSalmsirXsYMPQkBNgI1MYXZmNjAuMTYuMTAwV0GNTGF2ZjYwLjE2LjEwMESJiECPQAAAAAAAFlSua8GuAQAAAAAAADjXgQFzxYi1oOiGEdyKXZyBACK1nIN1bmSIgQCGhVZfVlA4g4EBI+ODhB3NZQDgibCBQLqBQJqBAhJUw2f8c3OgY8CAZ8iaRaOHRU5DT0RFUkSHjUxhdmY2MC4xNi4xMDBzc9ZjwItjxYi1oOiGEdyKXWfIoUWjh0VOQ09ERVJEh5RMYXZjNjAuMzEuMTAyIGxpYnZweGfIoUWjiERVUkFUSU9ORIeTMDA6MDA6MDEuMDAwMDAwMDAwAB9DtnXH54EAo6qBAACA8AIAnQEqQABAAABHCIWFiIWEiAICAAZwPEJgCrIg9zAA/v+rUICjloEB9ADRAQABEBAAGAAYWC/0AAiOgAAcU7trkbuPs4EAt4r3gQHxggGf8IED'; w.type = 'video/webm';
+      video.appendChild(m); video.appendChild(w);
+      (document.body || document.documentElement).appendChild(video);
+      video.play().then(function () { active = true; method = 'video'; setPill(false); }).catch(function () { active = false; setPill(true); });
+    } catch (e) { setPill(true); }
+  }
+  async function acquire(fromGesture) {
+    if (document.visibilityState !== 'visible') return;
+    if ('wakeLock' in navigator) {
+      try {
+        if (lock && !lock.released) { active = true; return; }
+        lock = await navigator.wakeLock.request('screen');
+        active = true; method = 'wakeLock'; setPill(false);
+        lock.addEventListener('release', function () { active = false; });
+        return;
+      } catch (e) { /* not allowed now (needs gesture, https or battery saver): fall through */ }
+    }
+    if (gestured || fromGesture) startVideo(); else setPill(true);
+  }
+  function onGesture() { gestured = true; acquire(true); }
+  ['pointerdown', 'touchstart', 'keydown', 'click'].forEach(function (ev) { document.addEventListener(ev, onGesture, { passive: true }); });
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') acquire(); });
+  window.addEventListener('pageshow', function () { acquire(); });
+  window.addEventListener('focus', function () { acquire(); });
+  setInterval(function () { if (!active) acquire(); }, 20000);
+  window.GeamsWake = { status: function () { return { active: active, method: method, supported: 'wakeLock' in navigator }; }, retry: function () { return acquire(true); } };
+  acquire();
+})();
 </script>
 </body>
 </html>

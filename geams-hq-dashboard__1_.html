@@ -1411,6 +1411,28 @@ option { background: var(--bg-deep); }
 </style>
 </head>
 <body>
+<style>
+#hq-login{position:fixed;inset:0;z-index:99999;background:radial-gradient(1200px 600px at 50% -10%,#10304f 0,#06121f 60%);display:none;align-items:center;justify-content:center;padding:20px}
+#hq-login.show{display:flex}
+#hq-login .card{width:100%;max-width:380px;background:#0b1b2e;border:1px solid #1f3b5a;border-radius:14px;padding:28px 26px;box-shadow:0 20px 60px rgba(0,0,0,.55);color:#e6f1ff;font-family:system-ui,sans-serif}
+#hq-login h1{margin:0 0 4px;font-size:1.5rem;letter-spacing:3px;color:#f5c542}
+#hq-login .sub{font-size:.78rem;color:#8fb0d0;margin-bottom:18px}
+#hq-login label{display:block;font-size:.68rem;letter-spacing:1.5px;color:#8fb0d0;margin:12px 0 5px;text-transform:uppercase}
+#hq-login input{width:100%;box-sizing:border-box;padding:11px 12px;border-radius:8px;border:1px solid #28496b;background:#06121f;color:#fff;font-size:.95rem}
+#hq-login button{width:100%;margin-top:18px;padding:12px;border:0;border-radius:8px;background:#f5c542;color:#1a1200;font-weight:800;font-size:.95rem;cursor:pointer}
+#hq-login button:disabled{opacity:.6;cursor:wait}
+#hq-login .err{display:none;margin-top:12px;padding:9px 11px;border-radius:8px;background:#3b1212;border:1px solid #7a2323;color:#ffb4b4;font-size:.8rem}
+#hq-login .err.show{display:block}
+#hq-nobackend{display:none;position:fixed;top:0;left:0;right:0;z-index:99998;background:#7c2d12;color:#fff;font:600 12px system-ui;text-align:center;padding:4px 8px}
+</style>
+<div id="hq-login"><form class="card" onsubmit="HqAuth.submit(event)">
+  <h1>GEAMS HQ</h1><div class="sub">National Headquarters · authorised operators only</div>
+  <label for="hq-user">Username</label><input id="hq-user" autocomplete="username" autocapitalize="none" spellcheck="false">
+  <label for="hq-pass">Password</label><input id="hq-pass" type="password" autocomplete="current-password">
+  <div class="err" id="hq-login-err"></div>
+  <button type="submit" id="hq-login-btn">Sign in</button>
+</form></div>
+<div id="hq-nobackend">No GEAMS backend connected: HQ is open without sign-in and nothing is shared (demo only)</div>
 
 <!-- ═══════════════════════════════════════════
      BOOT SCREEN
@@ -1529,11 +1551,11 @@ option { background: var(--bg-deep); }
       <div class="alert-badge" id="alert-badge">2</div>
     </div>
 
-    <div class="topbar-user">
-      <div class="user-avatar">GA</div>
+    <div class="topbar-user" onclick="HqAuth.openMenu()" style="cursor:pointer" title="Account">
+      <div class="user-avatar" id="hq-user-avatar">HQ</div>
       <div class="user-info">
-        <div class="user-name">Supt. Acheampong</div>
-        <div class="user-role">NATIONAL COMMANDER</div>
+        <div class="user-name" id="hq-user-name">Not signed in</div>
+        <div class="user-role" id="hq-user-role">HQ OPERATOR</div>
       </div>
     </div>
   </header>
@@ -1693,7 +1715,7 @@ option { background: var(--bg-deep); }
 <script>
   // Boot the application
   document.addEventListener('DOMContentLoaded', () => {
-    GeamsApp.boot();
+    HqAuth.gate(() => GeamsApp.boot());
   });
 </script>
 <script>
@@ -1739,8 +1761,11 @@ const GeamsSync = (() => {
     const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
     const t = ctl ? setTimeout(() => ctl.abort(), ms || 6000) : null;
     try {
+      try { const tk = sessionStorage.getItem('geams_hq_token'); if (tk && opts && opts.method && opts.method !== 'GET') opts = Object.assign({}, opts, { headers: Object.assign({}, opts.headers, { Authorization: 'Bearer ' + tk }) }); } catch (e) {}
       const r = await fetch(base + path, Object.assign({ cache: 'no-store', signal: ctl && ctl.signal }, opts || {}));
-      online = true; return r;
+      online = true;
+      if (r.status === 401 && path.indexOf('/api/kv/') === 0 && typeof HqAuth !== 'undefined') HqAuth.sessionExpired();
+      return r;
     } catch (e) { online = false; throw e; }
     finally { if (t) clearTimeout(t); }
   }
@@ -1883,6 +1908,80 @@ const GeamsSync = (() => {
            get mode(){ return mode; }, get base(){ return base; }, get online(){ return online; }, get devices(){ return status.devices; }, get deviceApps(){ return status.byApp; } };
 })();
 
+
+
+/* ── HQ sign-in (talks to /api/hq/* on the GEAMS server) ── */
+const HqAuth = (() => {
+  const KEY = 'geams_hq_token'; let me = null, startFn = null, started = false;
+  const token = () => { try { return sessionStorage.getItem(KEY) || ''; } catch (e) { return ''; } };
+  const setToken = t => { try { t ? sessionStorage.setItem(KEY, t) : sessionStorage.removeItem(KEY); } catch (e) {} };
+  async function api(path, opts) {
+    const o = Object.assign({ cache: 'no-store' }, opts || {});
+    o.headers = Object.assign({ 'Content-Type': 'application/json' }, token() ? { Authorization: 'Bearer ' + token() } : {}, o.headers || {});
+    const r = await fetch(GeamsSync.base + path, o); let j = {}; try { j = await r.json(); } catch (e) {}
+    return { ok: r.ok, status: r.status, j };
+  }
+  function applyMe() {
+    const n = document.getElementById('hq-user-name'), r = document.getElementById('hq-user-role'), a = document.getElementById('hq-user-avatar');
+    if (me) { if (n) n.textContent = me.user; if (r) r.textContent = me.role === 'admin' ? 'HQ OWNER' : 'HQ OPERATOR'; if (a) a.textContent = me.user.slice(0, 2).toUpperCase(); }
+  }
+  function show(msg) { const l = document.getElementById('hq-login'); if (l) l.classList.add('show'); if (msg) showErr(msg); setTimeout(() => { const u = document.getElementById('hq-user'); if (u && !u.value) u.focus(); }, 50); }
+  function hide() { const l = document.getElementById('hq-login'); if (l) l.classList.remove('show'); }
+  function showErr(m) { const e = document.getElementById('hq-login-err'); if (e) { e.textContent = m; e.classList.toggle('show', !!m); } }
+  async function gate(start) {
+    startFn = start;
+    await GeamsSync.ready;
+    if (GeamsSync.mode !== 'server') { const b = document.getElementById('hq-nobackend'); if (b) b.style.display = 'block'; started = true; start(); return; }
+    if (token()) { const r = await api('/api/hq/me').catch(() => null); if (r && r.ok) { me = r.j; applyMe(); hide(); begin(); return; } setToken(''); }
+    show();
+  }
+  function begin() { if (!started && startFn) { started = true; startFn(); } }
+  async function submit(ev) {
+    ev.preventDefault(); showErr('');
+    const btn = document.getElementById('hq-login-btn'); btn.disabled = true; btn.textContent = 'Signing in…';
+    try {
+      const r = await api('/api/hq/login', { method: 'POST', body: JSON.stringify({ username: document.getElementById('hq-user').value, password: document.getElementById('hq-pass').value }) });
+      if (!r.ok) { showErr(r.j.error || 'Sign-in failed'); return; }
+      setToken(r.j.token); me = { user: r.j.user, role: r.j.role }; document.getElementById('hq-pass').value = '';
+      applyMe(); hide(); begin();
+    } catch (e) { showErr('Cannot reach the GEAMS server'); }
+    finally { btn.disabled = false; btn.textContent = 'Sign in'; }
+  }
+  function sessionExpired() { if (!token() && !me) return; setToken(''); me = null; show('Your HQ session has ended. Sign in again to continue.'); }
+  async function signOut() { try { await api('/api/hq/logout', { method: 'POST' }); } catch (e) {} setToken(''); location.reload(); }
+  function openMenu() {
+    if (GeamsSync.mode !== 'server') { GeamsApp.showToast('info','No sign-in','HQ is running without a backend'); return; }
+    GeamsApp.openModal('👤 ' + (me ? me.user : 'Account'), `
+      <div style="font-size:.82rem;color:var(--text-muted);line-height:1.6">Signed in as <strong style="color:var(--text-white)">${me ? me.user : ''}</strong> (${me && me.role === 'admin' ? 'HQ owner' : 'HQ operator'}). Everything you issue from HQ is recorded under this name.</div>
+      <div id="hq-ops-area" style="margin-top:14px"></div>`,
+      `<button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal()">Close</button>
+       <button class="btn btn-danger btn-sm" onclick="HqAuth.signOut()">⎋ Sign out</button>`);
+    if (me && me.role === 'admin') loadOperators();
+  }
+  async function loadOperators() {
+    const area = document.getElementById('hq-ops-area'); if (!area) return;
+    const r = await api('/api/hq/users'); if (!r.ok) { area.textContent = r.j.error || ''; return; }
+    area.innerHTML = `<div style="font-family:var(--font-mono);font-size:.6rem;letter-spacing:1.5px;color:var(--text-muted);margin-bottom:6px">HQ OPERATORS</div>
+      <div style="font-size:.78rem;padding:7px 10px;background:var(--bg-deep);border-radius:var(--r-sm);margin-bottom:6px">${r.j.owner} <span class="badge badge-resolved" style="font-size:.55rem">OWNER</span> <span style="color:var(--text-muted);font-size:.68rem">${r.j.ownerPasswordFromEnv ? 'password set on the server (GEAMS_HQ_ADMIN_PASSWORD)' : '⚠ password is generated at each start: set GEAMS_HQ_ADMIN_PASSWORD'}</span></div>
+      ${r.j.users.map(u => `<div style="display:flex;justify-content:space-between;align-items:center;font-size:.78rem;padding:7px 10px;background:var(--bg-deep);border-radius:var(--r-sm);margin-bottom:6px"><span>${u.username}</span><button class="btn btn-danger btn-sm" onclick="HqAuth.removeOperator('${u.username}')">Remove</button></div>`).join('')}
+      <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:6px;margin-top:8px">
+        <input class="form-input" id="op-name" placeholder="username" autocapitalize="none">
+        <input class="form-input" id="op-pass" type="password" placeholder="password (10+ chars)">
+        <button class="btn btn-primary btn-sm" onclick="HqAuth.addOperator()">Add</button></div>
+      <div style="font-size:.66rem;color:var(--text-muted);margin-top:6px;line-height:1.5">Adding an existing username sets a new password. Operator accounts are kept in a file on the server's disk: use a persistent disk or they are lost on redeploy (the owner account always survives).</div>`;
+  }
+  async function addOperator() {
+    const r = await api('/api/hq/users', { method: 'POST', body: JSON.stringify({ username: document.getElementById('op-name').value, password: document.getElementById('op-pass').value }) });
+    GeamsApp.showToast(r.ok ? 'success' : 'error', r.ok ? 'Operator saved' : 'Not saved', r.ok ? '' : (r.j.error || ''));
+    if (r.ok) loadOperators();
+  }
+  async function removeOperator(name) {
+    if (!confirm('Remove HQ operator "' + name + '"? Their sessions end immediately.')) return;
+    await api('/api/hq/users', { method: 'POST', body: JSON.stringify({ username: name, remove: true }) }); loadOperators();
+  }
+  document.addEventListener('visibilitychange', () => {});
+  return { gate, submit, sessionExpired, signOut, openMenu, addOperator, removeOperator, api, user: () => (me ? me.user : 'HQ'), token };
+})();
 
 /* ============================================================
    GEAMS ARCHIVE — permanent record of every incident so HQ and the LCR can
@@ -2434,8 +2533,15 @@ const GeamsData = (() => {
   // routed through the existing emit('new_incident'/'incident_resolved')
   // events so GeamsOverview/GeamsIncidents update via their current
   // listeners — no separate render path needed.
+  const _watchedStations = new Set(); let _feedStarted = false;
   function startLiveIncidentFeed() {
-    stations.forEach(st => {
+    _feedStarted = true;
+    stations.forEach(watchStation);
+  }
+  function watchStation(st) {
+    if (_watchedStations.has(st.id)) return;
+    _watchedStations.add(st.id);
+    {
       GeamsSync.watch('lcr:' + st.id + ':incidents', {}, (map) => {
         let open = 0;
         Object.values(map).forEach(rec => {
@@ -2504,7 +2610,66 @@ const GeamsData = (() => {
         emit('station_counts', st);
       }, 3000);
       setInterval(recomputeOfficers, 5000);
+    }
+  }
+
+
+  // ════════ LCRs CREATED BY HQ ════════
+  // HQ creates a Local Control Room here: it gets a Station ID and a one-time
+  // passphrase. The public record goes to 'registry:stations' (read by every
+  // app so the LCR is routable and visible at once); only a salted SHA-256 of
+  // the passphrase goes to 'registry:stationAuth', which only the LCR login reads.
+  function mergeDynamicStations(map) {
+    if (!map) return;
+    Object.values(map).forEach(r => {
+      if (!r || !r.id) return;
+      let st = stations.find(x => x.id === r.id);
+      if (!st) {
+        st = { id:r.id, name:r.name, region:r.region, town:r.town, lat:r.lat, lng:r.lng, status:'offline', officers:0, onDuty:0, incidents:0, avgResponse:0, uptime:0, gpsLat:r.lat, gpsLon:r.lng };
+        stations.push(st); emit('station_registered', st);
+      }
+      st.hqCreated = true; st.disabled = !!r.disabled; st.address = r.address || ''; st.jurisdictionRadiusM = r.jurisdictionRadiusM || 3000; st.createdAt = r.createdAt;
+      if (!st.locationVerified) { st.lat = r.lat; st.lng = r.lng; }
+      if (_feedStarted) watchStation(st);
     });
+  }
+  GeamsSync.getShared('registry:stations', {}).then(mergeDynamicStations);
+  GeamsSync.watch('registry:stations', {}, (m) => { mergeDynamicStations(m); emit('station_registry_changed', m); }, 4000);
+
+  async function issueCredential(id) {
+    const r = await HqAuth.api('/api/hq/lcr/credential', { method: 'POST', body: JSON.stringify({ stationId: id }) });
+    if (!r.ok) throw new Error(r.j.error || 'Could not issue the passphrase');
+    return r.j.passphrase;
+  }
+  async function createLcr(f) {
+    let rec = null;
+    const ok = await GeamsSync.mergeShared('registry:stations', {}, (m) => {
+      m = m || {};
+      const code = REGION_CODES[f.region] || 'XX', dist = districtCode(f.town);
+      let n = parseInt(nextStationNumber(f.region), 10), id;
+      do { id = 'GH-' + code + '-' + dist + '-' + String(n).padStart(3,'0') + '-' + generateChecksum(); n++; } while (m[id] || stations.find(x => x.id === id));
+      rec = { id, name:f.name, region:f.region, town:f.town, address:f.address || (f.town + ', ' + f.region), lat:f.lat, lng:f.lng,
+              jurisdictionRadiusM:f.radiusM || 3000, locationSource:f.source || 'manual', locationEstimated:!!f.estimated, ghanaPostAddress:f.ghanaPost || '',
+              createdAt:Date.now(), createdBy:(typeof HqAuth !== 'undefined' ? HqAuth.user() : 'HQ'), disabled:false };
+      m[id] = rec; return m;
+    });
+    if (!ok || !rec) throw new Error('The control room was not saved. Sign in to HQ again and retry.');
+    mergeDynamicStations({ [rec.id]: rec });
+    let pass;
+    try { pass = await issueCredential(rec.id); } catch (e) { throw new Error(e.message + '. The control room exists: use "Reset passphrase" on its row to issue one.'); }
+    logAudit(rec.id, 'HQ created Local Control Room <strong>' + rec.name + '</strong> (' + rec.id + ')');
+    return { rec, passphrase: pass };
+  }
+  async function resetLcrPassphrase(id) {
+    const pass = await issueCredential(id);
+    logAudit(id, 'HQ reset the passphrase of <strong>' + id + '</strong>');
+    return pass;
+  }
+  async function setLcrDisabled(id, disabled) {
+    const ok = await GeamsSync.mergeShared('registry:stations', {}, (m) => { m = m || {}; if (m[id]) m[id].disabled = !!disabled; return m; });
+    if (!ok) throw new Error('Not saved. Sign in to HQ again and retry.');
+    const st = stations.find(x => x.id === id); if (st) st.disabled = !!disabled;
+    logAudit(id, 'HQ ' + (disabled ? 'disabled' : 're-enabled') + ' <strong>' + id + '</strong>');
   }
 
   function startSimulation() { /* intentionally a no-op: HQ never simulates incidents */ }
@@ -2612,7 +2777,7 @@ const GeamsData = (() => {
     stations, incidents, auditLogs, officerNames, pendingStations,
     getKPIs, get hourlyData(){ return computeHourly(); }, get regionData(){ return computeRegions(); }, get typeData(){ return computeTypes(); }, liveOfficers, officerAlerts, logAudit,
     onUpdate, startSimulation, randomFrom, randomInt,
-    submitStationRegistration, approveStation, rejectStation,
+    submitStationRegistration, approveStation, rejectStation, createLcr, resetLcrPassphrase, setLcrDisabled, REGION_CENTROIDS,
     clearDemoIncidents, startLiveIncidentFeed,
   };
 })();
@@ -4772,7 +4937,7 @@ const GeamsStations = (() => {
         <div class="search-bar" style="flex:1"><span class="search-icon">🔍</span>
           <input type="text" placeholder="Search by ID, name, region..."></div>
         <button class="btn btn-cyan btn-sm" onclick="GeamsApp.syncWatchlist()">🔄 Sync Watchlist</button>
-        <button class="btn btn-primary btn-sm" onclick="GeamsStations.registerStation()">➕ Register Station</button>
+        <button class="btn btn-primary btn-sm" onclick="GeamsStations.registerStation()">➕ Create LCR</button>
         <button class="btn btn-ghost btn-sm" onclick="GeamsApp.showToast('info','Export','Station registry exported')">📤 Export</button>
       </div>
 
@@ -4818,7 +4983,7 @@ const GeamsStations = (() => {
               <tr style="cursor:pointer" onclick="GeamsApp.openStationDetail('${s.id}')">
                 <td><div class="station-indicator ${s.status}" style="margin:auto"></div></td>
                 <td class="td-mono" style="color:var(--cyan);font-size:0.62rem">${s.id}</td>
-                <td style="font-weight:600">${s.name}</td>
+                <td style="font-weight:600">${s.name}${s.hqCreated ? ' <span class="badge badge-resolved" style="font-size:0.55rem">HQ-created</span>' : ''}${s.disabled ? ' <span class="badge badge-critical" style="font-size:0.55rem">DISABLED</span>' : ''}</td>
                 <td class="td-muted">${s.region}</td>
                 <td>${s.locationVerified
                   ? `<span class="badge badge-resolved" title="Confirmed by the station itself (${s.locationSource === 'device-gps' ? 'on-site device GPS' : s.locationSource === 'osm-mapped' ? 'OpenStreetMap-mapped police station' : 'map pin'})">✓ Verified</span>`
@@ -4833,7 +4998,8 @@ const GeamsStations = (() => {
                 <td onclick="event.stopPropagation()">
                   <div style="display:flex;gap:3px">
                     <button class="btn btn-ghost btn-sm" title="Detail" onclick="GeamsApp.openStationDetail('${s.id}')">👁</button>
-                    <button class="btn btn-warning btn-sm" title="Override Dispatch" onclick="GeamsApp.showToast('warning','Override','Dispatch override sent')">⚡</button>
+                    ${s.hqCreated ? `<button class="btn btn-warning btn-sm" title="Reset passphrase" onclick="GeamsStations.resetPassphrase('${s.id}')">🔑</button>
+                    <button class="btn ${s.disabled?'btn-success':'btn-danger'} btn-sm" title="${s.disabled?'Re-enable':'Disable'} this LCR" onclick="GeamsStations.toggleDisabled('${s.id}')">${s.disabled?'▶':'⏸'}</button>` : ''}
                     <button class="btn btn-danger btn-sm" title="Cordon Zone" onclick="GeamsApp.cordonZone('${s.id}')">🔴</button>
                     <button class="btn btn-ghost btn-sm" title="Mobilise Reserves" onclick="GeamsApp.mobiliseReserves('${s.id}')">📣</button>
                   </div>
@@ -4846,9 +5012,11 @@ const GeamsStations = (() => {
   }
 
   function registerStation() {
-    GeamsApp.openModal('Register New Station', `
-      <div class="form-group"><label class="form-label">Country Code</label>
-        <select class="form-select" id="reg-country"><option>GH — Ghana</option><option>NG — Nigeria</option><option>KE — Kenya</option></select></div>
+    _posSource = 'manual';
+    GeamsApp.openModal('➕ Create Local Control Room', `
+      <div style="background:var(--cyan-dim);border:1px solid var(--cyan-border);border-radius:var(--r-md);padding:10px 12px;font-size:0.74rem;color:var(--text-muted);margin-bottom:14px;line-height:1.55">
+        Creates the control room immediately: it gets a Station ID and a one-time passphrase. The LCR then signs in on its own device and works with HQ in real time. Civilians nearby are routed to it from this moment.
+      </div>
       <div class="form-group"><label class="form-label">Region</label>
         <select class="form-select" id="reg-region">
           <option>Greater Accra</option><option>Ashanti</option><option>Western</option><option>Western North</option>
@@ -4857,41 +5025,138 @@ const GeamsStations = (() => {
           <option>Bono</option><option>Bono East</option><option>Ahafo</option>
         </select></div>
       <div class="form-group"><label class="form-label">District / Town</label>
-        <input class="form-input" id="reg-town" placeholder="e.g. Accra"></div>
-      <div class="form-group"><label class="form-label">Station Name</label>
-        <input class="form-input" id="reg-name" placeholder="e.g. Accra Central Police Station"></div>
-      <div class="form-group"><label class="form-label">Commanding Officer</label>
-        <input class="form-input" id="reg-commander" placeholder="Full name and rank"></div>
-      <div class="form-group"><label class="form-label">GPS Coordinates</label>
-        <input class="form-input" id="reg-gps" placeholder="Lat, Lng (auto-detected on install)"></div>
-      <div class="form-group"><label class="form-label">HQ Authorization Code</label>
-        <input type="password" class="form-input" id="reg-code" placeholder="Required to submit for review"></div>
-      <div style="background:var(--cyan-dim);border:1px solid var(--cyan-border);border-radius:var(--r-md);padding:10px 12px;font-size:0.72rem;color:var(--text-muted)">
-        ℹ️ Submitting moves this station into the <strong>Pending Approvals</strong> queue. The final Station ID is generated only once HQ approves — at that point the station integrates live: it appears on the national map, station registry, and KPIs, and can begin two-way communication with HQ.
-      </div>`,
+        <input class="form-input" id="reg-town" placeholder="e.g. Nkawkaw"></div>
+      <div class="form-group"><label class="form-label">Control Room Name</label>
+        <input class="form-input" id="reg-name" placeholder="e.g. Nkawkaw Local Control Room"></div>
+      <div class="form-group"><label class="form-label">Address / landmark</label>
+        <input class="form-input" id="reg-address" placeholder="e.g. Next to Nkawkaw Police Station"></div>
+      <div style="border:1px solid var(--border-base);border-radius:var(--r-md);padding:12px;margin-bottom:12px;background:var(--bg-deep)">
+        <div style="font-family:var(--font-mono);font-size:.6rem;letter-spacing:1.5px;color:var(--text-muted);margin-bottom:8px">EXACT POSITION (use any one)</div>
+        <div class="form-group" style="margin-bottom:8px"><label class="form-label">Ghana Post GPS address</label>
+          <div style="display:flex;gap:6px"><input class="form-input" id="reg-gpgps" placeholder="e.g. EK-039-5028" autocapitalize="characters" style="flex:1">
+          <button class="btn btn-cyan btn-sm" type="button" onclick="GeamsStations.lookupGhanaPost()">Find</button></div></div>
+        <div class="form-group" style="margin-bottom:8px"><label class="form-label">Search a place or landmark</label>
+          <div style="display:flex;gap:6px"><input class="form-input" id="reg-search" placeholder="e.g. Nkawkaw Police Station" style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();GeamsStations.searchPlace()}">
+          <button class="btn btn-ghost btn-sm" type="button" onclick="GeamsStations.searchPlace()">Search</button></div>
+          <div id="reg-results"></div></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <div class="form-group" style="margin-bottom:6px"><label class="form-label">Latitude</label><input class="form-input" id="reg-lat" placeholder="6.5500" inputmode="decimal" onpaste="setTimeout(GeamsStations.splitPasted,0)"></div>
+          <div class="form-group" style="margin-bottom:6px"><label class="form-label">Longitude</label><input class="form-input" id="reg-lng" placeholder="-0.7700" inputmode="decimal"></div>
+        </div>
+        <button class="btn btn-ghost btn-sm" type="button" onclick="GeamsStations.useMyLocation()">📍 Use this device's location (best if you are at the site)</button>
+        <div id="reg-source" style="font-size:.68rem;color:var(--text-muted);margin-top:8px;line-height:1.5">You can paste "6.5520, -0.7760" (as shown in the GhanaPostGPS app) into Latitude and it splits itself.</div>
+      </div>
+      <div class="form-group"><label class="form-label">Jurisdiction radius</label>
+        <select class="form-select" id="reg-radius"><option value="2000">2 km</option><option value="3000" selected>3 km</option><option value="5000">5 km</option><option value="8000">8 km</option><option value="12000">12 km</option></select></div>
+      <div style="font-size:0.68rem;color:var(--text-muted);line-height:1.5">If no position is set, the region centre is used as an estimate. Whatever you choose here, the control room can confirm its exact position on site after signing in (Settings → Verify Station Location), and that confirmed position wins. Where it overlaps another LCR, the boundary is split automatically.</div>`,
       `<button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal()">Cancel</button>
-       <button class="btn btn-primary btn-sm" onclick="GeamsStations.submitRegistration()">Submit for HQ Review</button>`);
+       <button class="btn btn-primary btn-sm" id="reg-submit" onclick="GeamsStations.submitRegistration()">Create LCR &amp; issue credentials</button>`);
   }
 
-  function submitRegistration() {
-    const code = document.getElementById('reg-code');
-    if (!code || code.value.trim().length < 4) {
-      GeamsApp.showToast('error','Auth Failed','Enter a valid HQ authorization code'); return;
-    }
+  let _posSource = 'manual';
+  function setSource(src, text) { _posSource = src; const e = document.getElementById('reg-source'); if (e) e.textContent = text; }
+  function setLatLng(lat, lng) { document.getElementById('reg-lat').value = (+lat).toFixed(5); document.getElementById('reg-lng').value = (+lng).toFixed(5); }
+  function splitPasted() {
+    const a = document.getElementById('reg-lat'); if (!a) return;
+    const m = /^\s*(-?\d+(?:\.\d+)?)\s*[,;\s]\s*(-?\d+(?:\.\d+)?)\s*$/.exec(a.value);
+    if (m) { setLatLng(m[1], m[2]); setSource('ghanapost-app', 'Coordinates pasted from the GhanaPostGPS app or a map.'); }
+  }
+  async function lookupGhanaPost() {
+    const raw = (document.getElementById('reg-gpgps').value || '').toUpperCase().replace(/\s+/g, '');
+    if (!/^[A-Z]{2,3}-?\d{3,4}-?\d{4}$/.test(raw)) { GeamsApp.showToast('error','Not a Ghana Post GPS address','Use the form AK-039-5028'); return; }
+    setSource('manual', 'Looking up ' + raw + '…');
+    try {
+      const r = await HqAuth.api('/api/ghanapost/resolve', { method: 'POST', body: JSON.stringify({ address: raw }) });
+      if (r.ok) { setLatLng(r.j.lat, r.j.lng); setSource('ghanapost', '✓ Position from Ghana Post GPS address ' + r.j.address + '. Check it on the map before relying on it.'); GeamsApp.showToast('success','Position found', r.j.address); return; }
+      if (r.status === 501) setSource('manual', 'The Ghana Post GPS lookup is not set up on this server (needs a lookup service configured). Ask the person at the site to open the GhanaPostGPS app, then copy the coordinates it shows for ' + raw + ' and paste them in Latitude. The address is saved with the LCR either way.');
+      else setSource('manual', '⚠ ' + (r.j.error || 'Lookup failed') + ' You can paste the coordinates from the GhanaPostGPS app instead.');
+    } catch (e) { setSource('manual', '⚠ Could not reach the server for the lookup.'); }
+  }
+  async function searchPlace() {
+    const q = (document.getElementById('reg-search').value || '').trim(), box = document.getElementById('reg-results');
+    if (q.length < 3) { GeamsApp.showToast('warning','Too short','Type at least 3 letters'); return; }
+    box.innerHTML = '<div style="font-size:.7rem;color:var(--text-muted);margin-top:6px">Searching…</div>';
+    try {
+      const r = await fetch('https://photon.komoot.io/api/?limit=6&lang=en&bbox=-3.4,4.6,1.3,11.3&q=' + encodeURIComponent(q + ' Ghana'));
+      const j = await r.json(); const fs = (j.features || []).filter(x => x.geometry && x.geometry.coordinates);
+      if (!fs.length) { box.innerHTML = '<div style="font-size:.7rem;color:var(--text-muted);margin-top:6px">No match. Try a nearby town or landmark.</div>'; return; }
+      window._regHits = fs;
+      box.innerHTML = fs.map((x, i) => { const p = x.properties || {}; const nm = [p.name, p.street, p.district || p.city || p.county, p.state].filter(Boolean).join(', ');
+        return `<div style="font-size:.74rem;padding:6px 8px;margin-top:4px;background:var(--bg-raised);border-radius:var(--r-sm);cursor:pointer" onclick="GeamsStations.pickPlace(${i})">📍 ${nm.replace(/</g,'&lt;')}</div>`; }).join('');
+    } catch (e) { box.innerHTML = '<div style="font-size:.7rem;color:var(--red);margin-top:6px">Place search is unavailable right now.</div>'; }
+  }
+  function pickPlace(i) {
+    const x = (window._regHits || [])[i]; if (!x) return;
+    const [lng, lat] = x.geometry.coordinates; setLatLng(lat, lng);
+    setSource('osm-search', 'Position from an OpenStreetMap place search: good to within a few hundred metres at best. The LCR should confirm the exact spot on site.');
+    document.getElementById('reg-results').innerHTML = '';
+  }
+
+  function useMyLocation() {
+    if (!navigator.geolocation) { GeamsApp.showToast('error','Unavailable','This device cannot report its location'); return; }
+    navigator.geolocation.getCurrentPosition(p => {
+      document.getElementById('reg-lat').value = p.coords.latitude.toFixed(5);
+      document.getElementById('reg-lng').value = p.coords.longitude.toFixed(5);
+      setSource('device-gps', '✓ Position from this device\'s GPS (accuracy about ' + Math.round(p.coords.accuracy) + ' m). Only accurate if this device is at the control room.');
+      GeamsApp.showToast('success','Location set','Using this device\'s position (accuracy ' + Math.round(p.coords.accuracy) + ' m)');
+    }, e => GeamsApp.showToast('error','Location failed', e.code === 1 ? 'Permission denied' : 'Position unavailable'), { timeout: 8000, enableHighAccuracy: true });
+  }
+
+  async function submitRegistration() {
     const name = document.getElementById('reg-name').value.trim();
     const town = document.getElementById('reg-town').value.trim();
-    const commander = document.getElementById('reg-commander').value.trim();
-    if (!name || !town || !commander) {
-      GeamsApp.showToast('error','Missing Details','Station name, town, and commander are required'); return;
+    const region = document.getElementById('reg-region').value;
+    if (!name || !town) { GeamsApp.showToast('error','Missing details','Control room name and town are required'); return; }
+    let lat = parseFloat(document.getElementById('reg-lat').value), lng = parseFloat(document.getElementById('reg-lng').value), estimated = false;
+    if (isNaN(lat) || isNaN(lng)) {
+      const c = GeamsData.REGION_CENTROIDS[region] || [7.9, -1.0]; lat = c[0]; lng = c[1]; estimated = true; _posSource = 'region-centre';
+    } else if (lat < 4 || lat > 11.5 || lng < -3.5 || lng > 1.5) { GeamsApp.showToast('error','Outside Ghana','Check the coordinates'); return; }
+    const btn = document.getElementById('reg-submit'); if (btn) { btn.disabled = true; btn.textContent = 'Creating…'; }
+    try {
+      const out = await GeamsData.createLcr({ name, town, region, address: document.getElementById('reg-address').value.trim(), lat, lng, radiusM: parseInt(document.getElementById('reg-radius').value, 10), estimated: estimated || _posSource === 'osm-search', source: _posSource, ghanaPost: (document.getElementById('reg-gpgps').value || '').toUpperCase().replace(/\s+/g, '') });
+      showCredentials(out.rec, out.passphrase, 'New control room created');
+    } catch (e) {
+      GeamsApp.showToast('error','Could not create', e.message || 'Try again');
+      if (btn) { btn.disabled = false; btn.textContent = 'Create LCR & issue credentials'; }
     }
-    const form = {
-      name, town, commander,
-      region: document.getElementById('reg-region').value,
-      gps: document.getElementById('reg-gps').value.trim(),
-    };
-    const entry = GeamsData.submitStationRegistration(form);
-    GeamsApp.closeModal();
-    GeamsApp.showToast('success','Registration Submitted', `${entry.name} queued for HQ review — ${entry.pendingId}`);
+    render();
+  }
+
+  function showCredentials(rec, pass, title) {
+    GeamsApp.openModal('🔑 ' + title, `
+      <div style="background:var(--orange-dim);border:1px solid var(--orange-border);border-radius:var(--r-md);padding:10px 12px;font-size:0.74rem;color:var(--text-base);margin-bottom:14px;line-height:1.55">
+        <strong>Copy these now.</strong> The passphrase is shown only once and is not stored in readable form. If it is lost, use <em>Reset passphrase</em> to issue a new one.
+      </div>
+      <div class="info-row"><div class="info-icon">🏛</div><div><div class="info-key">Control room</div><div class="info-val">${rec.name} · ${rec.town}, ${rec.region}${rec.ghanaPostAddress ? ' · Ghana Post GPS ' + rec.ghanaPostAddress : ''}</div></div></div>
+      <div class="info-row"><div class="info-icon">🏷</div><div><div class="info-key">Station ID</div><div class="info-val td-mono" id="cred-id" style="user-select:all">${rec.id}</div></div></div>
+      <div class="info-row"><div class="info-icon">🔐</div><div><div class="info-key">Passphrase</div><div class="info-val td-mono" id="cred-pass" style="user-select:all;font-size:1.05rem;letter-spacing:1px">${pass}</div></div></div>
+      <div style="font-size:0.72rem;color:var(--text-muted);margin-top:10px;line-height:1.6">
+        The LCR opens the Station Dashboard, enters this Station ID and passphrase, then adds the commander's name. It connects to HQ at once. Pass the credentials by a trusted route (in person or a call), not by open chat.
+      </div>`,
+      `<button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal()">Done</button>
+       <button class="btn btn-primary btn-sm" onclick="GeamsStations.copyCredentials()">📋 Copy ID &amp; passphrase</button>`);
+    _lastCred = { id: rec.id, name: rec.name, pass };
+  }
+  let _lastCred = null;
+  function copyCredentials() {
+    if (!_lastCred) return;
+    const t = 'GEAMS Local Control Room\n' + _lastCred.name + '\nStation ID: ' + _lastCred.id + '\nPassphrase: ' + _lastCred.pass;
+    (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(
+      () => GeamsApp.showToast('success','Copied','Credentials copied to the clipboard'),
+      () => GeamsApp.showToast('warning','Copy manually','Select the Station ID and passphrase above'));
+  }
+  async function resetPassphrase(id) {
+    const st = GeamsData.stations.find(x => x.id === id); if (!st) return;
+    if (!confirm('Reset the passphrase for "' + st.name + '"?\n\nThe old passphrase stops working for new sign-ins.')) return;
+    try { const pass = await GeamsData.resetLcrPassphrase(id); showCredentials(st, pass, 'New passphrase issued'); }
+    catch (e) { GeamsApp.showToast('error','Reset failed', e.message || ''); }
+  }
+  async function toggleDisabled(id) {
+    const st = GeamsData.stations.find(x => x.id === id); if (!st) return;
+    const dis = !st.disabled;
+    if (!confirm((dis ? 'Disable' : 'Re-enable') + ' "' + st.name + '"?' + (dis ? '\n\nIt can no longer sign in, and a signed-in session is closed. Civilians are no longer routed to it.' : ''))) return;
+    try { await GeamsData.setLcrDisabled(id, dis); } catch (e) { GeamsApp.showToast('error','Not changed', e.message || ''); return; }
+    GeamsApp.showToast(dis ? 'warning' : 'success', dis ? 'LCR disabled' : 'LCR re-enabled', st.name);
     render();
   }
 
@@ -4930,7 +5195,7 @@ const GeamsStations = (() => {
     render();
   }
 
-  return { render, registerStation, submitRegistration, viewPending, approveStation, rejectStation };
+  return { render, registerStation, submitRegistration, useMyLocation, lookupGhanaPost, searchPlace, pickPlace, splitPasted, copyCredentials, resetPassphrase, toggleDisabled, viewPending, approveStation, rejectStation };
 })();
 
 
@@ -5267,16 +5532,16 @@ const GeamsTactical = (() => {
     const id = 'TAC-' + Date.now().toString(36) + Math.random().toString(36).slice(2,5);
     const rec = { id, type:o.type, name:o.name, detail:o.detail||'', station:o.station||'all', stationName:o.stationName||'All stations',
       stations: Array.isArray(o.stations) ? o.stations : undefined,
-      by:'HQ Command', status:'active', createdAt:Date.now() };
+      by:(typeof HqAuth !== 'undefined' ? HqAuth.user() : 'HQ'), status:'active', createdAt:Date.now() };
     ops[id] = rec;
-    GeamsSync.mergeShared(OPS_KEY, {}, m => { m = m || {}; m[id] = rec; return m; });
+    GeamsSync.mergeShared(OPS_KEY, {}, m => { m = m || {}; m[id] = rec; return m; }).then(ok => { if (ok === false) GeamsApp.showToast('error','Not sent to stations','Sign in to HQ again, then reissue this order'); });
     try { GeamsData.logAudit('HQ', '<strong>' + esc(TYPE[o.type] || o.type) + '</strong> issued — ' + esc(o.name)); } catch (e) {}
     refresh();
   }
   function lift(id) {
     const o = ops[id]; if (!o) return;
     o.status = 'lifted'; o.liftedAt = Date.now();
-    GeamsSync.mergeShared(OPS_KEY, {}, m => { m = m || {}; if (m[id]) { m[id].status = 'lifted'; m[id].liftedAt = Date.now(); } return m; });
+    GeamsSync.mergeShared(OPS_KEY, {}, m => { m = m || {}; if (m[id]) { m[id].status = 'lifted'; m[id].liftedAt = Date.now(); } return m; }).then(ok => { if (ok === false) GeamsApp.showToast('error','Not lifted for stations','Sign in to HQ again, then lift it again'); });
     try { GeamsData.logAudit('HQ', '<strong>' + esc(TYPE[o.type] || o.type) + '</strong> lifted — ' + esc(o.name)); } catch (e) {}
     GeamsApp.showToast('success','Lifted', 'Operation lifted and stations notified');
     refresh();
@@ -5511,7 +5776,63 @@ const GeamsSysHealth = (() => {
 
   return { render };
 })();
-document.addEventListener('DOMContentLoaded', () => { GeamsApp.boot(); });
+/* boot is started by HqAuth.gate() once the operator has signed in */
+</script>
+<script>
+/* ── GeamsWake: keep the screen on while GEAMS is open ──
+   Uses the Screen Wake Lock API (Chrome, Edge, Android, Safari 16.4+). Where it
+   is missing or refused, a tiny muted looping video keeps most phones awake.
+   Limits: the page must be visible and in the foreground, the browser needs a
+   secure (https) page, and battery-saver modes or an OS policy can still dim
+   the screen. A packaged Android/iOS app can hold a stronger lock. */
+(function () {
+  var lock = null, video = null, active = false, pill = null, gestured = false, method = 'none';
+  function setPill(show) {
+    try {
+      if (!show) { if (pill) { pill.remove(); pill = null; } return; }
+      if (pill) return;
+      pill = document.createElement('div');
+      pill.textContent = '⚠ Screen may go to sleep — tap here to keep it awake';
+      pill.style.cssText = 'position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom,0px) + 70px);transform:translateX(-50%);z-index:2147483000;background:#7c2d12;color:#fff;font:600 12px/1.3 system-ui,sans-serif;padding:8px 14px;border-radius:18px;box-shadow:0 4px 16px rgba(0,0,0,.4);cursor:pointer;max-width:90vw;text-align:center';
+      pill.onclick = function () { gestured = true; acquire(true); };
+      (document.body || document.documentElement).appendChild(pill);
+    } catch (e) {}
+  }
+  function startVideo() {
+    try {
+      if (video) { if (video.paused) video.play().catch(function () {}); return; }
+      video = document.createElement('video');
+      video.setAttribute('playsinline', ''); video.setAttribute('muted', ''); video.muted = true; video.loop = true;
+      video.style.cssText = 'position:fixed;width:1px;height:1px;opacity:.01;pointer-events:none;left:0;top:0';
+      var m = document.createElement('source'); m.src = 'data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAMsbW9vdgAAAGxtdmhkAAAAAAAAAAAAAAAAAAAD6AAAA+gAAQAAAQAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAlZ0cmFrAAAAXHRraGQAAAADAAAAAAAAAAAAAAABAAAAAAAAA+gAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAAAEAAAABAAAAAAAAkZWR0cwAAABxlbHN0AAAAAAAAAAEAAAPoAAAAAAABAAAAAAHObWRpYQAAACBtZGhkAAAAAAAAAAAAAAAAAABAAAAAQABVxAAAAAAALWhkbHIAAAAAAAAAAHZpZGUAAAAAAAAAAAAAAABWaWRlb0hhbmRsZXIAAAABeW1pbmYAAAAUdm1oZAAAAAEAAAAAAAAAAAAAACRkaW5mAAAAHGRyZWYAAAAAAAAAAQAAAAx1cmwgAAAAAQAAATlzdGJsAAAAuXN0c2QAAAAAAAAAAQAAAKlhdmMxAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAEAAQABIAAAASAAAAAAAAAABFUxhdmM2MC4zMS4xMDIgbGlieDI2NAAAAAAAAAAAAAAAGP//AAAAL2F2Y0MBQsAK/+EAF2dCwArZBCbARAAAAwAEAAADABA8SJkgAQAFaMuDyyAAAAAQcGFzcAAAAAEAAAABAAAAFGJ0cnQAAAAAAAAUyAAAFMgAAAAYc3R0cwAAAAAAAAABAAAAAgAAIAAAAAAUc3RzcwAAAAAAAAABAAAAAQAAABxzdHNjAAAAAAAAAAEAAAABAAAAAgAAAAEAAAAcc3RzegAAAAAAAAAAAAAAAgAAAo8AAAAKAAAAFHN0Y28AAAAAAAAAAQAAA1wAAABidWR0YQAAAFptZXRhAAAAAAAAACFoZGxyAAAAAAAAAABtZGlyYXBwbAAAAAAAAAAAAAAAAC1pbHN0AAAAJal0b28AAAAdZGF0YQAAAAEAAAAATGF2ZjYwLjE2LjEwMAAAAAhmcmVlAAACoW1kYXQAAAJwBgX//2zcRem95tlIt5Ys2CDZI+7veDI2NCAtIGNvcmUgMTY0IHIzMTA4IDMxZTE5ZjkgLSBILjI2NC9NUEVHLTQgQVZDIGNvZGVjIC0gQ29weWxlZnQgMjAwMy0yMDIzIC0gaHR0cDovL3d3dy52aWRlb2xhbi5vcmcveDI2NC5odG1sIC0gb3B0aW9uczogY2FiYWM9MCByZWY9MyBkZWJsb2NrPTE6MDowIGFuYWx5c2U9MHgxOjB4MTExIG1lPWhleCBzdWJtZT03IHBzeT0xIHBzeV9yZD0xLjAwOjAuMDAgbWl4ZWRfcmVmPTEgbWVfcmFuZ2U9MTYgY2hyb21hX21lPTEgdHJlbGxpcz0xIDh4OGRjdD0wIGNxbT0wIGRlYWR6b25lPTIxLDExIGZhc3RfcHNraXA9MSBjaHJvbWFfcXBfb2Zmc2V0PS0yIHRocmVhZHM9MiBsb29rYWhlYWRfdGhyZWFkcz0xIHNsaWNlZF90aHJlYWRzPTAgbnI9MCBkZWNpbWF0ZT0xIGludGVybGFjZWQ9MCBibHVyYXlfY29tcGF0PTAgY29uc3RyYWluZWRfaW50cmE9MCBiZnJhbWVzPTAgd2VpZ2h0cD0wIGtleWludD0yNTAga2V5aW50X21pbj0yIHNjZW5lY3V0PTQwIGludHJhX3JlZnJlc2g9MCByY19sb29rYWhlYWQ9NDAgcmM9Y3JmIG1idHJlZT0xIGNyZj0yMy4wIHFjb21wPTAuNjAgcXBtaW49MCBxcG1heD02OSBxcHN0ZXA9NCBpcF9yYXRpbz0xLjQwIGFxPTE6MS4wMACAAAAAF2WIhAU8mKAAP78nJyddddddddddddeAAAAABkGaOAl4Rg=='; m.type = 'video/mp4';
+      var w = document.createElement('source'); w.src = 'data:video/webm;base64,GkXfo59ChoEBQveBAULygQRC84EIQoKEd2VibUKHgQJChYECGFOAZwEAAAAAAAIBEU2bdLpNu4tTq4QVSalmU6yBoU27i1OrhBZUrmtTrIHYTbuMU6uEElTDZ1OsggEeTbuMU6uEHFO7a1OsggHr7AEAAAAAAABZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVSalmsirXsYMPQkBNgI1MYXZmNjAuMTYuMTAwV0GNTGF2ZjYwLjE2LjEwMESJiECPQAAAAAAAFlSua8GuAQAAAAAAADjXgQFzxYi1oOiGEdyKXZyBACK1nIN1bmSIgQCGhVZfVlA4g4EBI+ODhB3NZQDgibCBQLqBQJqBAhJUw2f8c3OgY8CAZ8iaRaOHRU5DT0RFUkSHjUxhdmY2MC4xNi4xMDBzc9ZjwItjxYi1oOiGEdyKXWfIoUWjh0VOQ09ERVJEh5RMYXZjNjAuMzEuMTAyIGxpYnZweGfIoUWjiERVUkFUSU9ORIeTMDA6MDA6MDEuMDAwMDAwMDAwAB9DtnXH54EAo6qBAACA8AIAnQEqQABAAABHCIWFiIWEiAICAAZwPEJgCrIg9zAA/v+rUICjloEB9ADRAQABEBAAGAAYWC/0AAiOgAAcU7trkbuPs4EAt4r3gQHxggGf8IED'; w.type = 'video/webm';
+      video.appendChild(m); video.appendChild(w);
+      (document.body || document.documentElement).appendChild(video);
+      video.play().then(function () { active = true; method = 'video'; setPill(false); }).catch(function () { active = false; setPill(true); });
+    } catch (e) { setPill(true); }
+  }
+  async function acquire(fromGesture) {
+    if (document.visibilityState !== 'visible') return;
+    if ('wakeLock' in navigator) {
+      try {
+        if (lock && !lock.released) { active = true; return; }
+        lock = await navigator.wakeLock.request('screen');
+        active = true; method = 'wakeLock'; setPill(false);
+        lock.addEventListener('release', function () { active = false; });
+        return;
+      } catch (e) { /* not allowed now (needs gesture, https or battery saver): fall through */ }
+    }
+    if (gestured || fromGesture) startVideo(); else setPill(true);
+  }
+  function onGesture() { gestured = true; acquire(true); }
+  ['pointerdown', 'touchstart', 'keydown', 'click'].forEach(function (ev) { document.addEventListener(ev, onGesture, { passive: true }); });
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') acquire(); });
+  window.addEventListener('pageshow', function () { acquire(); });
+  window.addEventListener('focus', function () { acquire(); });
+  setInterval(function () { if (!active) acquire(); }, 20000);
+  window.GeamsWake = { status: function () { return { active: active, method: method, supported: 'wakeLock' in navigator }; }, retry: function () { return acquire(true); } };
+  acquire();
+})();
 </script>
 </body>
 </html>
