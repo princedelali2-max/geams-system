@@ -885,12 +885,21 @@ const GeamsSync = (() => {
     try { const k = '__geams_probe__'; localStorage.setItem(k,'1'); localStorage.removeItem(k); return true; }
     catch (e) { return false; }
   }
+  // ── sign-in token: issued by the GEAMS server at login, sent with every request ──
+  let tokenMem = null; const authCbs = new Set();
+  function authToken() { try { return sessionStorage.getItem('geams_token') || sessionStorage.getItem('geams_hq_token') || tokenMem; } catch (e) { return tokenMem; } }
+  function setToken(t) { tokenMem = t || null; try { if (t) sessionStorage.setItem('geams_token', t); else { sessionStorage.removeItem('geams_token'); sessionStorage.removeItem('geams_hq_token'); } } catch (e) {} }
+  function onAuthLost(cb) { authCbs.add(cb); return () => authCbs.delete(cb); }
   async function http(path, opts, ms) {
     const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
     const t = ctl ? setTimeout(() => ctl.abort(), ms || 6000) : null;
     try {
+      const tk = authToken();
+      if (tk && !(opts && opts.headers && opts.headers.Authorization)) opts = Object.assign({}, opts, { headers: Object.assign({}, opts && opts.headers, { Authorization: 'Bearer ' + tk }) });
       const r = await fetch(base + path, Object.assign({ cache: 'no-store', signal: ctl && ctl.signal }, opts || {}));
-      online = true; return r;
+      online = true;
+      if (r.status === 401 && tk && path.indexOf('/api/kv/') === 0) { authCbs.forEach(cb => { try { cb(); } catch (e) {} }); }
+      return r;
     } catch (e) { online = false; throw e; }
     finally { if (t) clearTimeout(t); }
   }
@@ -1029,7 +1038,7 @@ const GeamsSync = (() => {
     try { if (url) localStorage.setItem('geams_backend', url.replace(/\/+$/, '')); else localStorage.removeItem('geams_backend'); } catch (e) {}
     location.reload();
   }
-  return { available, getShared, setShared, mergeShared, watch, ready, onStatus, setBackend, deviceId,
+  return { available, getShared, setShared, mergeShared, watch, ready, onStatus, setBackend, deviceId, setToken, onAuthLost, get token(){ return authToken(); },
            get mode(){ return mode; }, get base(){ return base; }, get online(){ return online; }, get devices(){ return status.devices; }, get deviceApps(){ return status.byApp; } };
 })();
 
@@ -1336,7 +1345,7 @@ const GeamsArchive = (() => {
   const rid = () => Math.random().toString(36).slice(2, 9);
   const enc = encodeURIComponent;
 
-  function serverMode() { return GeamsSync.mode === 'server'; }
+  function serverMode() { return GeamsSync.mode === 'server' || /^https?:$/.test(location.protocol); }   // served by a GEAMS server: files can wait on the phone until it is reachable
   function blobUrl(inc, name, dl) { return (GeamsSync.base || '') + '/api/blob/' + enc(inc) + '/' + enc(name) + (dl ? '?dl=1' : ''); }
 
   // ── events (batched so many small writes become one) ──
@@ -1363,11 +1372,54 @@ const GeamsArchive = (() => {
   }
 
   // ── files & recordings ──
-  function addManifest(inc, entry) {
-    return GeamsSync.mergeShared(mediaKey(inc), [], arr => { arr = Array.isArray(arr) ? arr : []; const i = arr.findIndex(x => x.id === entry.id); if (i >= 0) arr[i] = Object.assign(arr[i], entry); else arr.push(entry); return arr; });
+  // ── Evidence queue: files taken with no signal wait on the phone (in its own database) and upload, in order, when signal returns ──
+  const EvQueue = (() => {
+    let dbp = null, mem = [], timer = null, busy = false;
+    const db = () => dbp || (dbp = new Promise((res, rej) => { try { const r = indexedDB.open('geams-evq', 1); r.onupgradeneeded = () => r.result.createObjectStore('q', { autoIncrement: true }); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); } catch (e) { rej(e); } }));
+    const tx = async (mode, fn) => { const d = await db(); return new Promise((res, rej) => { const t = d.transaction('q', mode), st = t.objectStore('q'), out = fn(st); t.oncomplete = () => res(out && out.result !== undefined ? out.result : undefined); t.onerror = () => rej(t.error); }); };
+    async function add(item) { try { await tx('readwrite', st => st.add(item)); } catch (e) { mem.push(item); } paint(); schedule(); }
+    async function all() { const rows = []; try { await new Promise(async (res, rej) => { const d = await db(), t = d.transaction('q', 'readonly'), c = t.objectStore('q').openCursor(); c.onsuccess = () => { const cur = c.result; if (cur) { rows.push({ k: cur.key, v: cur.value }); cur.continue(); } }; t.oncomplete = res; t.onerror = () => rej(t.error); }); } catch (e) {} return rows.concat(mem.map((v, i) => ({ k: 'm' + i, v }))); }
+    async function drop(k) { if (typeof k === 'string' && k[0] === 'm') { mem.splice(+k.slice(1), 1); return; } try { await tx('readwrite', st => st.delete(k)); } catch (e) {} }
+    async function pending(inc, name) { return (await all()).some(r => r.v.inc === inc && r.v.name === name); }
+    function paint() {
+      all().then(rows => {
+        let el = document.getElementById('ev-queue');
+        if (!rows.length) { if (el) el.remove(); return; }
+        if (!el) { el = document.createElement('div'); el.id = 'ev-queue'; el.style.cssText = 'position:fixed;left:58px;bottom:90px;z-index:2147482400;background:#1e3a8a;border:1px solid #60a5fa;color:#fff;border-radius:10px;padding:6px 10px;font:0.72rem system-ui,sans-serif'; document.body.appendChild(el); }
+        el.textContent = '📎 ' + rows.length + ' evidence file' + (rows.length === 1 ? '' : 's') + ' saved on this phone, waiting to upload';
+      });
+    }
+    async function flush() {
+      if (busy) return; busy = true;
+      try {
+        const rows = await all();
+        for (const r of rows) {
+          const it = r.v;
+          if (it.manifest) { const ok = await GeamsSync.mergeShared('archive:' + it.inc + ':media', [], arr => { arr = Array.isArray(arr) ? arr : []; const i = arr.findIndex(x => x.id === it.manifest.id); if (i >= 0) arr[i] = Object.assign(arr[i], it.manifest); else arr.push(it.manifest); return arr; }); if (ok === true && GeamsSync.mode === 'server') { await drop(r.k); continue; } break; }
+          let res; try { res = await fetch((GeamsSync.base || '') + '/api/blob/' + encodeURIComponent(it.inc) + '/' + encodeURIComponent(it.name) + (it.append ? '?append=1' : ''), { method: 'PUT', headers: { ...(GeamsSync.token ? { Authorization: 'Bearer ' + GeamsSync.token } : {}), 'X-Geams-Device': String(GeamsSync.deviceId || ''), 'Content-Type': it.type || 'application/octet-stream' }, body: it.blob }); } catch (e) { break; }
+          if (res.ok) { await drop(r.k); continue; }
+          if (res.status === 401 || res.status === 429 || res.status >= 500) break;     // try again later
+          await drop(r.k);                                                                  // refused for good (for example sealed): do not retry forever
+        }
+      } finally { busy = false; paint(); }
+    }
+    function schedule() { if (!timer) timer = setInterval(async () => { await flush(); if (!(await all()).length) { clearInterval(timer); timer = null; } }, 8000); }
+    if (typeof window !== 'undefined') { window.addEventListener('online', () => flush()); setTimeout(async () => { if ((await all()).length) { paint(); flush(); schedule(); } }, 2000); }
+    return { add, flush, pending, count: async () => (await all()).length };
+  })();
+  async function addManifest(inc, entry) {
+    const ok = GeamsSync.mode === 'server' ? await GeamsSync.mergeShared(mediaKey(inc), [], arr => { arr = Array.isArray(arr) ? arr : []; const i = arr.findIndex(x => x.id === entry.id); if (i >= 0) arr[i] = Object.assign(arr[i], entry); else arr.push(entry); return arr; }) : false;
+    if (ok !== true) await EvQueue.add({ inc, manifest: entry });
+    return ok === true;
   }
   async function putBlob(inc, name, body, type, append) {
-    const r = await fetch((GeamsSync.base || '') + '/api/blob/' + enc(inc) + '/' + enc(name) + (append ? '?append=1' : ''), { method: 'PUT', headers: { 'Content-Type': type || 'application/octet-stream' }, body });
+    // keep order: if earlier pieces of this file are still waiting on the phone, this piece must wait behind them
+    if (await EvQueue.pending(inc, name)) { await EvQueue.add({ inc, name, type: type || 'application/octet-stream', append: !!append, blob: body instanceof Blob ? body : new Blob([body]) }); return { queued: true }; }
+    let r;
+    try {
+      r = await fetch((GeamsSync.base || '') + '/api/blob/' + enc(inc) + '/' + enc(name) + (append ? '?append=1' : ''), { method: 'PUT', headers: { ...(GeamsSync.token ? { Authorization: 'Bearer ' + GeamsSync.token } : {}), 'X-Geams-Device': String(GeamsSync.deviceId || ''), 'Content-Type': type || 'application/octet-stream' }, body });
+    } catch (e) { await EvQueue.add({ inc, name, type: type || 'application/octet-stream', append: !!append, blob: body instanceof Blob ? body : new Blob([body]) }); return { queued: true }; }
+    if (r.status >= 502 && r.status <= 504) { await EvQueue.add({ inc, name, type: type || 'application/octet-stream', append: !!append, blob: body instanceof Blob ? body : new Blob([body]) }); return { queued: true }; }
     if (!r.ok) throw new Error('upload failed ' + r.status);
     return r.json();
   }
@@ -1663,7 +1715,7 @@ const DispatchData=((  )=>{
   // every subsequent incident, GPS position, and map centre is in the right city.
   function setActiveOfficer(cred){
     const lcr=LCR_REGISTRY[cred.lcrId]||LCR_REGISTRY['GH-GA-ACC-001-B9C1'];
-    HOME_CONTROL_ROOM=lcr;
+    HOME_CONTROL_ROOM=lcr; window.__geamsLcrId=cred.lcrId;
     officer.id=cred.officerId; officer.name=cred.name; officer.badge=cred.badge;
     officer.rank=cred.rank||'Officer'; officer.station=lcr.station;
     officer.stationId=lcr.stationId; officer.controlRoomId=lcr.id;
@@ -1892,7 +1944,7 @@ const GeamsDispatchSync = (() => {
     const key = 'lcr:' + DispatchData.syncLcrId(DispatchData.officer.controlRoomId) + ':incidents';
     watchStop = GeamsSync.watch(key, {}, (map) => {
       Object.values(map).forEach(rec => {
-        if (rec.source !== 'civilian-app') return;
+        if (rec.source !== 'civilian-app' && rec.source !== 'sms') return;   // 'sms' = a text message the server turned into an incident; handled like an app alert
         if (rec.officerStatus !== 'assigned') return;                 // not (yet) assigned to anyone
         if (rec.officerName !== DispatchData.officer.name) return;    // assigned to a different officer
         if (injected.has(rec.id)) return;                             // already surfaced
@@ -1903,7 +1955,7 @@ const GeamsDispatchSync = (() => {
           id: rec.id, type: rec.type, priority: rec.priority || 'critical',
           location: rec.location, address: rec.location,
           lat: rec.lat, lng: rec.lng,
-          civilian: rec.civilianName, civilianPhone: rec.civilianPhone, _civilianId: rec.civilianId || null,
+          civilian: rec.civilianName, civilianPhone: rec.civilianPhone, civilianVerified: !!rec.civilianVerified, _civilianId: rec.civilianId || null,
           civilianLat: rec.civilianLat, civilianLng: rec.civilianLng,
           status: 'pending', receivedAt: new Date(),
           controlRoomId: DispatchData.officer.controlRoomId,
@@ -3705,6 +3757,7 @@ const DispatchApp = (() => {
     if(clockTimer){clearInterval(clockTimer);clockTimer=null;}
     stopGPSMovement(); stopCivilianTracking();
     GeamsOfficerSync.goOffDuty(); // safety net — no-op if already off-duty
+    setTimeout(()=>GeamsSync.setToken(null), 2500);
     // Clear simulated session
     try{sessionStorage.removeItem('geams_session');}catch(e){}
     // Destroy map so it doesn't leak into the next session
@@ -3886,6 +3939,16 @@ const DispatchApp = (() => {
   }
   GeamsSync.ready.then(() => { if (GeamsSync.mode === 'server') { GeamsSync.watch(REG_KEY, [], list => { if (Array.isArray(list)) { REGISTERED_CREDENTIALS = mergeLists(list, REGISTERED_CREDENTIALS); cacheRegistered(); } }, 4000); REGISTERED_CREDENTIALS.forEach(publishRegistered); } });
   function saveRegisteredOfficers() { cacheRegistered(); }
+  // Accounts live on the GEAMS server: it checks the password and returns a signed token plus the account record.
+  async function unitCall(path, body) {
+    await GeamsSync.ready;
+    if (GeamsSync.mode !== 'server') throw new Error('Signing in needs the GEAMS server connection, which is not reachable right now');
+    const r = await fetch(GeamsSync.base + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    let j = {}; try { j = await r.json(); } catch (e) {}
+    if (!r.ok) throw new Error(j.error || 'The server refused the request');
+    if (j.token) GeamsSync.setToken(j.token);
+    return j.cred || (j.pending ? { pending: true, message: j.message } : undefined);
+  }
   function allCredentials() { return MOCK_CREDENTIALS.concat(REGISTERED_CREDENTIALS); }
 
   let loginAttempts = 0;
@@ -3900,7 +3963,7 @@ const DispatchApp = (() => {
     document.getElementById('login-form-view').style.display = 'flex';
   }
 
-  function doSignup() {
+  async function doSignup() {
     const name  = (document.getElementById('su-name')?.value || '').trim();
     const rank  = document.getElementById('su-rank')?.value || 'Sergeant';
     const phone = (document.getElementById('su-phone')?.value || '').trim();
@@ -3922,26 +3985,26 @@ const DispatchApp = (() => {
     if (pass !== pass2) { document.getElementById('su-pass2')?.classList.add('error'); document.getElementById('su-err-pass2')?.classList.add('show'); valid = false; }
     if (!valid) return;
 
-    if (allCredentials().some(c => c.phone === phone)) {
-      if (genErr) { genErr.textContent = 'An officer is already registered with this phone number.'; genErr.style.display = 'block'; }
+    const lcr = DispatchData.LCR_REGISTRY[lcrId];
+    const sbtn = document.getElementById('signup-btn');
+    const slabel = sbtn ? sbtn.textContent : '';
+    if (sbtn) { sbtn.disabled = true; sbtn.textContent = 'Creating account…'; }
+    let cred = null;
+    try { cred = await unitCall('/api/unit/signup', { kind: 'officer', cred: { name, rank, lcrId, vehicle, vehicleType: 'Registered Vehicle', phone }, password: pass }); }
+    catch (e) { if (genErr) { genErr.textContent = e.message || 'Could not register'; genErr.style.display = 'block'; } if (sbtn) { sbtn.disabled = false; sbtn.textContent = slabel; } return; }
+    if (cred && cred.pending) {
+      if (sbtn) { sbtn.disabled = false; sbtn.textContent = slabel; }
+      showLoginForm();
+      showToast('success', '⏳ Waiting for approval', cred.message || 'Your control room must approve you before you can sign in.', 9000);
+      const ge = document.getElementById('err-general'); if (ge) { ge.textContent = cred.message || 'Waiting for your control room to approve your account.'; ge.style.display = 'block'; }
       return;
     }
-
-    const lcr = DispatchData.LCR_REGISTRY[lcrId];
-    const badge = 'GH-' + (20000 + Math.floor(Math.random()*79999));
-    const officerId = 'OFF-' + (5000 + Math.floor(Math.random()*4999));
-    const cred = {
-      badge, passHash: hashPass(name, pass), officerId, name,
-      rank, lcrId, vehicle, vehicleType: 'Registered Vehicle', phone,
-    };
-    REGISTERED_CREDENTIALS.push(cred);
-    saveRegisteredOfficers();
-    publishRegistered(cred);
+    REGISTERED_CREDENTIALS.push(cred); saveRegisteredOfficers();
 
     const btn = document.getElementById('signup-btn');
     if (btn) { btn.disabled = true; btn.textContent = 'Creating account…'; }
     setTimeout(() => {
-      showToast('success', '👮 Officer Registered', `Badge ${badge} assigned · ${lcr ? lcr.name : lcrId}`, 5000);
+      showToast('success', '👮 Officer Registered', `Badge ${cred.badge} assigned · ${lcr ? lcr.name : lcrId}`, 5000);
       loginAttempts = 0;
       DispatchData.setActiveOfficer(cred);
       GeamsDispatchSync.start();
@@ -3993,14 +4056,14 @@ const DispatchApp = (() => {
     // Simulate async auth (in prod: fetch('/api/auth', {method:'POST', body:...}))
     if(btn){btn.disabled=true;btn.textContent='Authenticating…';}
     setTimeout(async ()=>{
-      try { await refreshRegistered(); } catch (e) {}
-      const cred = allCredentials().find(c=>c.name.toLowerCase()===name.toLowerCase() && passOk(c, name, pass));
+      let cred = null, why = '';
+      try { cred = await unitCall('/api/unit/login', { kind: 'officer', name, password: pass }); } catch (e) { why = e.message || ''; }
       if(!cred){
         loginAttempts++;
         const remaining = MAX_ATTEMPTS-loginAttempts;
         if(genErr){
           genErr.textContent = remaining>0
-            ? `Invalid name or password. ${remaining} attempt${remaining!==1?'s':''} remaining.`
+            ? (why && !/Invalid name or password/.test(why) ? why : `Invalid name or password. ${remaining} attempt${remaining!==1?'s':''} remaining.`)
             : 'Account locked. Contact IT Support.';
           genErr.style.display='block';
         }
@@ -4450,7 +4513,7 @@ const ScreenJob = (() => {
       </div>
       <div class="job-details">
         <div class="jd-item"><div class="jd-key">Civilian</div><div class="jd-val">${job.civilian}</div></div>
-        <div class="jd-item"><div class="jd-key">Phone</div><div class="jd-val" style="color:var(--cyan);font-size:0.72rem">${job.civilianPhone}</div></div>
+        <div class="jd-item"><div class="jd-key">Phone</div><div class="jd-val" style="color:var(--cyan);font-size:0.72rem">${job.civilianPhone}${job.civilianPhone?(job.civilianVerified?' <span style="color:#22c55e">✓ verified</span>':' <span style="opacity:.7">(unverified)</span>'):''}</div></div>
         <div class="jd-item"><div class="jd-key">Station Contact</div><div class="jd-val">${job.stationContact}</div></div>
         <div class="jd-item"><div class="jd-key">Evidence</div><div class="jd-val">${job.evidenceCount} file${job.evidenceCount!==1?'s':''}</div></div>
         <div class="jd-item" style="grid-column:1/-1">
@@ -4935,4 +4998,104 @@ const ScreenProfile = (() => {
   acquire();
 })();
 </script>
+<script>
+/* ── Public alerts from HQ ──
+ * HQ publishes to the shared key "public:alerts". This device checks it every few seconds while GEAMS is open,
+ * shows a banner for alerts meant for it, vibrates for warning/critical alerts, shows a system notification if the
+ * person allowed it, and leaves a "seen" mark so HQ can count how many devices got the alert.
+ * Limit: it only works while GEAMS is open on the phone. Alerts to closed apps need a web-push service (not set up). */
+const PublicAlerts = (() => {
+  const KEY = 'public:alerts', SEEN = 'geams_pa_seen';
+  let cfg = null, stop = null, lastMap = {}, root = null, audioCtx = null;
+  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const seenSet = () => { try { return JSON.parse(localStorage.getItem(SEEN) || '[]'); } catch (e) { return []; } };
+  const markSeen = (id) => { try { const a = seenSet(); if (!a.includes(id)) { a.push(id); localStorage.setItem(SEEN, JSON.stringify(a.slice(-100))); } } catch (e) {} };
+  const COL = { info: ['#0c4a6e', '#38bdf8', 'ℹ️'], warning: ['#78350f', '#fbbf24', '⚠️'], critical: ['#7f1d1d', '#f87171', '🚨'] };
+  function matches(a) {
+    if (!a || a.status !== 'active' || a.expiresAt < Date.now()) return false;
+    if (!a.audience || !a.audience[cfg.audience]) return false;
+    if (!a.stations || !a.stations.length) return true;
+    let mine = null; try { mine = cfg.stationId && cfg.stationId(); } catch (e) {}
+    return !mine || a.stations.includes(mine);                    // unknown location: show it rather than risk missing it
+  }
+  function ensureRoot() {
+    if (root && document.body.contains(root)) return root;
+    root = document.createElement('div'); root.id = 'public-alerts'; root.setAttribute('role', 'alert'); root.setAttribute('aria-live', 'assertive');
+    root.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:2147483000;display:flex;flex-direction:column;gap:6px;padding:6px;pointer-events:none;max-height:70vh;overflow:auto';
+    document.body.appendChild(root); return root;
+  }
+  function beep() { try { audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); const o = audioCtx.createOscillator(), g = audioCtx.createGain(); o.frequency.value = 880; g.gain.value = 0.15; o.connect(g); g.connect(audioCtx.destination); o.start(); o.stop(audioCtx.currentTime + 0.35); } catch (e) {} }
+  function ack(a) {
+    const dev = String((window.GeamsSync && GeamsSync.deviceId) || 'device');
+    GeamsSync.mergeShared('public:ack:' + a.id, {}, m => { m = m || {}; if (!m[dev]) m[dev] = { t: Date.now() }; return m; }).catch(() => {});
+  }
+  function notify(a) {
+    if (a.severity !== 'info') { try { navigator.vibrate && navigator.vibrate(a.severity === 'critical' ? [400, 150, 400, 150, 800] : [300, 120, 300]); } catch (e) {} }
+    if (a.severity === 'critical') beep();
+    try { if ('Notification' in window && Notification.permission === 'granted') new Notification('GEAMS · ' + a.title, { body: a.message, tag: a.id, requireInteraction: a.severity === 'critical' }); } catch (e) {}
+  }
+  function render() {
+    const list = Object.values(lastMap).filter(matches).filter(a => !seenSet().includes(a.id)).sort((x, y) => y.createdAt - x.createdAt).slice(0, 3);
+    const r = ensureRoot();
+    r.innerHTML = list.map(a => { const c = COL[a.severity] || COL.info;
+      return '<div data-pa="' + esc(a.id) + '" style="pointer-events:auto;background:' + c[0] + ';border:2px solid ' + c[1] + ';color:#fff;border-radius:10px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.5);font-family:system-ui,sans-serif">' +
+        '<div style="display:flex;gap:8px;align-items:center"><span style="font-size:1.2rem">' + c[2] + '</span><b style="flex:1;font-size:0.95rem">' + esc(a.title) + '</b><span style="font-size:0.65rem;opacity:.8">' + new Date(a.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + '</span></div>' +
+        '<div style="margin:6px 0;font-size:0.9rem;line-height:1.4">' + esc(a.message) + '</div>' +
+        '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:0.68rem;opacity:.9"><span>From HQ · ' + esc(a.areaLabel || 'All regions') + '</span><span style="flex:1"></span>' +
+        ('Notification' in window && Notification.permission === 'default' ? '<button data-act="notif" style="background:transparent;border:1px solid #fff8;color:#fff;border-radius:6px;padding:4px 8px">🔔 Allow notifications</button>' : '') +
+        '<button data-act="ok" style="background:' + c[1] + ';border:0;color:#111;font-weight:700;border-radius:6px;padding:5px 12px">Got it</button></div></div>'; }).join('');
+  }
+  function apply(map) {
+    lastMap = map && typeof map === 'object' ? map : {};
+    const fresh = Object.values(lastMap).filter(matches).filter(a => !shown[a.id]);
+    fresh.forEach(a => { shown[a.id] = 1; if (!seenSet().includes(a.id)) { notify(a); } ack(a); });
+    render();
+  }
+  const shown = {};
+  // ── Alerts when GEAMS is closed (web push) ──
+  const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window && /^https?:$/.test(location.protocol);
+  const toKey = (b64) => { const s = (b64 + '='.repeat((4 - b64.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/'), r = atob(s); return Uint8Array.from(r, c => c.charCodeAt(0)); };
+  const toB64u = (u8) => btoa(String.fromCharCode(...u8)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  let lastSync = { st: null, t: 0 };
+  function note(msg, good) {
+    let n = document.getElementById('pa-note'); if (!n) { n = document.createElement('div'); n.id = 'pa-note'; n.style.cssText = 'position:fixed;left:10px;right:10px;bottom:130px;z-index:2147483100;border-radius:10px;padding:10px 12px;font:0.8rem system-ui,sans-serif;color:#fff;box-shadow:0 6px 20px rgba(0,0,0,.5)'; document.body.appendChild(n); }
+    n.style.background = good ? '#14532d' : '#7c2d12'; n.textContent = msg; clearTimeout(n._t); n._t = setTimeout(() => n.remove(), 8000);
+  }
+  async function pushSync() {
+    if (!pushSupported() || Notification.permission !== 'granted' || GeamsSync.mode !== 'server' || !GeamsSync.token) return false;
+    const reg = await navigator.serviceWorker.register('/geams-sw.js'); await navigator.serviceWorker.ready;
+    const key = (await (await fetch(GeamsSync.base + '/api/push/key')).json()).key;
+    let sub = await reg.pushManager.getSubscription();
+    if (sub) { try { const cur = sub.options && sub.options.applicationServerKey; if (cur && toB64u(new Uint8Array(cur)) !== key) { await sub.unsubscribe(); sub = null; } } catch (e) {} }
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: toKey(key) });
+    let st = null; try { st = cfg.stationId && cfg.stationId(); } catch (e) {}
+    const r = await fetch(GeamsSync.base + '/api/push/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + GeamsSync.token }, body: JSON.stringify({ subscription: sub.toJSON(), stationId: st, url: location.pathname }) });
+    if (!r.ok) throw new Error('the server did not accept the registration');
+    lastSync = { st, t: Date.now() }; return true;
+  }
+  async function pushEnable() {
+    if (!pushSupported()) { note('This browser cannot receive alerts while GEAMS is closed. Alerts still show while it is open.'); return; }
+    let p = Notification.permission; if (p !== 'granted') p = await Notification.requestPermission();
+    if (p !== 'granted') { note('Notifications are blocked. Allow them in the browser settings to get alerts when GEAMS is closed.'); bell(); return; }
+    try { await pushSync(); note('✓ You will now get HQ alerts even when GEAMS is closed.', true); }
+    catch (e) { note('Could not switch on closed-app alerts: ' + (e && e.message || e) + '. Alerts still show while GEAMS is open.'); }
+    bell();
+  }
+  function bell() {
+    let b = document.getElementById('pa-bell'); const need = pushSupported() && GeamsSync.mode === 'server' && Notification.permission === 'default';
+    if (!need) { if (b) b.remove(); return; }
+    if (!b) { b = document.createElement('button'); b.id = 'pa-bell'; b.textContent = '🔔'; b.title = 'Get HQ alerts even when GEAMS is closed'; b.setAttribute('aria-label', 'Turn on alerts when GEAMS is closed'); b.style.cssText = 'position:fixed;left:10px;bottom:84px;z-index:2147482500;width:40px;height:40px;border-radius:50%;border:1px solid #fbbf24;background:#1f2937;color:#fff;font-size:1.1rem'; b.onclick = () => pushEnable(); document.body.appendChild(b); }
+  }
+  function start(c) {
+    cfg = c; if (stop) return;
+    const go = () => { ensureRoot().onclick = (ev) => { const b = ev.target.closest('button[data-act]'); if (!b) return; if (b.dataset.act === 'ok') { markSeen(b.closest('[data-pa]').dataset.pa); render(); } else if (b.dataset.act === 'notif') { pushEnable().then(render); } }; root.style.pointerEvents = 'none'; };
+    if (document.body) go(); else document.addEventListener('DOMContentLoaded', go);
+    const begin = () => { if (GeamsSync.mode !== 'server') return; if (!GeamsSync.token) { setTimeout(begin, 2000); return; } stop = GeamsSync.watch(KEY, {}, apply, 4000) || (() => {}); };
+    GeamsSync.ready.then(begin);
+    setInterval(() => { bell(); if (pushSupported() && Notification.permission === 'granted' && GeamsSync.token && GeamsSync.mode === 'server') { let st = null; try { st = cfg.stationId && cfg.stationId(); } catch (e) {} if (st !== lastSync.st || Date.now() - lastSync.t > 6 * 3600000) { lastSync.t = Date.now(); pushSync().catch(() => {}); } } }, 5000);
+  }
+  return { start, _apply: apply, _matches: (a) => matches(a), enablePush: pushEnable };
+})();
+</script>
+<script>PublicAlerts.start({ audience: 'officers', stationId: () => window.__geamsLcrId || null });</script>
 </body></html>

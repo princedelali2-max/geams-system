@@ -1714,7 +1714,7 @@ option { background: var(--bg-deep); }
 <script>
   // Boot the application
   document.addEventListener('DOMContentLoaded', () => {
-    HqAuth.gate(() => GeamsApp.boot());
+    HqAuth.gate(() => { GeamsApp.boot(); HqCrewApprovals.start(); HqSmsInbox.start(); });
   });
 </script>
 <script>
@@ -1756,14 +1756,20 @@ const GeamsSync = (() => {
     try { const k = '__geams_probe__'; localStorage.setItem(k,'1'); localStorage.removeItem(k); return true; }
     catch (e) { return false; }
   }
+  // ── sign-in token: issued by the GEAMS server at login, sent with every request ──
+  let tokenMem = null; const authCbs = new Set();
+  function authToken() { try { return sessionStorage.getItem('geams_token') || sessionStorage.getItem('geams_hq_token') || tokenMem; } catch (e) { return tokenMem; } }
+  function setToken(t) { tokenMem = t || null; try { if (t) sessionStorage.setItem('geams_token', t); else { sessionStorage.removeItem('geams_token'); sessionStorage.removeItem('geams_hq_token'); } } catch (e) {} }
+  function onAuthLost(cb) { authCbs.add(cb); return () => authCbs.delete(cb); }
   async function http(path, opts, ms) {
     const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
     const t = ctl ? setTimeout(() => ctl.abort(), ms || 6000) : null;
     try {
-      try { const tk = sessionStorage.getItem('geams_hq_token'); if (tk && opts && opts.method && opts.method !== 'GET') opts = Object.assign({}, opts, { headers: Object.assign({}, opts.headers, { Authorization: 'Bearer ' + tk }) }); } catch (e) {}
+      const tk = authToken();
+      if (tk && !(opts && opts.headers && opts.headers.Authorization)) opts = Object.assign({}, opts, { headers: Object.assign({}, opts && opts.headers, { Authorization: 'Bearer ' + tk }) });
       const r = await fetch(base + path, Object.assign({ cache: 'no-store', signal: ctl && ctl.signal }, opts || {}));
       online = true;
-      if (r.status === 401 && path.indexOf('/api/kv/') === 0 && typeof HqAuth !== 'undefined') HqAuth.sessionExpired();
+      if (r.status === 401 && tk && path.indexOf('/api/kv/') === 0) { authCbs.forEach(cb => { try { cb(); } catch (e) {} }); }
       return r;
     } catch (e) { online = false; throw e; }
     finally { if (t) clearTimeout(t); }
@@ -1903,7 +1909,7 @@ const GeamsSync = (() => {
     try { if (url) localStorage.setItem('geams_backend', url.replace(/\/+$/, '')); else localStorage.removeItem('geams_backend'); } catch (e) {}
     location.reload();
   }
-  return { available, getShared, setShared, mergeShared, watch, ready, onStatus, setBackend, deviceId,
+  return { available, getShared, setShared, mergeShared, watch, ready, onStatus, setBackend, deviceId, setToken, onAuthLost, get token(){ return authToken(); },
            get mode(){ return mode; }, get base(){ return base; }, get online(){ return online; }, get devices(){ return status.devices; }, get deviceApps(){ return status.byApp; } };
 })();
 
@@ -1981,6 +1987,7 @@ const HqAuth = (() => {
   document.addEventListener('visibilitychange', () => {});
   return { gate, submit, sessionExpired, signOut, openMenu, addOperator, removeOperator, api, user: () => (me ? me.user : 'HQ'), token };
 })();
+GeamsSync.onAuthLost(() => { try { HqAuth.sessionExpired(); } catch (e) {} });
 
 /* ============================================================
    GEAMS ARCHIVE — permanent record of every incident so HQ and the LCR can
@@ -2028,7 +2035,7 @@ const GeamsArchive = (() => {
     return GeamsSync.mergeShared(mediaKey(inc), [], arr => { arr = Array.isArray(arr) ? arr : []; const i = arr.findIndex(x => x.id === entry.id); if (i >= 0) arr[i] = Object.assign(arr[i], entry); else arr.push(entry); return arr; });
   }
   async function putBlob(inc, name, body, type, append) {
-    const r = await fetch((GeamsSync.base || '') + '/api/blob/' + enc(inc) + '/' + enc(name) + (append ? '?append=1' : ''), { method: 'PUT', headers: { 'Content-Type': type || 'application/octet-stream' }, body });
+    const r = await fetch((GeamsSync.base || '') + '/api/blob/' + enc(inc) + '/' + enc(name) + (append ? '?append=1' : ''), { method: 'PUT', headers: { ...(GeamsSync.token ? { Authorization: 'Bearer ' + GeamsSync.token } : {}), 'X-Geams-Device': String(GeamsSync.deviceId || ''), 'Content-Type': type || 'application/octet-stream' }, body });
     if (!r.ok) throw new Error('upload failed ' + r.status);
     return r.json();
   }
@@ -2090,7 +2097,61 @@ const GeamsArchive = (() => {
   }
   async function mediaCount(inc) { const m = await GeamsSync.getShared(mediaKey(inc), []); return Array.isArray(m) ? m.length : 0; }
 
-  return { log, track, addFile, recordStream, addSnapshot, loadBundle, mediaCount, blobUrl, serverMode };
+
+  // ── Evidence seals: every stored file is hashed and signed by the server; anyone with access can re-check it ──
+  const sealEsc = (t) => String(t == null ? '' : t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  async function evApi(path) {
+    const r = await fetch((GeamsSync.base || '') + path, { cache: 'no-store', headers: { Authorization: 'Bearer ' + (GeamsSync.token || '') } });
+    let j = {}; try { j = await r.json(); } catch (e) {}
+    if (!r.ok) throw new Error(j.error || ('Server answered ' + r.status));
+    return j;
+  }
+  const SEAL_LABEL = { intact: ['✓ Intact', '#16a34a'], modified: ['✗ CHANGED after it was stored', '#dc2626'], 'seal-forged': ['✗ Seal forged', '#dc2626'], 'log-broken': ['⚠ Custody log altered', '#d97706'], 'timestamp-invalid': ['✗ Outside timestamp does not verify', '#dc2626'], unsealed: ['⚠ Not sealed (stored before sealing existed)', '#d97706'], missing: ['✗ File missing', '#dc2626'], error: ['⚠ Could not check', '#d97706'] };
+  const sealKB = (n) => n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+  function tsLine(t) { if (!t || t.state === 'off') return ''; const m = { verified: ['🕒 Independently timestamped by ' + (t.tsa || 'a timestamp authority') + (t.at ? ' at ' + new Date(t.at).toLocaleString() : '') + ' — verified', '#16a34a'], stored: ['🕒 Timestamped by ' + (t.tsa || 'authority') + ' (stored; not checked by this server)', '#d97706'], stale: ['🕒 ' + (t.message || 'Newer data not yet timestamped'), '#d97706'], pending: ['🕒 ' + (t.message || 'Waiting for the outside timestamp'), '#d97706'], invalid: ['🕒 ' + (t.message || 'Outside timestamp does not verify'), '#dc2626'] }[t.state]; return m ? '<div style="font-size:11px;color:' + m[1] + '">' + sealEsc(m[0]) + '</div>' : ''; }
+  async function verifyOne(inc, name) { try { return await evApi('/api/evidence/' + enc(inc) + '/' + enc(name) + '/verify'); } catch (e) { return { status: 'error', message: e.message }; } }
+  function certificateText(inc, rows, who) {
+    const L = ['GEAMS EVIDENCE INTEGRITY CERTIFICATE', '====================================', 'Incident: ' + inc, 'Checked: ' + new Date().toISOString(), 'Checked by: ' + (who || 'signed-in user'), 'Files: ' + rows.length, ''];
+    rows.forEach((r, i) => {
+      L.push((i + 1) + '. ' + r.name, '   Result:      ' + (SEAL_LABEL[r.v.status] ? SEAL_LABEL[r.v.status][0] : r.v.status), '   Detail:      ' + (r.v.message || ''), '   SHA-256:     ' + (r.v.sha256 || r.f.sha256 || 'n/a'), '   Size:        ' + (r.v.size != null ? r.v.size + ' bytes' : r.f.size + ' bytes'), '   Stored:      ' + (r.v.sealedAt ? new Date(r.v.sealedAt).toISOString() : 'n/a'), '   Outside timestamp: ' + (r.v.timestamp && r.v.timestamp.state !== 'off' ? r.v.timestamp.state + (r.v.timestamp.tsa ? ' (' + r.v.timestamp.tsa + (r.v.timestamp.at ? ', ' + new Date(r.v.timestamp.at).toISOString() : '') + ')' : '') : 'not used'), '   First saved by: ' + (r.v.by ? r.v.by.role + (r.v.by.user ? ' ' + r.v.by.user : '') : 'n/a'), '   Custody log: ' + (r.v.chainOk === false ? 'ALTERED' : 'chain intact') + ' (' + (r.v.events || 0) + ' events)', '');
+    });
+    L.push('How this works: when a file reaches the GEAMS server it is hashed (SHA-256) and the hash, size, time and writer are signed with a key held only by the server.', 'Each custody event is signed together with the one before it. Changing a file, a seal or the log afterwards fails this check.', 'Limit: the signing key belongs to the GEAMS server. This proves the file is unchanged since GEAMS stored it; it is not an external trusted-timestamp service.');
+    return L.join('\n');
+  }
+  async function sealPanel(el, inc, who) {
+    if (!el) return;
+    if (!serverMode()) { el.innerHTML = '<div style="font-size:12px;opacity:.8">Evidence seals are kept by the GEAMS server, which is not connected.</div>'; return; }
+    el.innerHTML = '<div style="font-size:12px;opacity:.7">Loading sealed evidence…</div>';
+    let files = [];
+    try { files = (await evApi('/api/blobs/' + enc(inc))).files || []; } catch (e) { el.innerHTML = '<div style="font-size:12px;color:#d97706">Could not load: ' + sealEsc(e.message) + '</div>'; return; }
+    files.sort((a, b) => a.ts - b.ts);
+    const results = {};
+    const draw = () => {
+      el.innerHTML = '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px"><b style="font-size:12px">🔒 Sealed evidence · ' + files.length + ' file' + (files.length === 1 ? '' : 's') + '</b><span style="flex:1"></span>' +
+        '<button class="gr-btn btn btn-ghost btn-sm" data-act="all"' + (files.length ? '' : ' disabled') + '>Verify all</button><button class="gr-btn btn btn-ghost btn-sm" data-act="cert"' + (files.length ? '' : ' disabled') + '>⬇ Certificate</button></div>' +
+        (files.length ? files.map(f => { const v = results[f.name], lab = v && SEAL_LABEL[v.status];
+          return '<div style="border:1px solid rgba(127,127,127,.25);border-radius:8px;padding:8px;margin-bottom:6px;font-size:12px"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><b style="word-break:break-all">' + sealEsc(f.name) + '</b><span style="opacity:.7">' + sealKB(f.size) + '</span><span style="flex:1"></span><button class="gr-btn btn btn-ghost btn-sm" data-act="v" data-n="' + sealEsc(f.name) + '">Verify</button><button class="gr-btn btn btn-ghost btn-sm" data-act="c" data-n="' + sealEsc(f.name) + '">Custody</button></div>' +
+            '<div style="font-family:ui-monospace,monospace;font-size:10.5px;opacity:.75;word-break:break-all;margin-top:3px">' + (f.sealed ? '🔒 SHA-256 ' + sealEsc(f.sha256) + ' · stored ' + new Date(f.sealedAt).toLocaleString() : '⚠ not sealed') + '</div>' +
+            (lab ? '<div style="margin-top:4px;font-weight:700;color:' + lab[1] + '">' + lab[0] + '</div><div style="opacity:.8">' + sealEsc(v.message || '') + '</div>' + tsLine(v.timestamp) : '') + '<div data-cust="' + sealEsc(f.name) + '"></div></div>'; }).join('') : '<div style="font-size:12px;opacity:.7">No files stored for this incident.</div>');
+    };
+    draw();
+    el.onclick = async (ev) => {
+      const b = ev.target.closest('button[data-act]'); if (!b) return; const act = b.dataset.act, n = b.dataset.n;
+      if (act === 'v') { b.textContent = 'Checking…'; results[n] = await verifyOne(inc, n); draw(); }
+      else if (act === 'all' || act === 'cert') {
+        b.textContent = 'Checking…'; for (const f of files) results[f.name] = await verifyOne(inc, f.name); draw();
+        if (act === 'cert') { const rows = files.map(f => ({ name: f.name, f, v: results[f.name] })); const blob = new Blob([certificateText(inc, rows, who)], { type: 'text/plain' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'GEAMS-evidence-certificate-' + inc + '.txt'; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500); }
+      }
+      else if (act === 'c') {
+        const slot = el.querySelector('[data-cust="' + (window.CSS && CSS.escape ? CSS.escape(n) : n) + '"]'); if (!slot) return;
+        if (slot.innerHTML) { slot.innerHTML = ''; return; }
+        try { const c = await evApi('/api/evidence/' + enc(inc) + '/' + enc(n) + '/custody');
+          slot.innerHTML = '<div style="margin-top:6px;font-size:11px;font-family:ui-monospace,monospace;opacity:.9">' + (c.chainOk ? '✓ log chain intact' : '✗ LOG CHAIN BROKEN') + '<br>' + c.entries.map(e => new Date(e.t).toLocaleTimeString() + ' · ' + sealEsc(e.ev) + ' · ' + sealEsc(e.role) + (e.user ? ' ' + sealEsc(e.user) : '') + (e.result ? ' → ' + sealEsc(e.result) : '') + (e.bytes ? ' · +' + sealKB(e.bytes) : '')).join('<br>') + '</div>'; }
+        catch (e) { slot.innerHTML = '<div style="color:#d97706;font-size:11px">' + sealEsc(e.message) + '</div>'; }
+      }
+    };
+  }
+  return { log, track, addFile, recordStream, addSnapshot, loadBundle, mediaCount, blobUrl, serverMode, sealPanel };
 })();
 
 /* ============================================================
@@ -2254,13 +2315,14 @@ const GeamsReplay = (() => {
           <input type="range" id="gr-scrub" min="0" max="${span}" value="0" style="width:100%;margin-top:8px">
         </div>
         <div class="gr-card"><h4>Recordings &amp; files (${vids.length + files.length + snaps.length})</h4><div class="gr-media" id="gr-media"></div></div>
+        <div class="gr-card"><h4>Evidence integrity</h4><div id="gr-seal"></div></div>
       </div>
       <div style="display:flex;flex-direction:column;gap:12px;min-width:0">
         <div class="gr-card"><h4>Timeline (${ev.length} events)</h4><div class="gr-ev" id="gr-ev"></div></div>
         <div class="gr-card"><h4>Chat</h4><div class="gr-chat" id="gr-chat" style="max-height:260px;overflow:auto"></div></div>
         <div class="gr-card"><h4>Summary</h4><div style="font-size:12px;line-height:1.7">
           Status: <b>${esc((r.status || 'unknown').toUpperCase())}</b>${r.civilianCancelled ? ' (civilian cancelled)' : ''}<br>
-          Civilian: ${esc(r.civilianName || '—')} ${esc(r.civilianPhone || '')}<br>
+          Civilian: ${esc(r.civilianName || '—')} ${esc(r.civilianPhone || '')}${r.civilianPhone ? (r.source==='sms' ? ' <span style="font-size:0.65rem">· via text message</span>' : '') + (r.civilianVerified ? ' <span style="color:var(--green,#22c55e);font-size:0.65rem">✓ phone verified</span>' : ' <span style="color:var(--text-muted);font-size:0.65rem">(unverified)</span>') : ''}<br>
           Officer: ${esc(r.officerName || '—')} ${esc(r.officerBadge || '')}<br>
           Location: ${esc(r.location || '—')}<br>
           GPS points: ${track.civ.length} civilian · ${track.off.length} officer</div></div>
@@ -2285,6 +2347,7 @@ const GeamsReplay = (() => {
     if (snaps.length) html += `<div style="font-size:12px;margin:6px 0"><b>🖼 Snapshots (${snaps.length})</b></div><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:6px">${snaps.sort((a, b) => a.ts - b.ts).map(s => `<a target="_blank" rel="noopener" href="${GeamsArchive.blobUrl(B.inc, s.name)}" title="${hms(s.ts)}"><img src="${GeamsArchive.blobUrl(B.inc, s.name)}" style="width:100%;margin:0"></a>`).join('')}</div>`;
     if (!html) html = '<div style="color:#7aa2c8;font-size:12px">No recordings or files were attached to this incident.</div>';
     mEl.innerHTML = html;
+    GeamsArchive.sealPanel(main.querySelector('#gr-seal'), B.inc, (typeof HqAuth !== 'undefined' && HqAuth.user && HqAuth.user()) || (window.StationData && StationData.station && StationData.station.commanderName) || '');
     mEl.querySelectorAll('video[data-start]').forEach(v => {
       vEls.push(v);
       // MediaRecorder files have no duration header — force the browser to find it so seeking works.
@@ -2544,7 +2607,7 @@ const GeamsData = (() => {
       GeamsSync.watch('lcr:' + st.id + ':incidents', {}, (map) => {
         let open = 0;
         Object.values(map).forEach(rec => {
-          if (rec.source !== 'civilian-app') return;
+          if (rec.source !== 'civilian-app' && rec.source !== 'sms') return;   // 'sms' = a text message the server turned into an incident; handled like an app alert
           const closed = rec.status === 'resolved' || rec.status === 'cancelled';
           if (!closed) open++;
           let inc = incidents.find(i => i.id === rec.id);
@@ -2827,7 +2890,7 @@ const GeamsApp = (() => {
       case 'analytics': GeamsAnalytics.render();  break;
       case 'broadcast': GeamsBroadcast.render();  break;
       case 'security':  GeamsSecurity.render();   break;
-      case 'officers':  GeamsOfficers.render();   break;
+      case 'officers':  GeamsOfficers.render(); HqCrewApprovals.draw(); HqCrewApprovals.poll(); HqSmsInbox.draw(); HqSmsInbox.poll(); break;
       case 'tactical':  GeamsTactical.render();   break;
       case 'syshealth': GeamsSysHealth.render();  break;
       case 'replay':    GeamsReplayPage.render(); break;
@@ -5167,8 +5230,8 @@ const GeamsStations = (() => {
                 <td onclick="event.stopPropagation()">
                   <div style="display:flex;gap:3px">
                     <button class="btn btn-ghost btn-sm" title="Detail" onclick="GeamsApp.openStationDetail('${s.id}')">👁</button>
-                    ${s.hqCreated ? `<button class="btn btn-warning btn-sm" title="Reset passphrase" onclick="GeamsStations.resetPassphrase('${s.id}')">🔑</button>
-                    <button class="btn ${s.disabled?'btn-success':'btn-danger'} btn-sm" title="${s.disabled?'Re-enable':'Disable'} this LCR" onclick="GeamsStations.toggleDisabled('${s.id}')">${s.disabled?'▶':'⏸'}</button>` : ''}
+                    <button class="btn btn-warning btn-sm" title="Issue or reset this control room's login passphrase" onclick="GeamsStations.resetPassphrase('${s.id}')">🔑</button>
+                    ${s.hqCreated ? `<button class="btn ${s.disabled?'btn-success':'btn-danger'} btn-sm" title="${s.disabled?'Re-enable':'Disable'} this LCR" onclick="GeamsStations.toggleDisabled('${s.id}')">${s.disabled?'▶':'⏸'}</button>` : ''}
                     <button class="btn btn-danger btn-sm" title="Cordon Zone" onclick="GeamsApp.cordonZone('${s.id}')">🔴</button>
                     <button class="btn btn-ghost btn-sm" title="Mobilise Reserves" onclick="GeamsApp.mobiliseReserves('${s.id}')">📣</button>
                   </div>
@@ -5316,7 +5379,7 @@ const GeamsStations = (() => {
   }
   async function resetPassphrase(id) {
     const st = GeamsData.stations.find(x => x.id === id); if (!st) return;
-    if (!confirm('Reset the passphrase for "' + st.name + '"?\n\nThe old passphrase stops working for new sign-ins.')) return;
+    if (!confirm('Issue a new login passphrase for "' + st.name + '"?\n\nAny earlier passphrase stops working for new sign-ins. You will see the new one once, so be ready to pass it to the commander securely.')) return;
     try { const pass = await GeamsData.resetLcrPassphrase(id); showCredentials(st, pass, 'New passphrase issued'); }
     catch (e) { GeamsApp.showToast('error','Reset failed', e.message || ''); }
   }
@@ -5371,6 +5434,130 @@ const GeamsStations = (() => {
 /* ─────────────────────────────────────────
    ANALYTICS PAGE
 ───────────────────────────────────────── */
+
+/* ─────────────────────────────────────────
+   RESPONSE TIMES + OPEN DATA (shared by the Analytics page)
+───────────────────────────────────────── */
+const OpenData = (() => {
+  const ENDPOINT = { json: 'JSON', csv: 'CSV (spreadsheet)', geojson: 'GeoJSON (maps)', cap: 'CAP 1.2 (alert standard)', edxl: 'EDXL-DE (CAP in an envelope)' };
+  async function download(what, q) {
+    const qs = new URLSearchParams(q).toString();
+    const r = await fetch(GeamsSync.base + '/api/export/' + what + '?' + qs, { headers: { Authorization: 'Bearer ' + HqAuth.token() }, cache: 'no-store' });
+    if (!r.ok) { let m = 'Export failed'; try { m = (await r.json()).error || m; } catch (e) {} throw new Error(m); }
+    const cd = r.headers.get('content-disposition') || '', name = (/filename="([^"]+)"/.exec(cd) || [])[1] || 'geams-export';
+    const blob = await r.blob(), a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500); return { name, size: blob.size };
+  }
+  async function doExport() {
+    const g = (id) => document.getElementById(id), what = g('od-what').value, q = { format: g('od-fmt').value };
+    if (what === 'incidents') { if (g('od-from').value) q.from = g('od-from').value; if (g('od-to').value) q.to = g('od-to').value + 'T23:59:59Z'; if (g('od-st').value) q.station = g('od-st').value; if (g('od-pers').checked) q.personal = '1'; if (g('od-ev').checked) q.evidence = '1'; }
+    const out = g('od-out'); out.textContent = 'Preparing…';
+    try { const r = await download(what, q); out.textContent = '✓ Saved ' + r.name + ' (' + Math.ceil(r.size / 1024) + ' KB)'; } catch (e) { out.textContent = '✗ ' + e.message; }
+  }
+  async function doImport(dry) {
+    const g = (id) => document.getElementById(id), f = g('od-file').files[0], out = g('od-iout'); if (!f) { out.textContent = 'Choose a file first.'; return; }
+    if (!g('od-ist').value) { out.textContent = 'Choose the control room these records belong to.'; return; }
+    out.textContent = dry ? 'Checking…' : 'Importing…';
+    try {
+      const r = await fetch(GeamsSync.base + '/api/import/incidents?station=' + encodeURIComponent(g('od-ist').value) + (dry ? '&dry=1' : ''), { method: 'POST', headers: { Authorization: 'Bearer ' + HqAuth.token(), 'Content-Type': 'text/plain' }, body: f });
+      const j = await r.json(); if (!r.ok) { out.textContent = '✗ ' + (j.error || 'Import failed'); return; }
+      const rej = j.rejected.slice(0, 8).map(x => '<div style="color:var(--red)">Record ' + x.index + (x.id ? ' (' + esc2(x.id) + ')' : '') + ': ' + esc2(x.error) + '</div>').join('');
+      out.innerHTML = (dry ? '<b>Check only, nothing saved.</b> ' : '<b>Done.</b> ') + j.imported + ' ' + (dry ? 'would be added' : 'added') + ', ' + j.duplicates + ' already here, ' + j.rejected.length + ' refused (format read as ' + esc2(j.format) + ').' + rej + (j.rejected.length > 8 ? '<div>…and ' + (j.rejected.length - 8) + ' more</div>' : '') + (!dry && j.imported ? '<div style="color:var(--text-muted)">Imported records are filed as resolved history. They do not appear as live incidents and are left out of response-time figures.</div>' : '');
+    } catch (e) { out.textContent = '✗ ' + e.message; }
+  }
+  const esc2 = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  function card() {
+    const sts = (GeamsData.stations || []).map(s => '<option value="' + esc2(s.id) + '">' + esc2(s.name) + '</option>').join('');
+    return `<div class="panel" id="od-card" style="margin-top:14px;flex-shrink:0">
+      <div class="panel-header"><span>🔓</span><span class="panel-title">Open data: export and import</span></div>
+      <div class="panel-body" style="font-size:0.74rem;line-height:1.5">
+        <div style="color:var(--text-muted);margin-bottom:8px">Your data stays yours. Take it out in common formats any agency's software can read, or bring records in from another system. CAP and EDXL-DE follow the published element lists; they have not been run through an official validator.</div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:6px">
+          <select id="od-what" class="form-select" style="width:auto;font-size:0.72rem" onchange="document.getElementById('od-inc-opts').style.display=this.value==='incidents'?'flex':'none'"><option value="incidents">Incidents</option><option value="alerts">Public alerts</option><option value="all">Everything (HQ bundle, JSON)</option></select>
+          <select id="od-fmt" class="form-select" style="width:auto;font-size:0.72rem">${Object.entries(ENDPOINT).map(([k, v]) => '<option value="' + k + '">' + v + '</option>').join('')}</select>
+          <button class="btn btn-primary btn-sm" onclick="OpenData.doExport()">⬇ Download</button><span id="od-out" style="color:var(--text-muted)"></span>
+        </div>
+        <div id="od-inc-opts" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px">
+          <label>From <input id="od-from" type="date" class="form-input" style="width:auto;font-size:0.72rem"></label><label>To <input id="od-to" type="date" class="form-input" style="width:auto;font-size:0.72rem"></label>
+          <select id="od-st" class="form-select" style="width:auto;font-size:0.72rem"><option value="">All control rooms</option>${sts}</select>
+          <label><input id="od-pers" type="checkbox"> include names and phone numbers</label><label><input id="od-ev" type="checkbox"> list evidence files with fingerprints (JSON, GeoJSON)</label>
+        </div>
+        <div style="border-top:1px solid var(--border,#333);padding-top:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+          <b>Import incidents</b>
+          <input id="od-file" type="file" accept=".json,.geojson,.csv,.xml,.cap,text/*,application/json,application/xml">
+          <select id="od-ist" class="form-select" style="width:auto;font-size:0.72rem"><option value="">Into which control room…</option>${sts}</select>
+          <button class="btn btn-ghost btn-sm" onclick="OpenData.doImport(true)">Check only</button><button class="btn btn-primary btn-sm" onclick="OpenData.doImport(false)">Import</button>
+        </div>
+        <div id="od-iout" style="margin-top:6px;color:var(--text-muted)"></div>
+        <div style="color:var(--text-muted);margin-top:6px">Reads JSON, GeoJSON, CSV, CAP and EDXL-DE. Up to 1000 records and 5 MB per file. Records with a position outside Ghana or no date are refused and listed.</div>
+      </div></div>`;
+  }
+  return { doExport, doImport, card, esc: esc2 };
+})();
+
+const ResponseTimes = (() => {
+  let days = 30, data = null, err = '';
+  const esc = OpenData.esc;
+  const fmt = (s) => s == null ? '—' : s < 60 ? Math.round(s) + 's' : s < 3600 ? Math.floor(s / 60) + 'm ' + String(Math.round(s % 60)).padStart(2, '0') + 's' : Math.floor(s / 3600) + 'h ' + String(Math.round((s % 3600) / 60)).padStart(2, '0') + 'm';
+  const target = () => { try { return parseFloat(localStorage.getItem('geams_resp_target_min')) || 0; } catch (e) { return 0; } };
+  function delta(cur, prev) { if (cur == null || prev == null || !prev) return '<span style="color:var(--text-muted)">no earlier figure</span>'; const d = Math.round((cur - prev) / prev * 100); if (!d) return '<span style="color:var(--text-muted)">unchanged</span>'; return '<span style="color:' + (d < 0 ? 'var(--green)' : 'var(--red)') + '">' + (d < 0 ? '▼ ' : '▲ ') + Math.abs(d) + '% ' + (d < 0 ? 'faster' : 'slower') + '</span>'; }
+  async function load() {
+    err = ''; try { const r = await HqAuth.api('/api/analytics/response?days=' + days + (days > 120 ? '&bucket=month' : '')); if (!r.ok) err = (r.j && r.j.error) || 'Could not load response times'; else data = r.j; } catch (e) { err = e.message; }
+    paint();
+  }
+  function setDays(v) { days = parseInt(v, 10) || 30; data = null; paint(); load(); }
+  function setTarget(v) { try { localStorage.setItem('geams_resp_target_min', String(parseFloat(v) || 0)); } catch (e) {} paint(); }
+  function trendChart(tr) {
+    if (!tr.length) return '<div style="color:var(--text-muted);font-size:0.74rem">No arrivals measured in this period yet.</div>';
+    const max = Math.max(1, ...tr.map(t => t.medianArrive || 0));
+    return '<div style="display:flex;align-items:flex-end;gap:6px;height:110px">' + tr.map(t => { const h = t.medianArrive == null ? 0 : Math.max(4, Math.round(t.medianArrive / max * 100)); return '<div style="flex:1;min-width:18px;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:100%" title="Week of ' + t.start + ': ' + t.measured + ' of ' + t.n + ' measured"><span style="font-size:0.55rem;color:var(--text-muted)">' + fmt(t.medianArrive) + '</span><div style="width:100%;height:' + h + '%;background:var(--gold);border-radius:2px 2px 0 0"></div></div>'; }).join('') + '</div><div style="display:flex;gap:6px;margin-top:3px">' + tr.map(t => '<span style="flex:1;min-width:18px;font-size:0.5rem;color:var(--text-ghost);text-align:center">' + t.start.slice(5) + '</span>').join('') + '</div>';
+  }
+  function html() {
+    if (err) return '<div class="panel"><div class="panel-body" style="color:var(--red)">' + esc(err) + ' <button class="btn btn-ghost btn-sm" onclick="ResponseTimes.reload()">Try again</button></div></div>';
+    if (!data) return '<div class="panel"><div class="panel-body" style="color:var(--text-muted)">Loading response times…</div></div>';
+    const c = data.national.current, p = data.national.previous, tg = target() * 60, ex = data.excluded;
+    const tile = (label, v, sub, head) => '<div class="kpi-card ' + (head ? 'gold' : 'cyan') + '"' + (head ? ' style="grid-column:span 2"' : '') + '><div class="kpi-label">' + label + '</div><div class="kpi-value"' + (head ? ' style="font-size:2.1rem"' : '') + '>' + v + '</div><div class="kpi-sub">' + sub + '</div></div>';
+    const rows = data.districts.map(d => { const slow = tg && d.current.medianArrive != null && d.current.medianArrive > tg; return '<tr' + (slow ? ' style="background:rgba(255,80,80,0.10)"' : '') + '><td>' + esc(d.name) + '</td><td>' + esc(d.region || '—') + '</td><td>' + d.current.n + '</td><td>' + d.current.measuredArrive + '</td><td><b>' + fmt(d.current.medianArrive) + '</b></td><td>' + fmt(d.current.p90Arrive) + '</td><td>' + fmt(d.current.medianAssign) + '</td><td>' + delta(d.current.medianArrive, d.previous.medianArrive) + '</td><td>' + d.current.noArrival + '</td></tr>'; }).join('');
+    const reg = data.regions.filter(r => r.current.n).map(r => '<tr><td>' + esc(r.name) + '</td><td>' + r.current.n + '</td><td><b>' + fmt(r.current.medianArrive) + '</b></td><td>' + fmt(r.current.p90Arrive) + '</td><td>' + delta(r.current.medianArrive, r.previous.medianArrive) + '</td></tr>').join('');
+    const slowCount = tg ? data.districts.filter(d => d.current.medianArrive != null && d.current.medianArrive > tg).length : 0;
+    return '<div class="kpi-row" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr))">' +
+      tile('Time to arrival (median)', fmt(c.medianArrive), c.measuredArrive + ' of ' + c.n + ' alerts measured · ' + delta(c.medianArrive, p.medianArrive) + ' vs the period before', true) +
+      tile('Arrival, slowest 1 in 10', fmt(c.p90Arrive), '90th percentile') + tile('Time to officer assigned (median)', fmt(c.medianAssign), c.measuredAssign + ' measured · slowest 1 in 10: ' + fmt(c.p90Assign)) + '</div>' +
+      '<div class="two-col"><div class="panel"><div class="panel-header"><span>📈</span><span class="panel-title">Median time to arrival, by ' + data.bucket + '</span></div><div class="panel-body">' + trendChart(data.national.trend) + '</div></div>' +
+      '<div class="panel"><div class="panel-header"><span>🏛</span><span class="panel-title">By region</span></div><div class="panel-body">' + (reg ? '<table class="gr-tbl"><thead><tr><th>Region</th><th>Alerts</th><th>Median arrival</th><th>Slowest 1 in 10</th><th>Change</th></tr></thead><tbody>' + reg + '</tbody></table>' : '<div style="color:var(--text-muted);font-size:0.74rem">Nothing measured in this period yet.</div>') + '</div></div></div>' +
+      '<div class="panel" style="margin-top:14px"><div class="panel-header"><span>🗺</span><span class="panel-title">By district (one control room each)</span><span style="margin-left:auto;font-size:0.68rem">Target <input id="rt-target" type="number" min="0" step="1" value="' + (target() || '') + '" placeholder="min" style="width:54px" onchange="ResponseTimes.setTarget(this.value)"> min' + (tg ? ' · ' + slowCount + ' over' : '') + '</span></div><div class="panel-body">' +
+      (rows ? '<div style="overflow-x:auto"><table class="gr-tbl"><thead><tr><th>District</th><th>Region</th><th>Alerts</th><th>Measured</th><th>Median arrival</th><th>Slowest 1 in 10</th><th>Median assigned</th><th>Change</th><th>No arrival yet</th></tr></thead><tbody>' + rows + '</tbody></table></div>' : '<div style="color:var(--text-muted);font-size:0.76rem">No alerts have been received and timed in this period.</div>') +
+      '<div style="margin-top:8px;font-size:0.68rem;color:var(--text-muted);line-height:1.5"><b>How this is measured.</b> The server records the moment it receives an alert, the moment an officer is assigned, and the moment the officer marks arrival. No device can set these times. Left out: ' + ex.cancelled + ' cancelled, ' + ex.imported + ' imported, ' + ex.legacy + ' from before timing began, ' + ex.invalid + ' with impossible times (over 24 h). ' + ex.noArrival + ' still have no arrival and are not in the arrival figures, so a slow district can look better than it is if crews forget to mark arrival. "Arrival" is when the officer taps it; GEAMS does not verify position at that moment.</div>' +
+      '<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-primary btn-sm" onclick="ResponseTimes.brief()">🖨 Ministerial brief</button><button class="btn btn-ghost btn-sm" onclick="ResponseTimes.csv()">⬇ District table (CSV)</button></div></div></div>';
+  }
+  function paint() { const e = document.getElementById('rt-body'); if (e) e.innerHTML = html(); const sel = document.getElementById('rt-days'); if (sel) sel.value = String(days); }
+  const periodLabel = () => ({ 7: 'last 7 days', 30: 'last 30 days', 90: 'last 90 days', 365: 'last 12 months' }[days] || 'last ' + days + ' days');
+  function csv() {
+    if (!data) return; const q = (v) => { v = v == null ? '' : String(v); if (/^[=+\-@]/.test(v)) v = "'" + v; return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+    const s = (v) => v == null ? '' : Math.round(v);
+    const head = ['district', 'region', 'period_days', 'alerts', 'measured_arrival', 'median_arrival_s', 'p90_arrival_s', 'median_assigned_s', 'p90_assigned_s', 'no_arrival', 'previous_median_arrival_s'];
+    const lines = [head.join(',')].concat(data.districts.map(d => [d.name, d.region, data.windowDays, d.current.n, d.current.measuredArrive, s(d.current.medianArrive), s(d.current.p90Arrive), s(d.current.medianAssign), s(d.current.p90Assign), d.current.noArrival, s(d.previous.medianArrive)].map(q).join(',')));
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['﻿' + lines.join('\r\n') + '\r\n'], { type: 'text/csv' })); a.download = 'geams-response-times-' + data.generatedAt.slice(0, 10) + '.csv'; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+  }
+  function brief() {
+    if (!data) return; const c = data.national.current, p = data.national.previous, w = window.open('', '_blank'); if (!w) { GeamsApp.showToast('warn', 'Pop-up blocked', 'Allow pop-ups to open the brief'); return; }
+    const rows = data.districts.map(d => '<tr><td>' + esc(d.name) + '</td><td>' + esc(d.region || '—') + '</td><td>' + d.current.n + '</td><td><b>' + fmt(d.current.medianArrive) + '</b></td><td>' + fmt(d.current.p90Arrive) + '</td><td>' + fmt(d.current.medianAssign) + '</td><td>' + (d.previous.medianArrive == null || d.current.medianArrive == null ? '—' : fmt(d.previous.medianArrive)) + '</td></tr>').join('');
+    const tr = data.national.trend.map(t => '<tr><td>' + t.start + '</td><td>' + t.n + '</td><td>' + t.measured + '</td><td>' + fmt(t.medianArrive) + '</td></tr>').join('');
+    w.document.write('<!doctype html><meta charset="utf-8"><title>GEAMS response-time brief</title><style>body{font:14px/1.5 system-ui,sans-serif;max-width:900px;margin:30px auto;padding:0 20px;color:#111}h1{margin:0}h2{margin-top:26px;border-bottom:2px solid #c9a227;padding-bottom:4px}table{border-collapse:collapse;width:100%;font-size:13px}th,td{border:1px solid #bbb;padding:5px 8px;text-align:left}th{background:#f1f1f1}.big{font-size:44px;font-weight:700}.k{display:inline-block;margin-right:34px}.n{font-size:12px;color:#444}@media print{button{display:none}}</style>' +
+      '<button onclick="print()">Print or save as PDF</button><h1>Emergency response times</h1><div class="n">Ghana Emergency Alert and Management System · ' + periodLabel() + ' · produced ' + new Date(data.generatedAt).toLocaleString() + '</div>' +
+      '<h2>National headline</h2><div class="k"><div class="n">Median time from alert to officer on scene</div><div class="big">' + fmt(c.medianArrive) + '</div></div><div class="k"><div class="n">Slowest 1 in 10</div><div class="big">' + fmt(c.p90Arrive) + '</div></div><div class="k"><div class="n">Median time to officer assigned</div><div class="big">' + fmt(c.medianAssign) + '</div></div>' +
+      '<p>' + c.measuredArrive + ' of ' + c.n + ' alerts had a recorded arrival. Period before: median arrival ' + fmt(p.medianArrive) + ' (' + p.measuredArrive + ' of ' + p.n + ' alerts).</p>' +
+      '<h2>By district</h2><table><tr><th>District</th><th>Region</th><th>Alerts</th><th>Median arrival</th><th>Slowest 1 in 10</th><th>Median assigned</th><th>Period before</th></tr>' + (rows || '<tr><td colspan=7>No timed alerts</td></tr>') + '</table>' +
+      '<h2>Trend</h2><table><tr><th>' + (data.bucket === 'month' ? 'Month' : 'Week') + ' starting</th><th>Alerts</th><th>With arrival</th><th>Median arrival</th></tr>' + (tr || '<tr><td colspan=4>No timed alerts</td></tr>') + '</table>' +
+      '<h2>How to read this</h2><p class="n">Times are taken by the GEAMS server, not by phones, so no device can alter them. Time to arrival runs from the server receiving an alert to the officer marking arrival. The median is the middle case; "slowest 1 in 10" is the 90th percentile. Not counted: ' + data.excluded.cancelled + ' cancelled alerts, ' + data.excluded.imported + ' imported records, ' + data.excluded.legacy + ' records from before timing began, ' + data.excluded.invalid + ' with impossible times, and ' + data.excluded.noArrival + ' alerts with no arrival recorded yet. Arrival is when the officer marks it; GEAMS does not check position at that moment. A district is the area of one control room.</p></body>');
+    w.document.close();
+  }
+  function section() {
+    return '<div class="section-header" style="margin-top:6px"><div class="section-title">Response times</div><div class="section-line"></div><div style="display:flex;gap:8px"><select id="rt-days" class="form-select" style="font-size:0.72rem;padding:4px 10px;width:auto" onchange="ResponseTimes.setDays(this.value)"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option><option value="365">Last 12 months</option></select><button class="btn btn-ghost btn-sm" onclick="ResponseTimes.reload()">↻ Refresh</button></div></div><div id="rt-body">' + html() + '</div>';
+  }
+  return { section, setDays, setTarget, reload: () => { data = null; paint(); load(); }, load, csv, brief, headline: () => data };
+})();
+
 const GeamsAnalytics = (() => {
 
   function render() {
@@ -5382,18 +5569,17 @@ const GeamsAnalytics = (() => {
         <div class="section-title">National Performance Analytics</div>
         <div class="section-line"></div>
         <div style="display:flex;gap:8px">
-          <select class="form-select" style="font-size:0.72rem;padding:4px 10px;width:auto">
-            <option>Today</option><option>Last 7 days</option><option>Last 30 days</option>
-          </select>
           <button class="btn btn-primary btn-sm" onclick="GeamsApp.generateCourtReport()">⚖️ Court Report</button>
           <button class="btn btn-ghost btn-sm" onclick="GeamsApp.archivePurge()">🗄 Archive</button>
-          <button class="btn btn-primary btn-sm" onclick="GeamsApp.showToast('info','Export','Analytics exported as PDF')">📤 Export</button>
+          <button class="btn btn-primary btn-sm" onclick="document.getElementById('od-card').scrollIntoView({behavior:'smooth'})">🔓 Export / import</button>
         </div>
       </div>
+      ${ResponseTimes.section()}
+      <div class="section-header" style="margin-top:14px"><div class="section-title">Activity</div><div class="section-line"></div></div>
       <div class="kpi-row">
         <div class="kpi-card gold"><div class="kpi-label">Total Incidents</div><div class="kpi-value">${kpi.totalInc}</div><div class="kpi-sub">Received this session</div></div>
         <div class="kpi-card green"><div class="kpi-label">Resolution Rate</div><div class="kpi-value">${(kpi.totalInc?Math.round((kpi.resolved/kpi.totalInc)*100):0)}%</div><div class="kpi-sub">Resolved / total</div></div>
-        <div class="kpi-card cyan"><div class="kpi-label">Avg Response Time</div><div class="kpi-value">—</div><div class="kpi-sub">Not measured yet</div></div>
+        <div class="kpi-card cyan"><div class="kpi-label">Median time to arrival</div><div class="kpi-value" id="rt-kpi">…</div><div class="kpi-sub" id="rt-kpi-sub">Measured by the server</div></div>
         <div class="kpi-card orange"><div class="kpi-label">Officer Utilization</div><div class="kpi-value">${(()=>{const od=GeamsData.stations.reduce((a,s)=>a+s.onDuty,0);const dp=GeamsData.incidents.filter(i=>i.officerAssigned&&i.status!=='resolved').length;return od?Math.min(100,Math.round(dp/od*100))+'%':'—';})()}</div><div class="kpi-sub">Deployed / on duty</div></div>
         <div class="kpi-card red"><div class="kpi-label">Stations Offline</div><div class="kpi-value">${GeamsData.stations.filter(s=>s.status==='offline').length}</div><div class="kpi-sub">No live heartbeat</div></div>
       </div>
@@ -5452,7 +5638,9 @@ const GeamsAnalytics = (() => {
               </div>`).join('')}
           </div></div>
         </div>
-      </div>`;
+      </div>
+      ${OpenData.card()}`;
+    ResponseTimes.load().then(() => { const h = ResponseTimes.headline(), k = document.getElementById('rt-kpi'); if (!h || !k) return; const c = h.national.current, f = (s) => s == null ? '—' : s < 60 ? Math.round(s) + 's' : Math.floor(s / 60) + 'm ' + String(Math.round(s % 60)).padStart(2, '0') + 's'; k.textContent = f(c.medianArrive); document.getElementById('rt-kpi-sub').textContent = c.measuredArrive + ' of ' + c.n + ' alerts, last ' + h.windowDays + ' days'; });
   }
 
   return { render };
@@ -5463,6 +5651,24 @@ const GeamsAnalytics = (() => {
    BROADCAST PAGE
 ───────────────────────────────────────── */
 const GeamsBroadcast = (() => {
+  const aud = { civilians: true, officers: false };
+  const PA = 'public:alerts';
+  function toggleAud(k) { aud[k] = !aud[k]; const id = k === 'civilians' ? 'bt-civ' : 'bt-off', e = document.getElementById(id); if (e) e.classList.toggle('selected', aud[k]); }
+  async function fillReach() {
+    let m = {}; try { m = (await GeamsSync.getShared(PA, {})) || {}; } catch (e) {}
+    const byOp = {}; Object.values(m).forEach(a => { if (a.opId) byOp[a.opId] = a; });
+    document.querySelectorAll('.bc-reach').forEach(async (sp) => {
+      const a = byOp[sp.dataset.op]; if (!a) return;
+      const who = [a.audience.civilians ? '📱 public' : '', a.audience.officers ? '🚓 crews' : ''].filter(Boolean).join(' + ');
+      let n = 0; try { n = Object.keys((await GeamsSync.getShared('public:ack:' + a.id, {})) || {}).length; } catch (e) {}
+      sp.textContent = who + ' · 👁 seen on ' + n + ' device' + (n === 1 ? '' : 's') + (a.status === 'lifted' ? ' · recalled' : '');
+    });
+  }
+  function recall(opId) {
+    GeamsTactical.lift(opId);
+    GeamsSync.mergeShared(PA, {}, m => { m = m || {}; Object.values(m).forEach(a => { if (a.opId === opId && a.status !== 'lifted') a.status = 'lifted'; }); return m; });
+    setTimeout(render, 150);
+  }
 
   function render() {
     const el = document.getElementById('page-broadcast');
@@ -5488,18 +5694,22 @@ const GeamsBroadcast = (() => {
                 <div class="broadcast-target selected" style="cursor:default">
                   <div class="bt-icon">🏠</div><div class="bt-label">Stations (LCRs)</div><div class="bt-count">${GeamsData.stations.filter(x=>!x.disabled).length} registered</div>
                 </div>
-                <div class="broadcast-target" style="opacity:.45;cursor:not-allowed" title="Not delivered yet">
-                  <div class="bt-icon">📱</div><div class="bt-label">Civilians</div><div class="bt-count">not wired yet</div>
+                <div class="broadcast-target ${aud.civilians?'selected':''}" id="bt-civ" style="cursor:pointer" onclick="GeamsBroadcast.toggleAud('civilians')">
+                  <div class="bt-icon">📱</div><div class="bt-label">Civilians</div><div class="bt-count">phones with the Civilian app open</div>
                 </div>
-                <div class="broadcast-target" style="opacity:.45;cursor:not-allowed" title="Not delivered yet">
-                  <div class="bt-icon">🚓</div><div class="bt-label">Officers</div><div class="bt-count">not wired yet</div>
+                <div class="broadcast-target ${aud.officers?'selected':''}" id="bt-off" style="cursor:pointer" onclick="GeamsBroadcast.toggleAud('officers')">
+                  <div class="bt-icon">🚓</div><div class="bt-label">Officers &amp; crews</div><div class="bt-count">police, fire, ambulance apps</div>
                 </div>
               </div></div>
-            <div class="form-group"><label class="form-label">Region</label>
+            <div class="form-group"><label class="form-label">Area</label>
               <select class="form-select" id="bc-region">
                 <option>All Regions (National)</option>
                 ${GeamsData.stations.map(s=>`<option>${s.region}</option>`).filter((v,i,a)=>a.indexOf(v)===i).join('')}
-              </select></div>
+                <optgroup label="One control room's area">${GeamsData.stations.filter(x=>!x.disabled).map(s=>`<option value="st:${s.id}">${s.name}</option>`).join('')}</optgroup>
+              </select>
+              <div style="font-size:0.65rem;color:var(--text-muted);margin-top:4px">Phones decide whether they are in the area from their own location (nearest control room). A phone that cannot find its location shows the alert anyway.</div></div>
+            <div class="form-group"><label class="form-label">Show to the public for</label>
+              <select class="form-select" id="bc-ttl"><option value="1">1 hour</option><option value="6" selected>6 hours</option><option value="24">24 hours</option></select></div>
             <div class="form-group"><label class="form-label">Message</label>
               <textarea class="form-textarea" id="bc-msg" rows="3" placeholder="Type your broadcast message..."></textarea></div>
             <div class="form-group"><label class="form-label">Priority</label>
@@ -5509,7 +5719,7 @@ const GeamsBroadcast = (() => {
                 <option>🔴 Critical — Override all sounds</option>
               </select></div>
             <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">
-              <button class="btn btn-primary" onclick="GeamsBroadcast.send()">📡 Send to Stations</button>
+              <button class="btn btn-primary" onclick="GeamsBroadcast.send()">📡 Send alert</button>
             </div>
           </div>
         </div>
@@ -5526,24 +5736,35 @@ const GeamsBroadcast = (() => {
                 </div>
                 <div style="font-size:0.75rem;color:var(--text-base);margin-bottom:5px;line-height:1.4">${GeamsTactical.esc(b.name)}</div>
                 <div style="display:flex;gap:10px;font-size:0.65rem;color:var(--text-muted);font-family:var(--font-mono)">
-                  <span>📍 ${GeamsTactical.esc(b.stationName)}</span><span>👤 ${GeamsTactical.esc(b.by)}</span>
-                  ${b.status==='active'?`<button class="btn btn-ghost" style="font-size:0.6rem;padding:1px 8px;margin-left:auto" onclick="GeamsTactical.lift('${b.id}');setTimeout(GeamsBroadcast.render,100)">🔇 Recall</button>`:'<span style="margin-left:auto">RECALLED</span>'}
+                  <span>📍 ${GeamsTactical.esc(b.stationName)}</span><span>👤 ${GeamsTactical.esc(b.by)}</span><span class="bc-reach" data-op="${b.id}"></span>
+                  ${b.status==='active'?`<button class="btn btn-ghost" style="font-size:0.6rem;padding:1px 8px;margin-left:auto" onclick="GeamsBroadcast.recall('${b.id}')">🔇 Recall</button>`:'<span style="margin-left:auto">RECALLED</span>'}
                 </div>
               </div>`).join(''); })()}
           </div>
         </div>
       </div>`;
+    setTimeout(fillReach, 50);
   }
 
   function send() {
     const msg = (document.getElementById('bc-msg').value || '').trim();
     if (!msg) { GeamsApp.showToast('warning','Message needed','Type the broadcast message first'); return; }
     const region = document.getElementById('bc-region').value, type = document.getElementById('bc-type').value, prio = document.getElementById('bc-prio').value;
-    const st = GeamsData.stations.filter(x => !x.disabled && (region.startsWith('All Regions') || x.region === region));
-    if (!st.length) { GeamsApp.showToast('warning','No stations','No stations in that region'); return; }
-    GeamsTactical.createOp({ type:'broadcast', name:msg, detail:type + ' · ' + prio.replace(/^\S+\s/, '').split(' — ')[0], station:region.startsWith('All Regions')?'all':'', stations:st.map(x=>x.id), stationName:region.startsWith('All Regions')?'All stations':region });
+    const all = region.startsWith('All Regions');
+    const st = GeamsData.stations.filter(x => !x.disabled && (all || (region.startsWith('st:') ? x.id === region.slice(3) : x.region === region)));
+    if (!st.length) { GeamsApp.showToast('warning','No stations','No stations in that area'); return; }
+    const opId = GeamsTactical.createOp({ type:'broadcast', name:msg, detail:type + ' · ' + prio.replace(/^\S+\s/, '').split(' — ')[0], station:region.startsWith('All Regions')?'all':'', stations:st.map(x=>x.id), stationName:all?'All stations':(region.startsWith('st:')?st[0].name:region) });
     document.getElementById('bc-msg').value = '';
-    GeamsApp.showToast('success','Broadcast sent','Delivered to '+st.length+' station(s) through live sync. Online stations show it now; offline ones when they reconnect.');
+    const pub = aud.civilians || aud.officers;
+    if (pub) {
+      const ttl = parseInt((document.getElementById('bc-ttl') || {}).value || '6', 10) || 6, now = Date.now();
+      const sev = /Critical/.test(prio) ? 'critical' : /High/.test(prio) ? 'warning' : 'info';
+      const pid = 'PA-' + now.toString(36) + Math.random().toString(36).slice(2, 5);
+      const alert = { id: pid, opId, title: type.replace(/^\S+\s/, ''), message: msg, severity: sev, audience: { civilians: aud.civilians, officers: aud.officers }, stations: all ? [] : st.map(x => x.id), areaLabel: all ? 'All regions' : (region.startsWith('st:') ? (st[0] && st[0].name) : region), createdAt: now, expiresAt: now + ttl * 3600000, status: 'active' };
+      GeamsSync.mergeShared(PA, {}, m => { m = m || {}; Object.keys(m).forEach(k => { if (m[k].expiresAt < now - 86400000) delete m[k]; }); m[pid] = alert; return m; })
+        .then(ok => { if (ok === false) GeamsApp.showToast('error', 'Public alert not published', 'Sign in to HQ again, then resend'); else { try { GeamsData.logAudit('HQ', '<strong>Public alert</strong> published — ' + GeamsTactical.esc(msg)); } catch (e) {} setTimeout(render, 200); } });
+    }
+    GeamsApp.showToast('success','Alert sent','Stations: '+st.length+(pub ? ' · ' + [aud.civilians ? 'civilians' : '', aud.officers ? 'officers and crews' : ''].filter(Boolean).join(' and ') + ' with GEAMS open will see it now. Phones that were closed see it when they next open GEAMS.' : '. No public alert was sent.'));
     setTimeout(render, 150);
   }
 
@@ -5552,7 +5773,7 @@ const GeamsBroadcast = (() => {
     GeamsApp.showToast('info','Broadcast','Quick broadcast opened for station ' + stationId);
   }
 
-  return { render, send, openQuickBroadcast };
+  return { render, send, openQuickBroadcast, toggleAud, recall, fillReach };
 })();
 
 
@@ -5633,6 +5854,57 @@ const GeamsSecurity = (() => {
 /* ─────────────────────────────────────────
    OFFICERS PAGE
 ───────────────────────────────────────── */
+const HqCrewApprovals = (() => {
+  let pending = [], seen = null, timer = null;
+  const KIND = { officer: '👮 Police officer', fire: '🚒 Fire crew', ambulance: '🚑 Ambulance crew' };
+  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  async function poll() {
+    if (GeamsSync.mode !== 'server') return;
+    const r = await HqAuth.api('/api/lcr/pending').catch(() => null); if (!r || !r.ok) return;
+    pending = r.j.pending || [];
+    const keys = pending.map(p => p.kind + ':' + p.badge);
+    if (seen && keys.some(k => !seen.includes(k))) GeamsApp.showToast('warning', 'Crew waiting for approval', 'A new officer or crew has registered', 7000);
+    seen = keys; draw();
+  }
+  function start() { if (!timer) { poll(); timer = setInterval(poll, 8000); } }
+  function draw() {
+    const el = document.getElementById('hq-crew-approvals'); if (!el) return;
+    if (!pending.length) { el.innerHTML = '<div style="font-size:0.7rem;color:var(--text-ghost);padding:4px 2px 10px">No crews waiting for approval. Each control room approves its own crews; HQ can approve any.</div>'; return; }
+    el.innerHTML = '<div class="panel" style="margin-bottom:12px"><div class="panel-header"><span>⏳</span><span class="panel-title">Crews waiting for approval (' + pending.length + ')</span></div><div style="padding:8px 12px;display:flex;flex-direction:column;gap:8px">' +
+      pending.map(p => { const st = (GeamsData.stations || []).find(x => x.id === p.lcrId); return '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><div style="flex:1;min-width:200px"><div style="font-weight:700">' + esc(p.name) + ' <span style="font-size:0.65rem;color:var(--text-muted);font-family:var(--font-mono)">' + esc(p.badge) + '</span></div><div style="font-size:0.7rem;color:var(--text-muted)">' + (KIND[p.kind] || p.kind) + ' · ' + esc(st ? st.name : p.lcrId) + ' · ' + esc(p.phone || '') + '</div></div>' +
+        '<button class="btn btn-primary btn-sm" onclick="HqCrewApprovals.decide(\'' + p.kind + '\',\'' + p.badge + '\',true)">✓ Approve</button><button class="btn btn-ghost btn-sm" onclick="HqCrewApprovals.decide(\'' + p.kind + '\',\'' + p.badge + '\',false)">✕ Reject</button></div>'; }).join('') + '</div></div>';
+  }
+  async function decide(kind, badge, approve) {
+    const r = await HqAuth.api('/api/lcr/approve', { method: 'POST', body: JSON.stringify({ kind, badge, approve }) });
+    GeamsApp.showToast(r.ok ? (approve ? 'success' : 'info') : 'error', r.ok ? (approve ? 'Approved' : 'Rejected') : 'Could not update', r.ok ? badge : (r.j.error || ''));
+    poll();
+  }
+  return { start, poll, draw, decide };
+})();
+
+const HqSmsInbox = (() => {
+  let items = [], seen = null, timer = null;
+  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  async function poll() {
+    if (GeamsSync.mode !== 'server') return;
+    let m = {}; try { m = (await GeamsSync.getShared('hq:smsInbox', {})) || {}; } catch (e) { return; }
+    items = Object.values(m).filter(x => !x.handled).sort((a, b) => b.receivedAt < a.receivedAt ? -1 : 1);
+    const ids = items.map(x => x.id);
+    if (seen && ids.some(i => !seen.includes(i))) GeamsApp.showToast('warning', 'Text message needs a control room', 'A text arrived with no location in it. See Officers page.', 9000);
+    seen = ids; draw();
+  }
+  function start() { if (!timer) { poll(); timer = setInterval(poll, 8000); } }
+  function draw() {
+    const el = document.getElementById('hq-sms-inbox'); if (!el) return;
+    if (!items.length) { el.innerHTML = ''; return; }
+    el.innerHTML = '<div class="panel" style="margin-bottom:12px;border-color:var(--orange)"><div class="panel-header"><span>✉️</span><span class="panel-title">Text messages with no location (' + items.length + ')</span></div><div style="padding:8px 12px;display:flex;flex-direction:column;gap:8px">' +
+      items.map(x => '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><div style="flex:1;min-width:220px"><div style="font-weight:700">' + esc(x.from) + ' <span style="font-size:0.65rem;color:var(--text-muted)">' + new Date(x.receivedAt).toLocaleTimeString() + '</span></div><div style="font-size:0.78rem">' + esc(x.text) + '</div></div>' +
+        '<a class="btn btn-primary btn-sm" href="tel:' + esc(x.from) + '">📞 Call back</a><button class="btn btn-ghost btn-sm" onclick="HqSmsInbox.done(\'' + esc(x.id) + '\')">✓ Handled</button></div>').join('') + '</div></div>';
+  }
+  async function done(id) { await GeamsSync.mergeShared('hq:smsInbox', {}, m => { m = m || {}; if (m[id]) m[id].handled = true; return m; }); poll(); }
+  return { start, poll, draw, done };
+})();
+
 const GeamsOfficers = (() => {
 
   function render() {
@@ -5651,6 +5923,8 @@ const GeamsOfficers = (() => {
           <button class="btn btn-danger btn-sm" onclick="GeamsApp.wantedPersonBroadcast()">🎯 Wanted Broadcast</button>
         </div>
       </div>
+      <div id="hq-crew-approvals"></div>
+      <div id="hq-sms-inbox"></div>
       <div class="kpi-row" style="grid-template-columns:repeat(4,1fr)">
         <div class="kpi-card cyan"><div class="kpi-label">Total Officers</div><div class="kpi-value">${total}</div><div class="kpi-sub">Across all stations</div></div>
         <div class="kpi-card green"><div class="kpi-label">On Duty Now</div><div class="kpi-value">${onDuty}</div><div class="kpi-sub">Active & deployed</div></div>
@@ -5712,6 +5986,7 @@ const GeamsTactical = (() => {
     GeamsSync.mergeShared(OPS_KEY, {}, m => { m = m || {}; m[id] = rec; return m; }).then(ok => { if (ok === false) GeamsApp.showToast('error','Not sent to stations','Sign in to HQ again, then reissue this order'); });
     try { GeamsData.logAudit('HQ', '<strong>' + esc(TYPE[o.type] || o.type) + '</strong> issued — ' + esc(o.name)); } catch (e) {}
     refresh();
+    return id;
   }
   function lift(id) {
     const o = ops[id]; if (!o) return;

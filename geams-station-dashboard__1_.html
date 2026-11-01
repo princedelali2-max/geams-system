@@ -1126,7 +1126,7 @@ body.dfs-active { overflow:hidden; }
     <div class="login-geo-status" id="login-geo-status"><div class="dot"></div><span>Location not yet verified</span></div>
 
     <details class="login-demo-box">
-      <summary>Demo credentials — 12 registered stations</summary>
+      <summary>Registered control rooms — tap one to fill its Station ID (passphrases are issued by HQ)</summary>
       <div class="login-demo-list" id="login-demo-list"></div>
     </details>
   </div>
@@ -1393,12 +1393,21 @@ const GeamsSync = (() => {
     try { const k = '__geams_probe__'; localStorage.setItem(k,'1'); localStorage.removeItem(k); return true; }
     catch (e) { return false; }
   }
+  // ── sign-in token: issued by the GEAMS server at login, sent with every request ──
+  let tokenMem = null; const authCbs = new Set();
+  function authToken() { try { return sessionStorage.getItem('geams_token') || sessionStorage.getItem('geams_hq_token') || tokenMem; } catch (e) { return tokenMem; } }
+  function setToken(t) { tokenMem = t || null; try { if (t) sessionStorage.setItem('geams_token', t); else { sessionStorage.removeItem('geams_token'); sessionStorage.removeItem('geams_hq_token'); } } catch (e) {} }
+  function onAuthLost(cb) { authCbs.add(cb); return () => authCbs.delete(cb); }
   async function http(path, opts, ms) {
     const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
     const t = ctl ? setTimeout(() => ctl.abort(), ms || 6000) : null;
     try {
+      const tk = authToken();
+      if (tk && !(opts && opts.headers && opts.headers.Authorization)) opts = Object.assign({}, opts, { headers: Object.assign({}, opts && opts.headers, { Authorization: 'Bearer ' + tk }) });
       const r = await fetch(base + path, Object.assign({ cache: 'no-store', signal: ctl && ctl.signal }, opts || {}));
-      online = true; return r;
+      online = true;
+      if (r.status === 401 && tk && path.indexOf('/api/kv/') === 0) { authCbs.forEach(cb => { try { cb(); } catch (e) {} }); }
+      return r;
     } catch (e) { online = false; throw e; }
     finally { if (t) clearTimeout(t); }
   }
@@ -1537,7 +1546,7 @@ const GeamsSync = (() => {
     try { if (url) localStorage.setItem('geams_backend', url.replace(/\/+$/, '')); else localStorage.removeItem('geams_backend'); } catch (e) {}
     location.reload();
   }
-  return { available, getShared, setShared, mergeShared, watch, ready, onStatus, setBackend, deviceId,
+  return { available, getShared, setShared, mergeShared, watch, ready, onStatus, setBackend, deviceId, setToken, onAuthLost, get token(){ return authToken(); },
            get mode(){ return mode; }, get base(){ return base; }, get online(){ return online; }, get devices(){ return status.devices; }, get deviceApps(){ return status.byApp; } };
 })();
 
@@ -1742,7 +1751,7 @@ const GeamsArchive = (() => {
     return GeamsSync.mergeShared(mediaKey(inc), [], arr => { arr = Array.isArray(arr) ? arr : []; const i = arr.findIndex(x => x.id === entry.id); if (i >= 0) arr[i] = Object.assign(arr[i], entry); else arr.push(entry); return arr; });
   }
   async function putBlob(inc, name, body, type, append) {
-    const r = await fetch((GeamsSync.base || '') + '/api/blob/' + enc(inc) + '/' + enc(name) + (append ? '?append=1' : ''), { method: 'PUT', headers: { 'Content-Type': type || 'application/octet-stream' }, body });
+    const r = await fetch((GeamsSync.base || '') + '/api/blob/' + enc(inc) + '/' + enc(name) + (append ? '?append=1' : ''), { method: 'PUT', headers: { ...(GeamsSync.token ? { Authorization: 'Bearer ' + GeamsSync.token } : {}), 'X-Geams-Device': String(GeamsSync.deviceId || ''), 'Content-Type': type || 'application/octet-stream' }, body });
     if (!r.ok) throw new Error('upload failed ' + r.status);
     return r.json();
   }
@@ -1804,7 +1813,61 @@ const GeamsArchive = (() => {
   }
   async function mediaCount(inc) { const m = await GeamsSync.getShared(mediaKey(inc), []); return Array.isArray(m) ? m.length : 0; }
 
-  return { log, track, addFile, recordStream, addSnapshot, loadBundle, mediaCount, blobUrl, serverMode };
+
+  // ── Evidence seals: every stored file is hashed and signed by the server; anyone with access can re-check it ──
+  const sealEsc = (t) => String(t == null ? '' : t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  async function evApi(path) {
+    const r = await fetch((GeamsSync.base || '') + path, { cache: 'no-store', headers: { Authorization: 'Bearer ' + (GeamsSync.token || '') } });
+    let j = {}; try { j = await r.json(); } catch (e) {}
+    if (!r.ok) throw new Error(j.error || ('Server answered ' + r.status));
+    return j;
+  }
+  const SEAL_LABEL = { intact: ['✓ Intact', '#16a34a'], modified: ['✗ CHANGED after it was stored', '#dc2626'], 'seal-forged': ['✗ Seal forged', '#dc2626'], 'log-broken': ['⚠ Custody log altered', '#d97706'], 'timestamp-invalid': ['✗ Outside timestamp does not verify', '#dc2626'], unsealed: ['⚠ Not sealed (stored before sealing existed)', '#d97706'], missing: ['✗ File missing', '#dc2626'], error: ['⚠ Could not check', '#d97706'] };
+  const sealKB = (n) => n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+  function tsLine(t) { if (!t || t.state === 'off') return ''; const m = { verified: ['🕒 Independently timestamped by ' + (t.tsa || 'a timestamp authority') + (t.at ? ' at ' + new Date(t.at).toLocaleString() : '') + ' — verified', '#16a34a'], stored: ['🕒 Timestamped by ' + (t.tsa || 'authority') + ' (stored; not checked by this server)', '#d97706'], stale: ['🕒 ' + (t.message || 'Newer data not yet timestamped'), '#d97706'], pending: ['🕒 ' + (t.message || 'Waiting for the outside timestamp'), '#d97706'], invalid: ['🕒 ' + (t.message || 'Outside timestamp does not verify'), '#dc2626'] }[t.state]; return m ? '<div style="font-size:11px;color:' + m[1] + '">' + sealEsc(m[0]) + '</div>' : ''; }
+  async function verifyOne(inc, name) { try { return await evApi('/api/evidence/' + enc(inc) + '/' + enc(name) + '/verify'); } catch (e) { return { status: 'error', message: e.message }; } }
+  function certificateText(inc, rows, who) {
+    const L = ['GEAMS EVIDENCE INTEGRITY CERTIFICATE', '====================================', 'Incident: ' + inc, 'Checked: ' + new Date().toISOString(), 'Checked by: ' + (who || 'signed-in user'), 'Files: ' + rows.length, ''];
+    rows.forEach((r, i) => {
+      L.push((i + 1) + '. ' + r.name, '   Result:      ' + (SEAL_LABEL[r.v.status] ? SEAL_LABEL[r.v.status][0] : r.v.status), '   Detail:      ' + (r.v.message || ''), '   SHA-256:     ' + (r.v.sha256 || r.f.sha256 || 'n/a'), '   Size:        ' + (r.v.size != null ? r.v.size + ' bytes' : r.f.size + ' bytes'), '   Stored:      ' + (r.v.sealedAt ? new Date(r.v.sealedAt).toISOString() : 'n/a'), '   Outside timestamp: ' + (r.v.timestamp && r.v.timestamp.state !== 'off' ? r.v.timestamp.state + (r.v.timestamp.tsa ? ' (' + r.v.timestamp.tsa + (r.v.timestamp.at ? ', ' + new Date(r.v.timestamp.at).toISOString() : '') + ')' : '') : 'not used'), '   First saved by: ' + (r.v.by ? r.v.by.role + (r.v.by.user ? ' ' + r.v.by.user : '') : 'n/a'), '   Custody log: ' + (r.v.chainOk === false ? 'ALTERED' : 'chain intact') + ' (' + (r.v.events || 0) + ' events)', '');
+    });
+    L.push('How this works: when a file reaches the GEAMS server it is hashed (SHA-256) and the hash, size, time and writer are signed with a key held only by the server.', 'Each custody event is signed together with the one before it. Changing a file, a seal or the log afterwards fails this check.', 'Limit: the signing key belongs to the GEAMS server. This proves the file is unchanged since GEAMS stored it; it is not an external trusted-timestamp service.');
+    return L.join('\n');
+  }
+  async function sealPanel(el, inc, who) {
+    if (!el) return;
+    if (!serverMode()) { el.innerHTML = '<div style="font-size:12px;opacity:.8">Evidence seals are kept by the GEAMS server, which is not connected.</div>'; return; }
+    el.innerHTML = '<div style="font-size:12px;opacity:.7">Loading sealed evidence…</div>';
+    let files = [];
+    try { files = (await evApi('/api/blobs/' + enc(inc))).files || []; } catch (e) { el.innerHTML = '<div style="font-size:12px;color:#d97706">Could not load: ' + sealEsc(e.message) + '</div>'; return; }
+    files.sort((a, b) => a.ts - b.ts);
+    const results = {};
+    const draw = () => {
+      el.innerHTML = '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px"><b style="font-size:12px">🔒 Sealed evidence · ' + files.length + ' file' + (files.length === 1 ? '' : 's') + '</b><span style="flex:1"></span>' +
+        '<button class="gr-btn btn btn-ghost btn-sm" data-act="all"' + (files.length ? '' : ' disabled') + '>Verify all</button><button class="gr-btn btn btn-ghost btn-sm" data-act="cert"' + (files.length ? '' : ' disabled') + '>⬇ Certificate</button></div>' +
+        (files.length ? files.map(f => { const v = results[f.name], lab = v && SEAL_LABEL[v.status];
+          return '<div style="border:1px solid rgba(127,127,127,.25);border-radius:8px;padding:8px;margin-bottom:6px;font-size:12px"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><b style="word-break:break-all">' + sealEsc(f.name) + '</b><span style="opacity:.7">' + sealKB(f.size) + '</span><span style="flex:1"></span><button class="gr-btn btn btn-ghost btn-sm" data-act="v" data-n="' + sealEsc(f.name) + '">Verify</button><button class="gr-btn btn btn-ghost btn-sm" data-act="c" data-n="' + sealEsc(f.name) + '">Custody</button></div>' +
+            '<div style="font-family:ui-monospace,monospace;font-size:10.5px;opacity:.75;word-break:break-all;margin-top:3px">' + (f.sealed ? '🔒 SHA-256 ' + sealEsc(f.sha256) + ' · stored ' + new Date(f.sealedAt).toLocaleString() : '⚠ not sealed') + '</div>' +
+            (lab ? '<div style="margin-top:4px;font-weight:700;color:' + lab[1] + '">' + lab[0] + '</div><div style="opacity:.8">' + sealEsc(v.message || '') + '</div>' + tsLine(v.timestamp) : '') + '<div data-cust="' + sealEsc(f.name) + '"></div></div>'; }).join('') : '<div style="font-size:12px;opacity:.7">No files stored for this incident.</div>');
+    };
+    draw();
+    el.onclick = async (ev) => {
+      const b = ev.target.closest('button[data-act]'); if (!b) return; const act = b.dataset.act, n = b.dataset.n;
+      if (act === 'v') { b.textContent = 'Checking…'; results[n] = await verifyOne(inc, n); draw(); }
+      else if (act === 'all' || act === 'cert') {
+        b.textContent = 'Checking…'; for (const f of files) results[f.name] = await verifyOne(inc, f.name); draw();
+        if (act === 'cert') { const rows = files.map(f => ({ name: f.name, f, v: results[f.name] })); const blob = new Blob([certificateText(inc, rows, who)], { type: 'text/plain' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'GEAMS-evidence-certificate-' + inc + '.txt'; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500); }
+      }
+      else if (act === 'c') {
+        const slot = el.querySelector('[data-cust="' + (window.CSS && CSS.escape ? CSS.escape(n) : n) + '"]'); if (!slot) return;
+        if (slot.innerHTML) { slot.innerHTML = ''; return; }
+        try { const c = await evApi('/api/evidence/' + enc(inc) + '/' + enc(n) + '/custody');
+          slot.innerHTML = '<div style="margin-top:6px;font-size:11px;font-family:ui-monospace,monospace;opacity:.9">' + (c.chainOk ? '✓ log chain intact' : '✗ LOG CHAIN BROKEN') + '<br>' + c.entries.map(e => new Date(e.t).toLocaleTimeString() + ' · ' + sealEsc(e.ev) + ' · ' + sealEsc(e.role) + (e.user ? ' ' + sealEsc(e.user) : '') + (e.result ? ' → ' + sealEsc(e.result) : '') + (e.bytes ? ' · +' + sealKB(e.bytes) : '')).join('<br>') + '</div>'; }
+        catch (e) { slot.innerHTML = '<div style="color:#d97706;font-size:11px">' + sealEsc(e.message) + '</div>'; }
+      }
+    };
+  }
+  return { log, track, addFile, recordStream, addSnapshot, loadBundle, mediaCount, blobUrl, serverMode, sealPanel };
 })();
 
 /* ============================================================
@@ -1968,13 +2031,14 @@ const GeamsReplay = (() => {
           <input type="range" id="gr-scrub" min="0" max="${span}" value="0" style="width:100%;margin-top:8px">
         </div>
         <div class="gr-card"><h4>Recordings &amp; files (${vids.length + files.length + snaps.length})</h4><div class="gr-media" id="gr-media"></div></div>
+        <div class="gr-card"><h4>Evidence integrity</h4><div id="gr-seal"></div></div>
       </div>
       <div style="display:flex;flex-direction:column;gap:12px;min-width:0">
         <div class="gr-card"><h4>Timeline (${ev.length} events)</h4><div class="gr-ev" id="gr-ev"></div></div>
         <div class="gr-card"><h4>Chat</h4><div class="gr-chat" id="gr-chat" style="max-height:260px;overflow:auto"></div></div>
         <div class="gr-card"><h4>Summary</h4><div style="font-size:12px;line-height:1.7">
           Status: <b>${esc((r.status || 'unknown').toUpperCase())}</b>${r.civilianCancelled ? ' (civilian cancelled)' : ''}<br>
-          Civilian: ${esc(r.civilianName || '—')} ${esc(r.civilianPhone || '')}<br>
+          Civilian: ${esc(r.civilianName || '—')} ${esc(r.civilianPhone || '')}${r.civilianPhone ? (r.source==='sms' ? ' <span style="font-size:0.65rem">· via text message</span>' : '') + (r.civilianVerified ? ' <span style="color:var(--green,#22c55e);font-size:0.65rem">✓ phone verified</span>' : ' <span style="color:var(--text-muted);font-size:0.65rem">(unverified)</span>') : ''}<br>
           Officer: ${esc(r.officerName || '—')} ${esc(r.officerBadge || '')}<br>
           Location: ${esc(r.location || '—')}<br>
           GPS points: ${track.civ.length} civilian · ${track.off.length} officer</div></div>
@@ -1999,6 +2063,7 @@ const GeamsReplay = (() => {
     if (snaps.length) html += `<div style="font-size:12px;margin:6px 0"><b>🖼 Snapshots (${snaps.length})</b></div><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:6px">${snaps.sort((a, b) => a.ts - b.ts).map(s => `<a target="_blank" rel="noopener" href="${GeamsArchive.blobUrl(B.inc, s.name)}" title="${hms(s.ts)}"><img src="${GeamsArchive.blobUrl(B.inc, s.name)}" style="width:100%;margin:0"></a>`).join('')}</div>`;
     if (!html) html = '<div style="color:#7aa2c8;font-size:12px">No recordings or files were attached to this incident.</div>';
     mEl.innerHTML = html;
+    GeamsArchive.sealPanel(main.querySelector('#gr-seal'), B.inc, (typeof HqAuth !== 'undefined' && HqAuth.user && HqAuth.user()) || (window.StationData && StationData.station && StationData.station.commanderName) || '');
     mEl.querySelectorAll('video[data-start]').forEach(v => {
       vEls.push(v);
       // MediaRecorder files have no duration header — force the browser to find it so seeking works.
@@ -2132,7 +2197,7 @@ const GeamsStationSync = (() => {
     currentLcrId = lcrId;
     watchStops.push(GeamsSync.watch('lcr:' + lcrId + ':incidents', {}, (map) => {
       Object.values(map).forEach(rec => {
-        if (rec.source !== 'civilian-app') return;
+        if (rec.source !== 'civilian-app' && rec.source !== 'sms') return;   // 'sms' = a text message the server turned into an incident; handled like an app alert
         let inc = StationData.incidents.find(i => i.id === rec.id);
         if (!inc) {
           inc = {
@@ -2143,7 +2208,7 @@ const GeamsStationSync = (() => {
             civilian: rec.civilianName, civilianPhone: rec.civilianPhone,
             civilianLat: rec.civilianLat, civilianLng: rec.civilianLng,
             civilianTracking: rec.trackLocation !== false, officerAssigned: null,
-            notes: rec.notes || '', evidenceCount: 0, source: 'civilian-app',
+            notes: rec.notes || '', evidenceCount: 0, source: 'civilian-app', via: rec.source,
           };
           StationData.incidents.unshift(inc);
           StationData.logActivity(inc.id, 'RECEIVED',
@@ -2419,19 +2484,19 @@ const StationAuth = (() => {
   // jurisdictionRadiusM defines the enforced operational boundary
   // shown on the map and used to gate what this station can manage.
   const STATION_DIRECTORY = [
-    { id:'GH-GA-ACC-001-B9C1', passphrase:'accra2024',    name:'Accra Central Police Station',   region:'Greater Accra', town:'Accra',      address:'Ring Road Central, Accra, Ghana',   commanderName:'',      commanderRank:'', lat:5.5560,  lng:-0.2040, jurisdictionRadiusM:3000 },
-    { id:'GH-GA-ACC-007-F2A3', passphrase:'tema2024',     name:'Tema Port Station',               region:'Greater Accra', town:'Tema',       address:'Harbour Road, Tema, Ghana',         commanderName:'',       commanderRank:'',      lat:5.6698,  lng:-0.0167, jurisdictionRadiusM:3500 },
-    { id:'GH-AS-KUM-001-A4F2', passphrase:'kumasi2024',   name:'Kumasi Central Police Station',   region:'Ashanti',       town:'Kumasi',     address:'Adum, Kumasi, Ghana',                commanderName:'',       commanderRank:'', lat:6.6885,  lng:-1.6244, jurisdictionRadiusM:4000 },
-    { id:'GH-AS-KUM-002-C7D9', passphrase:'suame2024',    name:'Suame District Station',          region:'Ashanti',       town:'Kumasi',     address:'Suame, Kumasi, Ghana',               commanderName:'',      commanderRank:'',      lat:6.7228,  lng:-1.6131, jurisdictionRadiusM:2800 },
-    { id:'GH-WR-TAK-001-D2E8', passphrase:'takoradi2024', name:'Takoradi Central Station',        region:'Western',       town:'Takoradi',   address:'Market Circle, Takoradi, Ghana',     commanderName:'',       commanderRank:'',      lat:4.8993,  lng:-1.7557, jurisdictionRadiusM:3200 },
-    { id:'GH-CR-CAP-001-E5F1', passphrase:'capecoast2024',name:'Cape Coast Central Station',      region:'Central',       town:'Cape Coast', address:'Commercial St, Cape Coast, Ghana',   commanderName:'',commanderRank:'',      lat:5.1054,  lng:-1.2466, jurisdictionRadiusM:2600 },
-    { id:'GH-NR-TAM-001-G3H6', passphrase:'tamale2024',   name:'Tamale Central Station',           region:'Northern',      town:'Tamale',     address:'Central Market Rd, Tamale, Ghana',   commanderName:'',      commanderRank:'', lat:9.4008,  lng:-0.8393, jurisdictionRadiusM:4500 },
-    { id:'GH-UE-BOL-001-H8I2', passphrase:'bolga2024',    name:'Bolgatanga Station',               region:'Upper East',    town:'Bolgatanga', address:'Bolgatanga Township, Ghana',         commanderName:'',        commanderRank:'',      lat:10.7853, lng:-0.8514, jurisdictionRadiusM:5000 },
-    { id:'GH-VR-HO-001-J4K7',  passphrase:'ho2024',       name:'Ho Central Station',               region:'Volta',         town:'Ho',         address:'Ho Township, Ghana',                 commanderName:'',      commanderRank:'',      lat:6.6011,  lng:0.4714,  jurisdictionRadiusM:3000 },
-    { id:'GH-VR-HOH-001-P3Q7', passphrase:'hohoe2024',    name:'Hohoe Local Control Room',         region:'Volta',         town:'Hohoe',      address:'Hohoe Township, Hohoe, Volta Region',commanderName:'',     commanderRank:'',      lat:7.15162, lng:0.47368, locationVerified:true, locationSource:'osm-mapped', jurisdictionRadiusM:3500 },
-    { id:'GH-BA-SUN-001-K9L3', passphrase:'sunyani2024',  name:'Sunyani Station',                  region:'Bono',          town:'Sunyani',    address:'Sunyani Township, Ghana',            commanderName:'',     commanderRank:'',      lat:7.3349,  lng:-2.3264, jurisdictionRadiusM:3500 },
-    { id:'GH-AH-KOF-001-L1M5', passphrase:'koforidua2024',name:'Koforidua Station',                region:'Eastern',       town:'Koforidua',  address:'Koforidua Township, Ghana',          commanderName:'',       commanderRank:'',      lat:6.0944,  lng:-0.2590, jurisdictionRadiusM:3200 },
-    { id:'GH-SW-SEK-001-M6N9', passphrase:'sekondi2024',  name:'Sekondi Station',                  region:'Western',       town:'Sekondi',    address:'Sekondi Township, Ghana',            commanderName:'',       commanderRank:'',      lat:4.9340,  lng:-1.7039, jurisdictionRadiusM:2800 },
+    { id:'GH-GA-ACC-001-B9C1', name:'Accra Central Police Station',   region:'Greater Accra', town:'Accra',      address:'Ring Road Central, Accra, Ghana',   commanderName:'',      commanderRank:'', lat:5.5560,  lng:-0.2040, jurisdictionRadiusM:3000 },
+    { id:'GH-GA-ACC-007-F2A3', name:'Tema Port Station',               region:'Greater Accra', town:'Tema',       address:'Harbour Road, Tema, Ghana',         commanderName:'',       commanderRank:'',      lat:5.6698,  lng:-0.0167, jurisdictionRadiusM:3500 },
+    { id:'GH-AS-KUM-001-A4F2', name:'Kumasi Central Police Station',   region:'Ashanti',       town:'Kumasi',     address:'Adum, Kumasi, Ghana',                commanderName:'',       commanderRank:'', lat:6.6885,  lng:-1.6244, jurisdictionRadiusM:4000 },
+    { id:'GH-AS-KUM-002-C7D9', name:'Suame District Station',          region:'Ashanti',       town:'Kumasi',     address:'Suame, Kumasi, Ghana',               commanderName:'',      commanderRank:'',      lat:6.7228,  lng:-1.6131, jurisdictionRadiusM:2800 },
+    { id:'GH-WR-TAK-001-D2E8', name:'Takoradi Central Station',        region:'Western',       town:'Takoradi',   address:'Market Circle, Takoradi, Ghana',     commanderName:'',       commanderRank:'',      lat:4.8993,  lng:-1.7557, jurisdictionRadiusM:3200 },
+    { id:'GH-CR-CAP-001-E5F1', name:'Cape Coast Central Station',      region:'Central',       town:'Cape Coast', address:'Commercial St, Cape Coast, Ghana',   commanderName:'',commanderRank:'',      lat:5.1054,  lng:-1.2466, jurisdictionRadiusM:2600 },
+    { id:'GH-NR-TAM-001-G3H6', name:'Tamale Central Station',           region:'Northern',      town:'Tamale',     address:'Central Market Rd, Tamale, Ghana',   commanderName:'',      commanderRank:'', lat:9.4008,  lng:-0.8393, jurisdictionRadiusM:4500 },
+    { id:'GH-UE-BOL-001-H8I2', name:'Bolgatanga Station',               region:'Upper East',    town:'Bolgatanga', address:'Bolgatanga Township, Ghana',         commanderName:'',        commanderRank:'',      lat:10.7853, lng:-0.8514, jurisdictionRadiusM:5000 },
+    { id:'GH-VR-HO-001-J4K7',  name:'Ho Central Station',               region:'Volta',         town:'Ho',         address:'Ho Township, Ghana',                 commanderName:'',      commanderRank:'',      lat:6.6011,  lng:0.4714,  jurisdictionRadiusM:3000 },
+    { id:'GH-VR-HOH-001-P3Q7', name:'Hohoe Local Control Room',         region:'Volta',         town:'Hohoe',      address:'Hohoe Township, Hohoe, Volta Region',commanderName:'',     commanderRank:'',      lat:7.15162, lng:0.47368, locationVerified:true, locationSource:'osm-mapped', jurisdictionRadiusM:3500 },
+    { id:'GH-BA-SUN-001-K9L3', name:'Sunyani Station',                  region:'Bono',          town:'Sunyani',    address:'Sunyani Township, Ghana',            commanderName:'',     commanderRank:'',      lat:7.3349,  lng:-2.3264, jurisdictionRadiusM:3500 },
+    { id:'GH-AH-KOF-001-L1M5', name:'Koforidua Station',                region:'Eastern',       town:'Koforidua',  address:'Koforidua Township, Ghana',          commanderName:'',       commanderRank:'',      lat:6.0944,  lng:-0.2590, jurisdictionRadiusM:3200 },
+    { id:'GH-SW-SEK-001-M6N9', name:'Sekondi Station',                  region:'Western',       town:'Sekondi',    address:'Sekondi Township, Ghana',            commanderName:'',       commanderRank:'',      lat:4.9340,  lng:-1.7039, jurisdictionRadiusM:2800 },
   ];
 
   // ── VERIFIED LOCATION OVERRIDES ──
@@ -2471,14 +2536,16 @@ const StationAuth = (() => {
   }
   async function refreshDynamicStations() { applyDynamicStations(await GeamsSync.getShared('registry:stations', {})); }
   // HQ-issued passphrases are verified by the GEAMS server; hashes never reach the browser.
+  // Every control room, built-in or HQ-created, signs in through the GEAMS server, which checks the
+  // passphrase and returns a signed token. The token is what lets this station read and write shared data.
   async function checkPassphrase(match, pass) {
-    if (!match.dynamic) return match.passphrase === pass;
     await GeamsSync.ready;
-    if (GeamsSync.mode !== 'server') throw new Error('This control room needs the GEAMS server connection to sign in');
+    if (GeamsSync.mode !== 'server') throw new Error('Signing in needs the GEAMS server connection, which is not reachable right now');
     const r = await fetch(GeamsSync.base + '/api/lcr/login', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ stationId: match.id, passphrase: pass }) });
     let j = {}; try { j = await r.json(); } catch (e) {}
-    if (r.status === 429 || r.status === 403) throw new Error(j.error || 'Sign-in refused');
-    return r.ok;
+    if (r.status === 429 || r.status === 403 || r.status === 404) throw new Error(j.error || 'Sign-in refused');
+    if (r.ok && j.token) { GeamsSync.setToken(j.token); return true; }
+    return false;
   }
   function applyLocationOverrides(map) {
     if (!map) return;
@@ -2515,6 +2582,8 @@ const StationAuth = (() => {
   }, 4000);
 
   let session = null; // { station, loginTime, geo:{status,lat,lng,distanceM} }
+  let _authWarned = false;
+  GeamsSync.onAuthLost(() => { if (session && !_authWarned) { _authWarned = true; alert('Your sign-in has ended (it expired, or HQ changed this control room). Please sign in again.'); logout(); setTimeout(() => { _authWarned = false; }, 3000); } });
 
   function findStation(id) {
     return STATION_DIRECTORY.find(s => s.id.toLowerCase() === String(id).trim().toLowerCase());
@@ -2523,18 +2592,18 @@ const StationAuth = (() => {
   function initLoginScreen() {
     const list = document.getElementById('login-demo-list');
     if (list) {
-      list.innerHTML = STATION_DIRECTORY.map(s => `
-        <div class="login-demo-row" onclick="StationAuth.fillDemo('${s.id}','${s.passphrase}')">
-          <span>${s.id}</span><span>${s.passphrase}</span>
+      list.innerHTML = STATION_DIRECTORY.filter(s => !s.disabled).map(s => `
+        <div class="login-demo-row" onclick="StationAuth.fillDemo('${s.id}')">
+          <span>${s.id}</span><span>${String(s.name).replace(/[<>&]/g,'')}</span>
         </div>`).join('');
     }
     document.getElementById('login-screen').classList.add('active');
   }
 
-  function fillDemo(id, pass) {
+  function fillDemo(id) {
     document.getElementById('login-station-id').value = id;
-    document.getElementById('login-passphrase').value = pass;
     prefillCommander();
+    const p = document.getElementById('login-passphrase'); if (p) p.focus();
   }
 
   // ── STATION COMMANDERS: real people who sign in, never invented names ──
@@ -2686,7 +2755,7 @@ const StationAuth = (() => {
     // still-running old ones, which re-inject already-seen incidents the
     // moment the array is cleared for the new session.
     if (typeof GeamsStationSync !== 'undefined') GeamsStationSync.stop();
-    session = null;
+    session = null; GeamsSync.setToken(null);
     document.getElementById('app').style.display = 'none';
     document.getElementById('login-station-id').value = '';
     document.getElementById('login-passphrase').value = '';
@@ -3224,8 +3293,8 @@ const StationApp = (() => {
       case 'incidents':  StationIncidents.render();  break;
       case 'dispatch':   StationDispatch.render();   break;
       case 'comms':      StationComms.render();      break;
-      case 'officers':   StationOfficers.render();   break;
-      case 'evidence':   StationEvidence.render();   break;
+      case 'officers':   StationOfficers.render(); CrewApprovals.draw(); CrewApprovals.poll(); break;
+      case 'evidence':   StationEvidence.render(); StationEvidence.loadSeals(); break;
       case 'backup':     StationBackup.render();     break;
       case 'replay':     StationReplayPage.render(); break;
       case 'reports':    StationReports.render();    break;
@@ -4313,6 +4382,7 @@ const StationApp = (() => {
     // No demo incidents, no fake alert toasts — the incident list starts
     // empty and stays that way until a real report arrives.
     bindLive();
+    CrewApprovals.start();
     updateKPIs();
     setTimeout(() => showToast('success','Station Online',`${StationData.station.id} connected to HQ · All systems nominal`, 5000), 500);
   }
@@ -7093,6 +7163,44 @@ const StationComms = (() => {
 /* ─────────────────────────────
    OFFICERS PAGE
 ───────────────────────────── */
+const CrewApprovals = (() => {
+  let pending = [], seen = null, timer = null;
+  const KIND = { officer: '👮 Police officer', fire: '🚒 Fire crew', ambulance: '🚑 Ambulance crew' };
+  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  async function api(path, body) {
+    const r = await fetch((GeamsSync.base || '') + path, { method: body ? 'POST' : 'GET', cache: 'no-store', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (GeamsSync.token || '') }, body: body ? JSON.stringify(body) : undefined });
+    let j = {}; try { j = await r.json(); } catch (e) {}
+    if (!r.ok) throw new Error(j.error || ('Server answered ' + r.status));
+    return j;
+  }
+  async function poll() {
+    if (!GeamsSync.token || GeamsSync.mode !== 'server') return;
+    try {
+      const j = await api('/api/lcr/pending'); pending = j.pending || [];
+      const keys = pending.map(p => p.kind + ':' + p.badge);
+      if (seen && keys.some(k => !seen.includes(k))) StationApp.showToast('warning', 'Crew waiting for approval', 'A new officer or crew has registered for your station', 7000);
+      seen = keys;
+      const nav = document.querySelector('.nav-item[data-page="officers"] .nav-label');
+      if (nav) nav.innerHTML = 'Officers' + (pending.length ? ' <span class="nav-badge orange" style="margin-left:6px">' + pending.length + '</span>' : '');
+      draw();
+    } catch (e) {}
+  }
+  function start() { if (!timer) { poll(); timer = setInterval(poll, 6000); } }
+  function draw() {
+    const el = document.getElementById('crew-approvals'); if (!el) return;
+    if (!pending.length) { el.innerHTML = '<div style="font-size:0.7rem;color:var(--text-ghost);padding:4px 2px 10px">No crews waiting for approval. New officers, fire and ambulance crews who register for this station appear here before they can sign in.</div>'; return; }
+    el.innerHTML = '<div class="panel" style="margin-bottom:12px;border-color:var(--orange)"><div class="panel-header"><span>⏳</span><span class="panel-title">Waiting for your approval (' + pending.length + ')</span></div><div style="padding:8px 12px;display:flex;flex-direction:column;gap:8px">' +
+      pending.map(p => '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><div style="flex:1;min-width:200px"><div style="font-weight:700">' + esc(p.name) + ' <span style="font-size:0.65rem;color:var(--text-muted);font-family:var(--font-mono)">' + esc(p.badge) + '</span></div><div style="font-size:0.7rem;color:var(--text-muted)">' + (KIND[p.kind] || p.kind) + ' · ' + esc(p.rank || '') + ' · ' + esc(p.phone || '') + ' · requested ' + new Date(p.requestedAt).toLocaleTimeString() + '</div></div>' +
+        '<button class="btn btn-primary btn-sm" onclick="CrewApprovals.decide(\'' + p.kind + '\',\'' + p.badge + '\',true)">✓ Approve</button><button class="btn btn-ghost btn-sm" onclick="CrewApprovals.decide(\'' + p.kind + '\',\'' + p.badge + '\',false)">✕ Reject</button></div>').join('') + '</div></div>';
+  }
+  async function decide(kind, badge, approve) {
+    try { await api('/api/lcr/approve', { kind, badge, approve }); StationApp.showToast(approve ? 'success' : 'info', approve ? 'Approved' : 'Rejected', badge, 4000); }
+    catch (e) { StationApp.showToast('error', 'Could not update', e.message, 6000); }
+    poll();
+  }
+  return { start, poll, draw, decide };
+})();
+
 const StationOfficers = (() => {
   function render() {
     const el = document.getElementById('page-officers');
@@ -7111,6 +7219,7 @@ const StationOfficers = (() => {
           <button class="btn btn-ghost btn-sm" onclick="StationApp.shiftHandover()">🔄 Shift Handover</button>
         </div>
       </div>
+      <div id="crew-approvals"></div>
       <div class="kpi-row">
         <div class="kpi-card green"><div class="kpi-label">Available</div><div class="kpi-value">${avail}</div><div class="kpi-sub">Ready for dispatch</div></div>
         <div class="kpi-card orange"><div class="kpi-label">Dispatched</div><div class="kpi-value">${disp}</div><div class="kpi-sub">On active duty</div></div>
@@ -7174,8 +7283,13 @@ const StationEvidence = (() => {
         <div class="section-line"></div>
         <div style="display:flex;gap:8px">
           <button class="btn btn-primary btn-sm" onclick="StationEvidence.openUpload()">📎 Upload Evidence</button>
-          <button class="btn btn-ghost btn-sm" onclick="StationApp.generateStationReport()">📊 Chain of Custody</button>
+          <button class="btn btn-ghost btn-sm" onclick="StationApp.generateStationReport()">📊 Station Report</button>
         </div>
+      </div>
+      <div class="panel" style="margin-bottom:12px">
+        <div class="panel-header"><span>🔒</span><span class="panel-title">Sealed evidence on the server</span>
+          <select class="form-select" id="seal-inc" style="margin-left:auto;max-width:260px" onchange="StationEvidence.loadSeals()">${StationData.incidents.filter(i=>StationData.canViewIncident(i)).map(i=>`<option value="${i.id}">${i.id} — ${i.type}</option>`).join('') || '<option value="">No incidents</option>'}</select></div>
+        <div class="panel-body" id="seal-panel" style="padding:10px 12px"></div>
       </div>
       <div class="panel" style="flex:1">
         <div class="panel-header"><span>🔍</span><span class="panel-title">Evidence Log</span></div>
@@ -7201,6 +7315,7 @@ const StationEvidence = (() => {
         </div>
       </div>`;
   }
+  function loadSeals() { const sel = document.getElementById('seal-inc'); const inc = sel && sel.value; const el = document.getElementById('seal-panel'); if (!inc) { if (el) el.innerHTML = '<div style="font-size:12px;opacity:.7">Pick an incident to see its sealed evidence.</div>'; return; } GeamsArchive.sealPanel(el, inc, StationData.station.commanderName || StationData.station.name || ''); }
   function openUpload() {
     const incs = StationData.incidents.filter(i => StationData.canViewIncident(i));
     if (!incs.length) { StationApp.showToast('warning','No Incidents','There are no incidents to attach evidence to'); return; }
@@ -7240,7 +7355,7 @@ const StationEvidence = (() => {
     else body += `<div style="margin-top:10px"><a class="btn btn-ghost btn-sm" href="${e.url}" target="_blank" rel="noopener">Open file</a></div>`;
     StationApp.openModal('👁 ' + e.id, body, `<button class="btn btn-ghost btn-sm" onclick="StationApp.closeModal()">Close</button>`);
   }
-  return { render, openUpload, submitUpload, view };
+  return { render, openUpload, submitUpload, view, loadSeals };
 })();
 
 
@@ -8100,7 +8215,12 @@ const StationHQOps = (() => {
   const LABEL = { cordon:'CORDON ORDER', curfew:'CURFEW', wanted:'WANTED NOTICE', command:'COMMAND HANDOVER', mobilise:'MOBILISATION ORDER', caselink:'JOINT CASE', emergency:'EMERGENCY', broadcast:'BROADCAST' };
   let stopW = null, seen = {}, hidden = {}, primed = false, last = [];
   const esc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const mine = o => o && o.status === 'active' && (!o.station || o.station === 'all' || o.station === StationData.station.id || (Array.isArray(o.stations) && o.stations.includes(StationData.station.id)));
+  const mine = o => {
+    if (!o || o.status !== 'active') return false;
+    const me = StationData.station.id;
+    if (Array.isArray(o.stations) && o.stations.length) return o.stations.includes(me);   // an explicit list wins
+    return !o.station || o.station === 'all' || o.station === me;
+  };
   function start() {
     stop();
     seen = {}; hidden = {}; primed = false;
@@ -8162,7 +8282,7 @@ const StationReports = (() => {
       <div class="kpi-row">
         <div class="kpi-card cyan"><div class="kpi-label">Today's Incidents</div><div class="kpi-value">${StationData.incidents.length}</div><div class="kpi-sub">All types</div></div>
         <div class="kpi-card green"><div class="kpi-label">Resolved</div><div class="kpi-value">${k.resolved}</div><div class="kpi-sub">Closed today</div></div>
-        <div class="kpi-card orange"><div class="kpi-label">Avg Response</div><div class="kpi-value">${StationData.stats.avgResponseMin==null?'—':StationData.stats.avgResponseMin+'m'}</div><div class="kpi-sub">This station</div></div>
+        <div class="kpi-card orange"><div class="kpi-label">Median time to arrival</div><div class="kpi-value" id="sr-med">…</div><div class="kpi-sub" id="sr-med-sub">This station, last 30 days</div></div>
         <div class="kpi-card red"><div class="kpi-label">Open Cases</div><div class="kpi-value">${k.active + k.dispatched}</div><div class="kpi-sub">Require action</div></div>
       </div>
       <div class="two-col">
@@ -8201,9 +8321,53 @@ const StationReports = (() => {
             </div>
           </div>
         </div>
-      </div>`;
+      </div>
+      <div class="panel" style="margin-top:14px;flex-shrink:0"><div class="panel-header"><span>🔓</span><span class="panel-title">Open data: export and import</span></div>
+        <div class="panel-body" style="font-size:0.74rem;line-height:1.5">
+          <div style="color:var(--text-muted);margin-bottom:8px">Take this station's incidents out in common formats, or bring in records from another system. CAP and EDXL-DE follow the published element lists but have not been run through an official validator.</div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px">
+            <select id="sx-fmt" class="form-select" style="width:auto;font-size:0.72rem"><option value="json">JSON</option><option value="csv">CSV (spreadsheet)</option><option value="geojson">GeoJSON (maps)</option><option value="cap">CAP 1.2 (alert standard)</option><option value="edxl">EDXL-DE (CAP in an envelope)</option></select>
+            <label><input id="sx-pers" type="checkbox"> include names and phone numbers</label>
+            <button class="btn btn-primary btn-sm" onclick="StationOpenData.exp()">⬇ Download</button><span id="sx-out" style="color:var(--text-muted)"></span></div>
+          <div style="border-top:1px solid var(--border,#333);padding-top:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center"><b>Import incidents</b>
+            <input id="sx-file" type="file" accept=".json,.geojson,.csv,.xml,.cap,text/*,application/json,application/xml">
+            <button class="btn btn-ghost btn-sm" onclick="StationOpenData.imp(true)">Check only</button><button class="btn btn-primary btn-sm" onclick="StationOpenData.imp(false)">Import</button></div>
+          <div id="sx-iout" style="margin-top:6px;color:var(--text-muted)"></div>
+          <div style="color:var(--text-muted);margin-top:6px">Reads JSON, GeoJSON, CSV, CAP and EDXL-DE, up to 1000 records and 5 MB. Imported records are filed as resolved history, never as live incidents, and are left out of response-time figures.</div>
+        </div></div>`;
+    StationOpenData.median();
   }
   return { render };
+})();
+
+const StationOpenData = (() => {
+  const H = () => ({ Authorization: 'Bearer ' + (GeamsSync.token || '') }), B = () => GeamsSync.base || '';
+  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const f = (s) => s == null ? '—' : s < 60 ? Math.round(s) + 's' : Math.floor(s / 60) + 'm ' + String(Math.round(s % 60)).padStart(2, '0') + 's';
+  async function median() {
+    const m = document.getElementById('sr-med'); if (!m) return;
+    try { const r = await fetch(B() + '/api/analytics/response?days=30', { headers: H(), cache: 'no-store' }); if (!r.ok) throw 0; const c = (await r.json()).national.current; m.textContent = f(c.medianArrive); document.getElementById('sr-med-sub').textContent = c.measuredArrive + ' of ' + c.n + ' alerts · slowest 1 in 10: ' + f(c.p90Arrive); }
+    catch (e) { m.textContent = '—'; const s = document.getElementById('sr-med-sub'); if (s) s.textContent = 'Could not load'; }
+  }
+  async function exp() {
+    const out = document.getElementById('sx-out'); out.textContent = 'Preparing…';
+    try {
+      const q = new URLSearchParams({ format: document.getElementById('sx-fmt').value }); if (document.getElementById('sx-pers').checked) q.set('personal', '1');
+      const r = await fetch(B() + '/api/export/incidents?' + q, { headers: H(), cache: 'no-store' }); if (!r.ok) throw new Error((await r.json()).error || 'Export failed');
+      const name = (/filename="([^"]+)"/.exec(r.headers.get('content-disposition') || '') || [])[1] || 'geams-export', blob = await r.blob(), a = document.createElement('a');
+      a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500); out.textContent = '✓ Saved ' + name;
+    } catch (e) { out.textContent = '✗ ' + e.message; }
+  }
+  async function imp(dry) {
+    const file = document.getElementById('sx-file').files[0], out = document.getElementById('sx-iout'); if (!file) { out.textContent = 'Choose a file first.'; return; }
+    out.textContent = dry ? 'Checking…' : 'Importing…';
+    try {
+      const r = await fetch(B() + '/api/import/incidents' + (dry ? '?dry=1' : ''), { method: 'POST', headers: Object.assign({ 'Content-Type': 'text/plain' }, H()), body: file }), j = await r.json();
+      if (!r.ok) { out.textContent = '✗ ' + (j.error || 'Import failed'); return; }
+      out.innerHTML = (dry ? '<b>Check only, nothing saved.</b> ' : '<b>Done.</b> ') + j.imported + (dry ? ' would be added, ' : ' added, ') + j.duplicates + ' already here, ' + j.rejected.length + ' refused (read as ' + esc(j.format) + ').' + j.rejected.slice(0, 8).map(x => '<div style="color:var(--red)">Record ' + x.index + ': ' + esc(x.error) + '</div>').join('');
+    } catch (e) { out.textContent = '✗ ' + e.message; }
+  }
+  return { median, exp, imp };
 })();
 
 
