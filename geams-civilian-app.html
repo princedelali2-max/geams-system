@@ -6,11 +6,13 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
 <meta name="theme-color" content="#020d08"/>
 <title>GEAMS — Civilian Emergency App</title>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+<script src="config.js"></script>
+<script src="vendor/leaflet/leaflet.js"></script>
+<script src="vendor/geams-map.js"></script>
 <style>
 /* GEAMS CIVILIAN — base.css */
-@import url('https://fonts.googleapis.com/css2?family=Exo+2:wght@300;400;500;600;700;800;900&family=Share+Tech+Mono&display=swap');
+@import url('vendor/fonts/fonts.css');
 :root {
   --bg-void:#020d08;--bg-deep:#041008;--bg-base:#06130a;--bg-raised:#08180d;
   --bg-overlay:#0b1e10;--bg-hover:#0f2615;--bg-active:#132e18;
@@ -711,6 +713,18 @@ const GeamsSync = (() => {
   function decodeTok(t) { try { return JSON.parse(atob(String(t).split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))); } catch (e) { return null; } }
   function verifiedPhone() { const p = decodeTok(authToken()); return p && p.v ? p.p : null; }
   function adoptVerified(t) { setToken(t); try { localStorage.setItem('geams_civ_vtoken', t); } catch (e) {} }
+  // A random secret that never leaves this phone except to the server, which keeps only a hash of it. It is how the server
+  // knows an alert, a profile or a face record belongs to this phone.
+  function devSecret() {
+    try { let v = localStorage.getItem('geams_civ_secret'); if (!v || v.length < 32) { const a = new Uint8Array(24); (window.crypto || {}).getRandomValues ? crypto.getRandomValues(a) : a.forEach((_, i) => a[i] = Math.floor(Math.random() * 256)); v = Array.from(a, x => x.toString(16).padStart(2, '0')).join(''); localStorage.setItem('geams_civ_secret', v); } return v; } catch (e) { return 'volatile-' + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2); }
+  }
+  async function api(path, method, body) {
+    await civilianSession();
+    const go = () => fetch(base + path, { method: method || 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + authToken() }, body: JSON.stringify(body || {}) });
+    let r = await go(); if (r.status === 401) { await civilianSession(true); r = await go(); }
+    let j = {}; try { j = await r.json(); } catch (e) {}
+    return { ok: r.ok, status: r.status, j };
+  }
   function civilianSession(force) {
     if (!force && authToken()) return Promise.resolve();
     if (civBusy) return civBusy;
@@ -718,7 +732,7 @@ const GeamsSync = (() => {
     if (!force) { try { const v = localStorage.getItem('geams_civ_vtoken'); if (v) { const p = decodeTok(v); if (p && p.exp > Date.now()) { setToken(v); return Promise.resolve(); } localStorage.removeItem('geams_civ_vtoken'); } } catch (e) {} }
     else { try { localStorage.removeItem('geams_civ_vtoken'); } catch (e) {} }
     civBusy = (async () => {
-      try { const r = await fetch(base + '/api/civilian/session', { method: 'POST' }); const j = await r.json(); if (j && j.token) setToken(j.token); } catch (e) {}
+      try { const r = await fetch(base + '/api/civilian/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ secret: devSecret() }) }); const j = await r.json(); if (j && j.token) setToken(j.token); } catch (e) {}
       civBusy = null;
     })();
     return civBusy;
@@ -881,7 +895,7 @@ const GeamsSync = (() => {
     try { if (url) localStorage.setItem('geams_backend', url.replace(/\/+$/, '')); else localStorage.removeItem('geams_backend'); } catch (e) {}
     location.reload();
   }
-  return { available, getShared, setShared, mergeShared, watch, ready, onStatus, setBackend, deviceId, setToken, onAuthLost, verifiedPhone, adoptVerified, reconnect, get token(){ return authToken(); },
+  return { available, getShared, setShared, mergeShared, watch, ready, onStatus, setBackend, deviceId, devSecret, api, setToken, onAuthLost, verifiedPhone, adoptVerified, reconnect, get token(){ return authToken(); },
            get mode(){ return mode; }, get base(){ return base; }, get online(){ return online; }, get devices(){ return status.devices; }, get deviceApps(){ return status.byApp; } };
 })();
 
@@ -908,8 +922,8 @@ const FaceEngine = (() => {
   // (jsdelivr) so there is only one third-party host in the loading path
   // instead of two — fewer places a corporate/mobile-network firewall or
   // ad-blocker can silently break this feature.
-  const LIB_URL   = 'https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js';
-  const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model';
+  const LIB_URL   = 'vendor/face/face-api.min.js';
+  const MODEL_URL = 'vendor/face/model';
   const LOAD_TIMEOUT_MS = 20000;
   const MATCH_THRESHOLD = 0.6; // face-api.js documented same-person cutoff
 
@@ -930,7 +944,7 @@ const FaceEngine = (() => {
       const s = document.createElement('script');
       s.src = LIB_URL;
       s.onload = () => resolve();
-      s.onerror = () => reject(new Error('Could not load the face recognition library from ' + LIB_URL + ' — the CDN may be blocked on this network.'));
+      s.onerror = () => reject(new Error('Could not load the face recognition library from ' + LIB_URL + ' — the file is missing from the GEAMS server.'));
       document.head.appendChild(s);
     });
   }
@@ -1378,15 +1392,14 @@ let _syncStopIncident = null, _syncStopChat = null;
 // civilians reporting the same real-world incident (e.g. the same robbery,
 // witnessed independently) don't create two separate dispatches. Returns
 // the existing shared record, or null if none is close enough.
-async function findNearbyActiveIncident(stationId, lat, lng, radiusM) {
+// Asks the server to link this report to an active alert within radiusM metres, if there is one. The server adds this person
+// as a supporting reporter and lets this phone follow that alert; it never shows other people's alerts to the phone.
+async function findNearbyActiveIncident(stationId, lat, lng, radiusM, notes) {
   if (!GeamsSync.available()) return null;
-  const map = await GeamsSync.getShared('lcr:' + stationId + ':incidents', {});
-  for (const rec of Object.values(map)) {
-    if (rec.status === 'resolved' || rec.status === 'cancelled') continue;
-    if (rec.lat == null || rec.lng == null) continue;
-    if (CivilianData.haversineM(lat, lng, rec.lat, rec.lng) <= radiusM) return rec;
-  }
-  return null;
+  try {
+    const r = await GeamsSync.api('/api/civilian/join-nearby', 'POST', { station: stationId, lat, lng, radiusM, notes: notes || '', id: CivilianData.user.id, name: CivilianData.user.name, phone: CivilianData.user.phone });
+    return r.ok && r.j && r.j.found ? r.j.incident : null;
+  } catch (e) { return null; }
 }
 
 // Publishes a lightweight, non-emergency civilian report (Missing Person,
@@ -1558,6 +1571,11 @@ function startEmergencySync(em, notes, skipCreate) {
         setTimeout(() => CivilianApp.navigate('home'), 1200);
       }
       return;
+    }
+
+    if (rec.photoRequestedAt && active._photoAsked !== rec.photoRequestedAt && typeof CivilianApp !== 'undefined') {
+      active._photoAsked = rec.photoRequestedAt;
+      CivilianApp.photoRequest(rec.photoRequest || {}, em.id);
     }
 
     if (rec.officerName && active.officerName !== rec.officerName) {
@@ -1880,15 +1898,10 @@ const CivilianData = (() => {
   // call so a later address/location/phone update stays current everywhere.
   function publishToCivilianRegistry() {
     if (!user.id || !user.verified || !user.ghCard) return;
-    GeamsSync.mergeShared('registry:civilians', {}, (m) => {
-      m = m || {};
-      m[user.id] = {
-        id: user.id, name: user.name, phone: user.phone, ghCard: user.ghCard,
-        address: user.address, lat: user.gpsLat ?? user.lat, lng: user.gpsLng ?? user.lng,
-        registeredDate: user.registeredDate, updatedAt: new Date().toISOString(),
-      };
-      return m;
-    });
+    GeamsSync.api('/api/civilian/profile', 'PUT', { id: user.id, profile: {
+      id: user.id, name: user.name, phone: user.phone, ghCard: user.ghCard,
+      address: user.address, lat: user.gpsLat ?? user.lat, lng: user.gpsLng ?? user.lng,
+      registeredDate: user.registeredDate } }).catch(() => {});
   }
 
   function registerUser(details) {
@@ -2203,21 +2216,9 @@ const CivilianApp = (() => {
     // Two or more civilians reporting the same real incident at the same
     // location must not create two separate dispatches. If one's already
     // active nearby, link this report to it as additional evidence instead.
-    const nearby = await findNearbyActiveIncident(station.id, civLat, civLng, 200);
+    const nearby = await findNearbyActiveIncident(station.id, civLat, civLng, 200, details);
     if (nearby) {
       const em = CivilianData.startLinkedEmergency(nearby, station, type);
-      await GeamsSync.mergeShared('lcr:' + station.id + ':incidents', {}, (m) => {
-        m = m || {};
-        if (m[nearby.id]) {
-          m[nearby.id].additionalReporters = m[nearby.id].additionalReporters || [];
-          m[nearby.id].additionalReporters.push({
-            id: CivilianData.user.id, name: CivilianData.user.name,
-            phone: CivilianData.user.phone, notes: details || '',
-            reportedAt: new Date().toISOString(),
-          });
-        }
-        return m;
-      });
       startEmergencySync(em, null, /* skipCreate */ true); // watches the SAME incident id — no new record created
       const tb = document.getElementById('topbar');
       if (tb) { tb.style.background='rgba(80,0,0,0.5)'; tb.style.borderBottomColor='var(--red)'; }
@@ -2287,21 +2288,9 @@ const CivilianApp = (() => {
     const { station } = CivilianData.nearestStation(civLat, civLng);
     const type = 'Silent SOS — Possible Kidnapping';
 
-    const nearby = await findNearbyActiveIncident(station.id, civLat, civLng, 200);
+    const nearby = await findNearbyActiveIncident(station.id, civLat, civLng, 200, 'Silent SOS — audio/video recording active');
     if (nearby) {
       const em = CivilianData.startLinkedEmergency(nearby, station, type);
-      await GeamsSync.mergeShared('lcr:' + station.id + ':incidents', {}, (m) => {
-        m = m || {};
-        if (m[nearby.id]) {
-          m[nearby.id].additionalReporters = m[nearby.id].additionalReporters || [];
-          m[nearby.id].additionalReporters.push({
-            id: CivilianData.user.id, name: CivilianData.user.name,
-            phone: CivilianData.user.phone, notes: 'Silent SOS — audio/video recording active',
-            reportedAt: new Date().toISOString(),
-          });
-        }
-        return m;
-      });
       startEmergencySync(em, null, /* skipCreate */ true);
       const dot = document.getElementById('logo-dot');
       if (dot) dot.classList.add('emergency');
@@ -2482,11 +2471,8 @@ const CivilianApp = (() => {
       const badge = (document.getElementById('badge-input')?.value || '').trim().toUpperCase();
       let hit = null;
       try {
-        for (const s of STATION_DIRECTORY) {
-          const m = await GeamsSync.getShared('lcr:' + s.id + ':officers', {});
-          hit = Object.values(m || {}).find(o => (o.badge || '').toUpperCase() === badge && o.status === 'on-duty' && Date.now() - (o.lastSeen || 0) < 60000);
-          if (hit) { hit._station = s.name; break; }
-        }
+        const r = await GeamsSync.api('/api/civilian/verify-officer', 'POST', { badge });
+        if (r.ok && r.j && r.j.valid) hit = { name: r.j.name, rank: r.j.rank, badge, _station: r.j.station };
       } catch (e) {}
       const valid = !!hit;
       if (area) {
@@ -2562,10 +2548,50 @@ const CivilianApp = (() => {
   /* ════════════════════════════════════
      SUBMIT ANONYMOUS TIP
   ════════════════════════════════════ */
+  const _photos = {};
+  function pickPhoto(slot, boxId) {
+    const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*';
+    inp.onchange = () => {
+      const f = inp.files && inp.files[0]; if (!f) return;
+      if (f.size > 15 * 1024 * 1024) { showToast('warning', 'Photo too large', 'Choose a photo under 15 MB'); return; }
+      _photos[slot] = f; const box = document.getElementById(boxId); if (box) box.textContent = '✓ ' + f.name + ' · tap to change';
+    };
+    inp.click();
+  }
+  function sendVideo() {
+    const em = CivilianData.activeEmergency();
+    if (!em) { showToast('warning', 'No active alert', 'Start an alert first, then send video to the control room'); return; }
+    const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'video/*'; inp.setAttribute('capture', 'environment');
+    inp.onchange = async () => {
+      const f = inp.files && inp.files[0]; if (!f) return;
+      showToast('info', 'Sending video', f.name + ' — keep this screen open');
+      try { const r = await GeamsArchive.addFile(em.id, f, { who: 'civ', by: 'Citizen' }); if (r && r.saved === false) showToast('warning', 'Video not saved', (r.reason || r.error || 'It may be too large — try a shorter clip')); else showToast('success', 'Video sent', 'The control room can see it as evidence'); }
+      catch (e) { showToast('error', 'Video not sent', String(e.message || e)); }
+    };
+    inp.click();
+  }
+  function photoRequest(req, incId) {
+    openSheet('📸 The control room asks for a photo', `
+      <div style="font-size:0.85rem;line-height:1.6;margin-bottom:6px"><b>${String(req.type||'Scene photo').replace(/[<>&]/g,'')}</b></div>
+      <div style="font-size:0.8rem;color:var(--text-muted);line-height:1.6;margin-bottom:14px">${String(req.message||'Please send a photo of the scene if it is safe.').replace(/[<>&]/g,'')}</div>
+      <div id="pr-box" style="border:1px dashed var(--border-base);border-radius:10px;padding:14px;text-align:center;cursor:pointer" onclick="CivilianApp.pickPhoto('req','pr-box')">📷 Tap to take or choose a photo</div>`,
+      `<button class="btn btn-ghost" onclick="CivilianApp.closeSheet()">Not now</button>
+       <button class="btn btn-primary" onclick="CivilianApp.sendRequestedPhoto('${incId}')">Send photo</button>`);
+  }
+  async function sendRequestedPhoto(incId) {
+    if (!_photos.req) { showToast('warning', 'No photo chosen', 'Tap the box to take or choose one'); return; }
+    await attachPhoto('req', incId, 'Citizen'); closeSheet(); showToast('success', 'Photo sent', 'The control room has your photo');
+  }
+  async function attachPhoto(slot, incId, by) {
+    const f = _photos[slot]; delete _photos[slot]; if (!f) return;
+    try { const r = await GeamsArchive.addFile(incId, f, { who: 'civ', by: by || 'Citizen' }); if (r && r.saved === false) showToast('warning', 'Photo not saved', 'The report was sent but the photo could not be attached'); }
+    catch (e) { showToast('warning', 'Photo not saved', 'The report was sent but the photo could not be attached'); }
+  }
   function submitAnonymousTip() {
+    delete _photos.tip;
     openSheet('🕵️ Submit Anonymous Tip', `
       <div style="background:var(--primary-dim);border:1px solid var(--primary-border);border-radius:var(--r-md);padding:10px 14px;margin-bottom:14px;font-size:0.78rem;color:var(--primary);line-height:1.5">
-        🔒 Your identity is cryptographically anonymised before reaching the police. This tip cannot be traced back to you.
+        🔒 Your name and phone number are not put on this tip. GEAMS still knows which device sent it, and a photo can show where you were — so do not rely on this against a determined investigation.
       </div>
       <div class="form-group"><label class="form-label">Tip Category</label>
         <select class="form-select" id="tip-category">
@@ -2579,7 +2605,7 @@ const CivilianApp = (() => {
       <div class="form-group"><label class="form-label">Details</label>
         <textarea class="form-textarea" id="tip-details" placeholder="Describe what you know — persons, vehicles, times..."></textarea></div>
       <div class="form-group"><label class="form-label">Attach Photo (optional)</label>
-        <div style="border:1px dashed var(--border-mid);border-radius:var(--r-md);padding:14px;text-align:center;cursor:pointer;color:var(--text-muted);font-size:0.78rem" onclick="CivilianApp.showToast('info','Upload','Opening camera...')">
+        <div style="border:1px dashed var(--border-mid);border-radius:var(--r-md);padding:14px;text-align:center;cursor:pointer;color:var(--text-muted);font-size:0.78rem" id="tip-photo-box" onclick="CivilianApp.pickPhoto('tip','tip-photo-box')">
           📷 Tap to attach photo
         </div></div>`,
       `<button class="btn btn-ghost" onclick="CivilianApp.closeSheet()">Cancel</button>
@@ -2596,6 +2622,7 @@ const CivilianApp = (() => {
     const { id, station } = await submitCivilianReport({
       type: 'Anonymous Tip — ' + category, priority: 'medium', location, notes: details, anonymous: true,
     });
+    await attachPhoto('tip', id, 'Anonymous');
     CivilianData.addPendingReport({ id, stationId: station.id, type: 'Anonymous Tip', isHqHandled: false });
     watchReportResolution(id, station.id, false);
     showToast('success','Tip Submitted',`${station.name} received your anonymous tip — Ref: ${id}`,6000);
@@ -2606,6 +2633,7 @@ const CivilianApp = (() => {
      REPORT ROAD HAZARD
   ════════════════════════════════════ */
   function reportRoadHazard() {
+    delete _photos.hazard;
     openSheet('🚧 Report Road Hazard', `
       <div class="form-group"><label class="form-label">Hazard Type</label>
         <select class="form-select" id="rh-type">
@@ -2623,7 +2651,7 @@ const CivilianApp = (() => {
           <option value="low">🟡 Minor — passable with care</option>
         </select></div>
       <div class="form-group"><label class="form-label">Photo (optional)</label>
-        <div style="border:1px dashed var(--border-mid);border-radius:var(--r-md);padding:14px;text-align:center;cursor:pointer;color:var(--text-muted);font-size:0.78rem" onclick="CivilianApp.showToast('info','Camera','Opening camera...')">
+        <div style="border:1px dashed var(--border-mid);border-radius:var(--r-md);padding:14px;text-align:center;cursor:pointer;color:var(--text-muted);font-size:0.78rem" id="rh-photo-box" onclick="CivilianApp.pickPhoto('hazard','rh-photo-box')">
           📷 Tap to attach photo
         </div></div>`,
       `<button class="btn btn-ghost" onclick="CivilianApp.closeSheet()">Cancel</button>
@@ -2641,6 +2669,7 @@ const CivilianApp = (() => {
       type: 'Road Hazard — ' + type, priority: severity, location,
       notes: `Reported by ${CivilianData.user.name}`,
     });
+    await attachPhoto('hazard', id);
     CivilianData.addPendingReport({ id, stationId: station.id, type: 'Road Hazard', isHqHandled: false });
     watchReportResolution(id, station.id, false);
     showToast('success','Hazard Reported',`${station.name} traffic unit notified — Ref: ${id}`,6000);
@@ -2651,6 +2680,7 @@ const CivilianApp = (() => {
      REPORT MISSING PERSON
   ════════════════════════════════════ */
   function reportMissingPerson() {
+    delete _photos.mp;
     openSheet('👤 Report Missing Person', `
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
         <div class="form-group"><label class="form-label">Full Name</label>
@@ -2670,8 +2700,8 @@ const CivilianApp = (() => {
           <option>Child</option><option>Sibling</option><option>Friend</option>
         </select></div>
       <div class="form-group"><label class="form-label">Photo of Missing Person</label>
-        <div style="border:1px dashed var(--border-mid);border-radius:var(--r-md);padding:14px;text-align:center;cursor:pointer;color:var(--text-muted);font-size:0.78rem" onclick="CivilianApp.showToast('info','Upload','Opening photo library...')">
-          📷 Upload recent photo — enables facial recognition search
+        <div style="border:1px dashed var(--border-mid);border-radius:var(--r-md);padding:14px;text-align:center;cursor:pointer;color:var(--text-muted);font-size:0.78rem" id="mp-photo-box" onclick="CivilianApp.pickPhoto('mp','mp-photo-box')">
+          📷 Attach a recent photo — officers see it with the report; it is not matched automatically
         </div></div>`,
       `<button class="btn btn-ghost" onclick="CivilianApp.closeSheet()">Cancel</button>
        <button class="btn btn-primary btn-full" id="mp-submit-btn" onclick="CivilianApp.submitMissingPerson()">📋 File Missing Person Report</button>`);
@@ -2691,6 +2721,7 @@ const CivilianApp = (() => {
       type: 'Missing Person — ' + name, priority: 'high', location,
       notes: `${ageGender ? ageGender + '. ' : ''}Last seen: ${datetime || 'time not given'}. ${description} Reported by ${relation}: ${CivilianData.user.name}, ${CivilianData.user.phone}`,
     });
+    await attachPhoto('mp', id);
     CivilianData.addPendingReport({ id, stationId: station.id, type: 'Missing Person Report', isHqHandled: false });
     watchReportResolution(id, station.id, false);
     showToast('success','Missing Person Report Filed',`${station.name} notified — Ref: ${id}`,6000);
@@ -3018,35 +3049,6 @@ const CivilianApp = (() => {
     closeSheet();
   }
 
-  /* ════════════════════════════════════
-     RATE OFFICER / INCIDENT
-  ════════════════════════════════════ */
-  function rateIncident(incId) {
-    let rating = 5;
-    openSheet('⭐ Rate Your Experience', `
-      <div style="text-align:center;margin-bottom:16px">
-        <div style="font-size:0.82rem;font-weight:600;margin-bottom:10px">Case ${incId}</div>
-        <div style="display:flex;justify-content:center;gap:8px;margin-bottom:12px" id="star-row">
-          ${[1,2,3,4,5].map(n=>`
-            <div style="font-size:1.8rem;cursor:pointer;transition:transform 0.1s;opacity:${n<=5?'1':'0.3'}" 
-              onclick="CivilianApp.setRating(${n})" id="star-${n}">⭐</div>`).join('')}
-        </div>
-        <div style="font-size:0.72rem;color:var(--text-muted)" id="rating-label">5 stars — Excellent service</div>
-      </div>
-      <div class="form-group"><label class="form-label">Officer Name</label>
-        <input class="form-input" value="${((CivilianData.incidentHistory.find(h=>h.id===incId)||{}).officerName)||''}" placeholder="Not recorded" readonly></div>
-      <div class="form-group"><label class="form-label">Your Feedback</label>
-        <textarea class="form-textarea" placeholder="Tell us about your experience with the response..." rows="3"></textarea></div>`,
-      `<button class="btn btn-ghost" onclick="CivilianApp.closeSheet()">Skip</button>
-       <button class="btn btn-primary btn-full" onclick="CivilianApp.showToast('success','Review Submitted','Thank you — your feedback improves our service');CivilianApp.closeSheet()">⭐ Submit Review</button>`);
-  }
-
-  function setRating(n) {
-    const labels = {1:'1 star — Very poor',2:'2 stars — Below average',3:'3 stars — Average',4:'4 stars — Good',5:'5 stars — Excellent service'};
-    [1,2,3,4,5].forEach(i=>{const el=document.getElementById('star-'+i);if(el)el.style.opacity=i<=n?'1':'0.3';});
-    const lbl = document.getElementById('rating-label');
-    if (lbl) lbl.textContent = labels[n];
-  }
 
   /* ════════════════════════════════════
      UPDATE EMERGENCY CONTACTS
@@ -3392,20 +3394,9 @@ const CivilianApp = (() => {
     CivilianData.user.faceEnrolled = true;
     CivilianData.user.faceDescriptor = descriptorArray;
     CivilianData.saveAccount();
-    // Publish to the shared GEAMS registry so Dispatch's biometric scan can
-    // genuinely compare a scanned face against this real descriptor later.
-    GeamsSync.mergeShared('registry:faces', {}, (m) => {
-      m = m || {};
-      m[CivilianData.user.id] = {
-        civilianId: CivilianData.user.id,
-        name: CivilianData.user.name,
-        phone: CivilianData.user.phone,
-        ghCard: CivilianData.user.ghCard,
-        descriptor: descriptorArray,
-        enrolledAt: Date.now(),
-      };
-      return m;
-    });
+    // Sent to the server, which keeps it private. Officers can only ask the server "does this face match?".
+    GeamsSync.api('/api/face/enrol', 'POST', { civilianId: CivilianData.user.id, name: CivilianData.user.name, phone: CivilianData.user.phone, ghCard: CivilianData.user.ghCard, descriptor: descriptorArray })
+      .then(r => { if (!r.ok) showToast('warning', 'Face ID not shared', (r.j && r.j.error) || 'The server did not accept it'); }).catch(() => {});
     stopFaceEnrolCamera();
     closeSheet();
     ScreenProfile.render();
@@ -3427,7 +3418,7 @@ const CivilianApp = (() => {
     CivilianData.user.faceEnrolled = false;
     CivilianData.user.faceDescriptor = null;
     CivilianData.saveAccount();
-    GeamsSync.mergeShared('registry:faces', {}, (m) => { m = m || {}; delete m[CivilianData.user.id]; return m; });
+    GeamsSync.api('/api/face/remove', 'POST', { civilianId: CivilianData.user.id }).catch(() => {});
     closeSheet();
     ScreenProfile.render();
     showToast('info', 'Face ID Removed', 'Face biometric removed from your account and the shared registry');
@@ -3520,7 +3511,7 @@ const CivilianApp = (() => {
       localStorage.removeItem('geams_unlocked');
     } catch (e) {}
     if (deletedId) {
-      GeamsSync.mergeShared('registry:civilians', {}, (m) => { m = m || {}; delete m[deletedId]; return m; });
+      GeamsSync.api('/api/civilian/profile', 'DELETE', { id: deletedId }).catch(() => {});
     }
     closeSheet();
     showToast('info','Account Deleted','Your GEAMS profile has been removed from this device');
@@ -3741,9 +3732,9 @@ const CivilianApp = (() => {
     cancelSOS, confirmCancelSOS, iAmSafe, confirmSafe,
     shareLocation, confirmShareLocation, stopSharing,
     verifyOfficer, runVerify, requestWelfareCheck, submitWelfareCheck,
-    submitAnonymousTip, submitTip, reportRoadHazard, submitRoadHazard,
+    submitAnonymousTip, submitTip, pickPhoto, sendVideo, photoRequest, sendRequestedPhoto, reportRoadHazard, submitRoadHazard,
     reportMissingPerson, submitMissingPerson,
-    communityWatchAlert, submitCommunityWatch, rateIncident, setRating,
+    communityWatchAlert, submitCommunityWatch,
     reportPoliceHarassment, submitPoliceHarassment, startHarassmentCamera,
     capturePoliceHarassmentPhoto, stopHarassmentCamera, closeHarassmentSheet,
     refreshHome, viewReportStatus, dismissReportCard,
@@ -3982,18 +3973,8 @@ const PinGate = (() => {
         CivilianData.user.faceEnrolled = true;
         CivilianData.user.faceDescriptor = faceDescriptorOrNull;
         CivilianData.saveAccount();
-        // Publish into the same shared registry Dispatch checks -- a
-        // civilian created with compulsory Face ID is immediately
-        // identifiable by Dispatch from the moment the account exists.
-        GeamsSync.mergeShared('registry:faces', {}, (m) => {
-          m = m || {};
-          m[CivilianData.user.id] = {
-            civilianId: CivilianData.user.id, name: CivilianData.user.name,
-            phone: CivilianData.user.phone, ghCard: CivilianData.user.ghCard,
-            descriptor: faceDescriptorOrNull, enrolledAt: Date.now(),
-          };
-          return m;
-        });
+        // Sent to the server, which keeps it private (officers can only ask it to compare a face).
+        GeamsSync.api('/api/face/enrol', 'POST', { civilianId: CivilianData.user.id, name: CivilianData.user.name, phone: CivilianData.user.phone, ghCard: CivilianData.user.ghCard, descriptor: faceDescriptorOrNull }).catch(() => {});
       }
 
       try { localStorage.setItem('geams_unlocked', '1'); } catch (e) {}
@@ -4200,7 +4181,7 @@ const ScreenEmergency = (() => {
       <div style="margin:12px 16px 0;display:grid;grid-template-columns:1fr 1fr;gap:8px">
         <button class="btn btn-primary btn-full" onclick="CivilianApp.navigate('chat')">💬 Talk to Police</button>
         <button class="btn btn-ghost btn-full" onclick="CivilianApp.verifyOfficer()">🛡 Verify Officer</button>
-        <button class="btn btn-ghost btn-full" onclick="CivilianApp.showToast('info','Use your camera','In-app video upload is not available — record with your phone camera and share it with the police later',6000)">📹 Record Video</button>
+        <button class="btn btn-ghost btn-full" onclick="CivilianApp.sendVideo()">📹 Send Video</button>
         <button class="btn btn-ghost btn-full" onclick="CivilianApp.alertContacts()">📞 Alert Contacts</button>
       </div>
 
@@ -4561,7 +4542,7 @@ const PhoneVerify = (() => {
   async function verify() {
     const code = (document.getElementById('pv-code') || {}).value || ''; msg = ''; busy = true; redraw();
     try {
-      const j = await call('/api/civilian/otp/verify', { phone, code });
+      const j = await call('/api/civilian/otp/verify', { phone, code, secret: GeamsSync.devSecret() });
       GeamsSync.adoptVerified(j.token); stage = 'start'; msg = '';
       if (typeof CivilianApp !== 'undefined' && CivilianApp.showToast) CivilianApp.showToast('success', 'Phone verified', j.phone);
       ScreenProfile.render(); return;

@@ -2,7 +2,7 @@
  * 1) Lets the Civilian app open with no signal: keeps a copy of the app and the files it loads, trying the network first (4 s).
  *    It never caches /api/ calls.
  * 2) Receives push messages from the GEAMS server so HQ alerts reach phones even when the app is closed. */
-const CACHE = 'geams-shell-v2';
+const CACHE = 'geams-shell-v3';
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(CACHE).then(c => c.add('/geams-civilian-app.html').catch(() => {})).then(() => self.skipWaiting())); });
 self.addEventListener('activate', (e) => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
 self.addEventListener('fetch', (e) => {

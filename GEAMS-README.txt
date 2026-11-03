@@ -178,3 +178,120 @@ Open data (HQ: Analytics page, Open data card. Control rooms: Reports page)
   * Honest limit: CAP 1.2 and EDXL-DE output follows the published element lists and value lists and is well-formed XML, but
     has not been checked against the official schema files, and the CAP "sender" is set by GEAMS_CAP_SENDER (default geams@localhost).
   * Tests: t_analytics.js (74 server checks) and t_analytics_ui.js (27 browser checks).
+
+
+STORAGE, DATABASE AND BACKUPS
+-----------------------------
+Why: on hosting that resets its disk on every restart (low-cost Render, for example) a file-only GEAMS loses everything.
+Fix: connect a database. Without one GEAMS works exactly as before, and HQ is warned that data lives on the disk only.
+
+Connect a database (environment variable, either name)
+  GEAMS_DATABASE_URL=postgres://user:password@host:5432/dbname      (managed PostgreSQL; needs "npm install", which fetches pg)
+  GEAMS_DATABASE_URL=sqlite:/data/geams.db                          (Node 22.5+; the file MUST be on a persistent disk to help)
+  DATABASE_URL is also read. GEAMS_DATABASE_SSL=1 turns on TLS without certificate checks for hosts that need it.
+What goes in: every record (incidents, rosters, alerts, station logins), HQ operator accounts, the signing key and push key,
+and every evidence file with its seal, custody log and timestamp. Files over GEAMS_DB_MAX_FILE_MB (default 64) stay on disk only.
+Start-up: GEAMS first makes the disk match the database. On an empty disk it restores everything. If the database is set but
+cannot be read and the disk is empty, GEAMS refuses to start rather than begin blank (GEAMS_DB_OPTIONAL=1 overrides).
+First start with an existing file install: the files are copied into the database; nothing is lost.
+If the database goes down: GEAMS keeps working, holds the changes, retries, and HQ sees "NOT reachable". On SIGTERM it saves before it exits.
+Honest limits: evidence in the database suits pilot volumes, not national scale (use object storage then). A SQLite file on the same
+disk gives no protection from a wiped disk. Records last written within about half a second before a hard crash can be lost.
+
+Backups (HQ owner: account menu > Storage and backups)
+  GEAMS_BACKUP_HOURS=24 (0 = off)  GEAMS_BACKUP_KEEP=7  GEAMS_BACKUP_DIR=...  GEAMS_BACKUP_PASSPHRASE=...
+  GEAMS_BACKUP_PUT_URL=https://store/path  GEAMS_BACKUP_PUT_AUTH="Bearer ..."   (each backup is also sent with an HTTP PUT)
+  A backup holds all records, HQ accounts and evidence with a fingerprint for each file. With a passphrase it is encrypted
+  (AES-256-GCM) and ALSO holds the signing keys. Without one, signing keys are left out; keep GEAMS_TOKEN_SECRET in the environment.
+  Backups on the same disk are lost with the disk: download one regularly or set the off-server copy.
+  Commands, run at the server:
+    node geams-persist.js verify <file>            checks every file against its fingerprint (exit 3 if anything changed)
+    node geams-persist.js restore <file> [--force] puts the data back (server stopped). --force keeps the old data in pre-restore-*
+    node geams-persist.js backup | status
+  With a database set, restore also rewrites the database.
+  API (HQ): GET /api/storage/status  | owner only: GET /api/backup/list, POST /api/backup/run, GET /api/backup/download?name=
+Tests: t_storage.js sqlite|pg (24 and 28 checks), t_backup.js (38), t_storage_ui.js (9).
+
+
+SELF-CONTAINED APPS, ROUTING FALLBACK AND COMMANDER ACCOUNTS
+------------------------------------------------------------
+Self-contained apps
+  Leaflet, the fonts (Exo 2, Share Tech Mono) and the face-recognition library with three models are in the vendor/ folder and
+  served by GEAMS itself (see vendor/NOTICE.txt). Keep the vendor/ folder next to the server. The service worker caches them, so
+  they work with no network after the first visit. No app asks a CDN or font service for anything any more.
+  Still online unless you set your own servers (environment variables, read by every app through /config.js):
+    GEAMS_TILE_URL=https://tiles.example/{z}/{x}/{y}.png   map pictures (default: ArcGIS satellite)
+    GEAMS_TILE_ATTRIBUTION="..."
+    GEAMS_ROUTE_URL=https://router.example                 OSRM-compatible road routing (default: router.project-osrm.org)
+    GEAMS_GEOCODE_URL=https://geocode.example              Photon-compatible place search (default: photon.komoot.io)
+  If map pictures cannot load, the map shows a notice and keeps pins and routes. If road routing is down, Dispatch shows a
+  straight-line estimate marked "(est.)" and the station map says it is showing straight-line distance only.
+  Not done: running a tile server, routing engine or geocoder. That needs a server and Ghana map data.
+
+Commander accounts
+  HQ: Stations page, the person icon on a control room row. Create an account (username, full name, rank, phone). A password is
+  generated and shown once. HQ can issue a new password, disable, enable or remove an account; the commander's session ends at once.
+  Once a control room has an active account, sign-in needs the station passphrase AND the commander username and password. A station
+  sign-in without an account stops working (it is signed out on its next request). A control room with no accounts still signs in as
+  before and its commander name is recorded as unverified.
+  GEAMS_REQUIRE_COMMANDER_ACCOUNTS=1 refuses sign-in to any control room that has no commander account yet.
+  The name and rank on the shared commander record must match the signed-in account; the server stamps verified and the account name.
+  A commander can change their own password under Settings (My Commander Account); this ends their other sessions.
+  Five wrong tries lock that account at that station for 5 minutes. Passwords are stored as salted hashes in a server-only record.
+  Not done: linking accounts to government staff records or single sign-on.
+Tests: t_vendor.js (32), t_commander.js (42), t_commander_ui.js (15).
+
+
+BUTTON SWEEP: WHAT NOW DOES A REAL THING
+----------------------------------------
+Every button that used to only show a message now either does the job or has been removed.
+Control room (station) dashboard
+  Reassign dispatch, merge duplicates, flag caller, scene-photo request, backup request, escalate to HQ, notes, walk-in registration
+  all write onto the shared incident record, so HQ, the officer and the civilian app see them. Reassign frees the old officer.
+  Merge closes the duplicate (server-stamped) and links both cases. Walk-in creates a real case (source "walk-in"); only name and
+  phone are stored, never ID numbers.
+  Call back / call officer open the phone's dialler (tel:). GEAMS does not carry calls or video.
+  Docket print and station reports use the browser's print dialog (save as PDF there) or a CSV download. They are not digitally signed.
+  Intelligence reports are filed to lcr:<station>:intel, readable by that station and HQ only, append-only (the server refuses edits).
+  Test connection runs real checks (browser online, server round trip in ms, signed-in read of the station record, sync mode).
+  Station lockdown records the lockdown on the station's status so HQ sees it, with a banner. It cannot lock doors or reroute calls.
+  Settings: Export audit log (CSV), Download station data (JSON). Removed: roadblock order, plainclothes deployment, refresh token,
+  update profile, "backup to HQ". The officer list shows an EQUIPMENT warning when an officer reports a problem.
+HQ dashboard
+  Escalate raises an incident to critical and stamps who did it; Add notes writes hqNotes to the incident; incident view shows
+  station backup requests, escalations, flags and notes. Exports (incidents, stations, audit, health) are CSV. Disable Station
+  signs that control room out. Removed: override dispatch, HQ resolve (only police-harassment cases are resolved by HQ), reassign,
+  suppress alert, restart push service, fake sessions list.
+  Security: "Sign out all stations and officers" (POST /api/hq/rotate-tokens, owner only; HQ and civilian sessions unaffected);
+  "System lockdown" (POST /api/hq/lockdown, owner only): the server refuses every write from control rooms, officers, fire and
+  ambulance with HTTP 503 until lifted. Civilian SOS and HQ keep working. Stations show a banner.
+  "Security configuration check" (GET /api/security/check, HQ) reviews GEAMS's own settings (HTTPS, database, backups, encryption,
+  commander accounts, lockdown). It is not a vulnerability scan. "Back up now" runs the owner backup.
+Civilian app
+  Photo attach on tips, road hazards and missing-person reports uploads the photo as evidence. The control room's photo request
+  appears as a sheet in the open app (no push). "Send video" uploads a clip as evidence. Removed: rating screen, claims of
+  untraceable anonymity and automatic face matching.
+Dispatch app
+  Equipment report starts with every item unticked, and the report reaches the station through the roster. Sketch uploads as an
+  evidence PNG. Call Station uses the commander's phone number. Removed: fake video call panel and the encryption claim.
+Tests: t_sweep.js (41 browser/server checks), t_sweep2.js (8), t_sweep3.js (4). They need the full set of files in one folder.
+
+
+=== PRIVACY: WHO CAN SEE WHAT (added before pilot) ===
+- Each civilian phone keeps a random secret. The server turns it into a device mark inside the sign-in token. An alert is tagged with that mark, so only the phone that raised it (and staff) can read or change it. Chat, evidence, archive and live-call data for that alert follow the same rule. Another civilian cannot list, read or alter them.
+- Alerts raised before this upgrade have no mark: their civilians will no longer see them. A civilian who signs in on a different phone will not see alerts raised from the old one.
+- "Join a nearby incident" is now done by the server and returns only a trimmed view (no names or phone numbers of other reporters).
+- Face data and the civilian directory are server-only for civilians. Phones cannot read registry:faces, registry:civilians or the officer roster. Control rooms and HQ can read the civilian directory (name, phone, Ghana Card).
+- Face checks happen on the server. Officers send a live face reading, and get back match / no match, distance and name. They never receive the stored face. Allowed only on an incident assigned to that officer (control room: its own incidents; HQ: any). Limited to 40 checks per 10 minutes. Every check (verify, search, Ghana Card lookup) is logged: GET /api/face/audit (HQ).
+- Limits: a face match is a guide, not proof. Enrolment is not tied to the Ghana Card database. Until phone verification (SMS) is switched on, civilian identities are self-declared.
+- Tests: t_privacy.js (57 server checks), t_privacy_ui.js (13 browser checks), plus t_sweep, t_sweep2, t_sweep3.
+
+=== ADDED AFTER THE PRIVACY FIX ===
+- Staff fence: officers, fire and ambulance crews can read or write evidence, chat and live-call data only for incidents of their own control room. Another station's incident is refused (403). An id the server does not know yet is allowed for writing only, so queued uploads still arrive.
+- Lockdown: when HQ lockdown refuses a change, the dispatch, fire and ambulance apps now show a red banner: "Your last update was NOT sent. Call your control room."
+- HQ: new "Face & ID checks log" button (next to Security Configuration Check) lists every face search, face verification and Ghana Card lookup, newest first.
+- Tests: t_final.js (19 checks: staff fence, lockdown banner on the three crew apps, sketch upload as evidence, HQ face log).
+- Tests added later: t_regress.js (85 checks: tokens, permission matrix, evidence seals and tamper detection, commander accounts, analytics, exports, crew sign-up), t_mutualaid.js (32 checks: fire and ambulance mutual aid across two devices on the real server), t_storage_real.js (15 checks: database, backup, restore).
+
+- Control rooms can now write only their own station's incident, intel and service maps (found by t_regress.js). Reading other stations' archives still works.
+- If HQ disables the ONLY commander account of a control room, that room falls back to passphrase-only sign-in unless GEAMS_REQUIRE_COMMANDER_ACCOUNTS=1 is set. Set it for the pilot.

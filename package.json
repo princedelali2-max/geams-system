@@ -3,6 +3,17 @@
   "version": "2.0.0",
   "private": true,
   "description": "GEAMS shared backend + apps",
-  "scripts": { "start": "node geams-server.js" },
-  "engines": { "node": ">=18" }
+  "scripts": {
+    "start": "node geams-server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "leaflet": "^1.9.4"
+  },
+  "optionalDependencies": {
+    "pg": "^8.11.0"
+  }
 }

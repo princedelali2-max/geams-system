@@ -4,8 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>GEAMS Medical Response — Ghana National Ambulance Service</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+<script src="config.js"></script>
+<script src="vendor/leaflet/leaflet.js"></script>
+<script src="vendor/geams-map.js"></script>
 <style>
   :root{
     --bg:#0a0f14; --bg-raised:#111a22; --bg-deep:#070b0f;
@@ -210,6 +212,14 @@ const GeamsSync = (() => {
       const r = await fetch(base + path, Object.assign({ cache: 'no-store', signal: ctl && ctl.signal }, opts || {}));
       online = true;
       if (r.status === 401 && tk && path.indexOf('/api/kv/') === 0) { authCbs.forEach(cb => { try { cb(); } catch (e) {} }); }
+      if (r.status === 503 && tk && /^\/api\/(kv|blob|blobs)\//.test(path) && !(opts && (!opts.method || opts.method === 'GET'))) {
+        // HQ lockdown: say so plainly, so a crew does not think their update was sent
+        try {
+          let b = document.getElementById('lockdown-refused'); if (!b) { b = document.createElement('div'); b.id = 'lockdown-refused'; b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#b3261e;color:#fff;font:600 13px/1.4 system-ui,sans-serif;padding:10px 14px;text-align:center'; document.body.appendChild(b); }
+          b.textContent = '🔒 HQ has paused all changes (lockdown). Your last update was NOT sent. Call your control room.'; b.style.display = 'block';
+          clearTimeout(b._t); b._t = setTimeout(() => { b.style.display = 'none'; }, 20000);
+        } catch (e) {}
+      }
       return r;
     } catch (e) { online = false; throw e; }
     finally { if (t) clearTimeout(t); }

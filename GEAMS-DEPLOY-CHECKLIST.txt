@@ -1,0 +1,34 @@
+GEAMS PILOT DEPLOY CHECKLIST  (set these on your host, then restart the server)
+
+A. MUST SET BEFORE ANY REAL USE
+ 1. GEAMS_HQ_ADMIN_PASSWORD   a long passphrase. This is the HQ owner login ("hqadmin" unless GEAMS_HQ_ADMIN_USER is set).
+ 2. GEAMS_DATABASE_URL        postgres://user:pass@host:5432/db   (run: npm install pg)
+                              or sqlite:/persistent/path/geams.db (Node 22.5+; the file must be on a disk that survives restarts)
+                              Without it, data lives only on the server's disk and is lost if the host resets it.
+ 3. GEAMS_BACKUP_PASSPHRASE   turns on encrypted backups (the signing key is only included in encrypted backups).
+ 4. GEAMS_BACKUP_HOURS        e.g. 24 (0 = off).   GEAMS_BACKUP_KEEP  e.g. 14.
+ 5. GEAMS_BACKUP_PUT_URL (+ GEAMS_BACKUP_PUT_AUTH)   an off-site store that accepts HTTP PUT. Without it, backups sit on the same disk.
+ 6. Serve over https (phones need it for camera and GPS).
+ 7. Do NOT set GEAMS_SEED_DEFAULT_STATIONS in production (it creates demo passphrases). Issue real station logins from HQ.
+
+B. STRONGLY RECOMMENDED
+ 8. GEAMS_TOKEN_SECRET        a fixed random secret so sign-ins survive a restart (otherwise the generated key file is used: back it up).
+ 9. GEAMS_REQUIRE_COMMANDER_ACCOUNTS=1   control rooms need a named commander account (HQ creates them).
+10. GEAMS_REQUIRE_VERIFIED_CIVILIANS=1   only once SMS works (see 11). Until then civilian identities are self-declared.
+11. GEAMS_SMS_URL / _METHOD / _BODY / GEAMS_SMS_API_KEY / _HEADER, GEAMS_SMS_INBOUND_KEY   phone codes and text-in alerts.
+12. GEAMS_DATABASE_SSL=1      if your PostgreSQL host requires SSL.
+13. GEAMS_VAPID_PUBLIC / GEAMS_VAPID_PRIVATE / GEAMS_VAPID_SUBJECT   fixed push keys (otherwise generated and stored).
+
+C. OPTIONAL
+    GHANAPOST_LOOKUP_URL / _METHOD / GHANAPOST_API_KEY / _HEADER   Ghana Post GPS lookup (needs your agreement with them)
+    GEAMS_TSA_URL / GEAMS_TSA_CA   outside timestamp on evidence seals
+    GEAMS_AUTO_APPROVE_UNITS (leave OFF: control rooms should approve crews)
+    GEAMS_DB_MAX_FILE_MB (default 64), GEAMS_DATA / GEAMS_BLOBS / GEAMS_BACKUP_DIR (paths)
+
+D. FIRST RUN
+ 1. Start the server. Sign in as HQ. Open "Security Configuration Check": every red line is something from A or B still missing.
+ 2. HQ: add stations, issue each control room's login, create commander accounts.
+ 3. Run a backup from HQ, then:  node geams-persist.js verify <backup file>
+ 4. Practise recovery once on a spare copy:  node geams-persist.js restore <backup file>  (server stopped)
+ 5. Try Lockdown and Rotate Tokens once, so nobody meets them for the first time in an emergency.
+ 6. Keep: your passphrases, GEAMS_BACKUP_PASSPHRASE and the database login somewhere safe and separate from the server.

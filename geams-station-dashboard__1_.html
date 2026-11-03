@@ -5,8 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>GEAMS Station — Local Control Room</title>
 <!-- Leaflet satellite map -->
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+<script src="config.js"></script>
+<script src="vendor/leaflet/leaflet.js"></script>
+<script src="vendor/geams-map.js"></script>
 <style>
 /* ============================================================
    GEAMS STATION — base.css
@@ -14,7 +16,7 @@
    Station identity: cyan primary (distinct from HQ gold)
    ============================================================ */
 
-@import url('https://fonts.googleapis.com/css2?family=Exo+2:wght@200;300;400;500;600;700;800;900&family=Share+Tech+Mono&display=swap');
+@import url('vendor/fonts/fonts.css');
 
 :root {
   /* Backgrounds */
@@ -1104,6 +1106,14 @@ body.dfs-active { overflow:hidden; }
       <label class="form-label">Passphrase</label>
       <input class="form-input" type="password" id="login-passphrase" placeholder="Enter secure passphrase" autocomplete="off">
     </div>
+    <div id="login-cmd-acct" style="display:none">
+      <div class="form-group"><label class="form-label">Commander username</label>
+        <input class="form-input" id="login-cmd-user" placeholder="Issued by HQ" autocomplete="username" autocapitalize="none" spellcheck="false"></div>
+      <div class="form-group"><label class="form-label">Commander password</label>
+        <input class="form-input" type="password" id="login-cmd-pass" placeholder="Your personal password" autocomplete="current-password"></div>
+      <div style="font-size:0.65rem;color:var(--text-muted);margin:-4px 0 10px;line-height:1.5">HQ has set up personal commander accounts for this control room. Your name and rank come from your account and are recorded on every action.</div>
+    </div>
+    <div id="login-cmd-self">
     <div class="form-group">
       <label class="form-label">Commander on duty — full name</label>
       <input class="form-input" id="login-cmd-name" placeholder="Your full name" autocomplete="name">
@@ -1118,6 +1128,8 @@ body.dfs-active { overflow:hidden; }
         <input class="form-input" id="login-cmd-phone" type="tel" placeholder="+233…" autocomplete="tel"></div>
     </div>
     <div style="font-size:0.65rem;color:var(--text-muted);margin:-4px 0 10px;line-height:1.5">The name you enter is recorded on every action you take and shown to partner control rooms. It is self-declared: the station passphrase proves the control room, not the person.</div>
+
+    </div>
 
     <div class="login-btn-row">
       <button class="btn btn-primary" onclick="StationAuth.attemptLogin()">🔐 Authenticate</button>
@@ -1246,22 +1258,20 @@ body.dfs-active { overflow:hidden; }
           <div class="panel">
             <div class="panel-header"><span>⚡</span><span class="panel-title">Command Actions</span></div>
             <div class="cmd-row" style="flex-wrap:wrap;gap:5px">
-              <button class="btn btn-success btn-sm" onclick="StationApp.acceptIncident(StationData.incidents[0]?.id||'INC-1001')">✅ Accept Alert</button>
-              <button class="btn btn-primary btn-sm" onclick="StationApp.assignDispatch(StationData.incidents[0]?.id||'INC-1001')">🚓 Assign Dispatch</button>
-              <button class="btn btn-warning btn-sm" onclick="StationApp.reassignDispatch(StationData.incidents[0]?.id||'INC-1001')">🔄 Reassign</button>
-              <button class="btn btn-danger btn-sm" onclick="StationApp.requestBackup(StationData.incidents[0]?.id||'INC-1001')">🆘 Backup</button>
-              <button class="btn btn-warning btn-sm" onclick="StationApp.escalateToHQ(StationData.incidents[0]?.id||'INC-1001')">⬆️ Escalate HQ</button>
-              <button class="btn btn-primary btn-sm" onclick="StationComms.openChat(StationData.incidents[0]?.id||'INC-1001')">💬 Open Chat</button>
-              <button class="btn btn-ghost btn-sm" onclick="StationApp.callBackCivilian(StationData.incidents[0]?.id||'INC-1001')">📞 Call Back</button>
-              <button class="btn btn-ghost btn-sm" onclick="StationApp.requestScenePhoto(StationData.incidents[0]?.id||'INC-1001')">📸 Scene Photo</button>
-              <button class="btn btn-ghost btn-sm" onclick="StationApp.flagSuspiciousCaller(StationData.incidents[0]?.id||'INC-1001')">🚩 Flag Caller</button>
-              <button class="btn btn-ghost btn-sm" onclick="StationApp.mergeIncidents(StationData.incidents[0]?.id||'INC-1001')">🔁 Merge</button>
+              <button class="btn btn-success btn-sm" onclick="StationApp.acceptIncident((StationData.incidents.find(i=>i.status!=='resolved')||{}).id||'')">✅ Accept Alert</button>
+              <button class="btn btn-primary btn-sm" onclick="StationApp.assignDispatch((StationData.incidents.find(i=>i.status!=='resolved')||{}).id||'')">🚓 Assign Dispatch</button>
+              <button class="btn btn-warning btn-sm" onclick="StationApp.reassignDispatch((StationData.incidents.find(i=>i.status!=='resolved')||{}).id||'')">🔄 Reassign</button>
+              <button class="btn btn-danger btn-sm" onclick="StationApp.requestBackup((StationData.incidents.find(i=>i.status!=='resolved')||{}).id||'')">🆘 Backup</button>
+              <button class="btn btn-warning btn-sm" onclick="StationApp.escalateToHQ((StationData.incidents.find(i=>i.status!=='resolved')||{}).id||'')">⬆️ Escalate HQ</button>
+              <button class="btn btn-primary btn-sm" onclick="StationComms.openChat((StationData.incidents.find(i=>i.status!=='resolved')||{}).id||'')">💬 Open Chat</button>
+              <button class="btn btn-ghost btn-sm" onclick="StationApp.callBackCivilian((StationData.incidents.find(i=>i.status!=='resolved')||{}).id||'')">📞 Call Back</button>
+              <button class="btn btn-ghost btn-sm" onclick="StationApp.requestScenePhoto((StationData.incidents.find(i=>i.status!=='resolved')||{}).id||'')">📸 Scene Photo</button>
+              <button class="btn btn-ghost btn-sm" onclick="StationApp.flagSuspiciousCaller((StationData.incidents.find(i=>i.status!=='resolved')||{}).id||'')">🚩 Flag Caller</button>
+              <button class="btn btn-ghost btn-sm" onclick="StationApp.mergeIncidents((StationData.incidents.find(i=>i.status!=='resolved')||{}).id||'')">🔁 Merge</button>
               <button class="btn btn-warning btn-sm" onclick="StationApp.dispatchMedicalFire('Medical', StationData.incidents[0]?.id)">🚑 Medical</button>
               <button class="btn btn-warning btn-sm" onclick="StationApp.dispatchMedicalFire('Fire', StationData.incidents[0]?.id)">🚒 Fire</button>
-              <button class="btn btn-ghost btn-sm" onclick="StationApp.issueRoadblock(StationData.incidents[0]?.id||'INC-1001')">🚧 Roadblock</button>
-              <button class="btn btn-ghost btn-sm" onclick="StationApp.assignPlainclothes(null)">🕵️ Plainclothes</button>
               <button class="btn btn-ghost btn-sm" onclick="StationApp.checkHospitalCapacity()">🏥 Hospitals</button>
-              <button class="btn btn-ghost btn-sm" onclick="StationApp.addIncidentNotes(StationData.incidents[0]?.id||'INC-1001')">🗒 Notes</button>
+              <button class="btn btn-ghost btn-sm" onclick="StationApp.addIncidentNotes((StationData.incidents.find(i=>i.status!=='resolved')||{}).id||'')">🗒 Notes</button>
               <button class="btn btn-ghost btn-sm" onclick="StationApp.findAndPrintDocket()">🔍 Print Docket</button>
               <button class="btn btn-ghost btn-sm" onclick="StationApp.logIntelligence()">🧠 Intelligence</button>
               <button class="btn btn-ghost btn-sm" onclick="StationApp.registerComplainant()">🧑 Walk-In</button>
@@ -2170,6 +2180,20 @@ const GeamsReplay = (() => {
 /* ── LIVE SYNC WIRING — receives civilian-reported incidents in real
    time, reports assignment/GPS/resolution back to the civilian app,
    and publishes a live status summary for HQ. ── */
+
+const StationLock = (() => {
+  let cur = null;
+  function key(){ return 'geams.lockdown.' + ((typeof StationData!=='undefined'&&StationData.station&&StationData.station.id)||''); }
+  function get(){ if(!cur){ try{ cur=JSON.parse(localStorage.getItem(key())||'null'); }catch(e){} } return cur; }
+  function set(v){ cur=v; try{ v?localStorage.setItem(key(),JSON.stringify(v)):localStorage.removeItem(key()); }catch(e){}
+    banner(); try{ GeamsStationSync.pushHQStatus(); }catch(e){} }
+  function banner(){ let b=document.getElementById('lockdown-banner'); const v=get();
+    if(!v){ if(b) b.remove(); return; }
+    if(!b){ b=document.createElement('div'); b.id='lockdown-banner'; b.style.cssText='position:fixed;top:0;left:0;right:0;z-index:9000;background:#7a0000;color:#fff;text-align:center;font:700 12px var(--font-mono,monospace);padding:4px 8px;cursor:pointer'; b.onclick=()=>StationApp.stationLockdown(); document.body.appendChild(b); }
+    b.textContent='🔒 LOCKDOWN RECORDED — '+v.reason+' · tap to lift'; }
+  return { get, set, banner };
+})();
+
 const GeamsStationSync = (() => {
   let currentLcrId = null;
   let watchStops = [];     // every GeamsSync.watch() stop fn from the current session
@@ -2197,7 +2221,7 @@ const GeamsStationSync = (() => {
     currentLcrId = lcrId;
     watchStops.push(GeamsSync.watch('lcr:' + lcrId + ':incidents', {}, (map) => {
       Object.values(map).forEach(rec => {
-        if (rec.source !== 'civilian-app' && rec.source !== 'sms') return;   // 'sms' = a text message the server turned into an incident; handled like an app alert
+        if (rec.source !== 'civilian-app' && rec.source !== 'sms' && rec.source !== 'walk-in') return;   // 'sms' = a text message the server turned into an incident; handled like an app alert
         let inc = StationData.incidents.find(i => i.id === rec.id);
         if (!inc) {
           inc = {
@@ -2208,7 +2232,7 @@ const GeamsStationSync = (() => {
             civilian: rec.civilianName, civilianPhone: rec.civilianPhone,
             civilianLat: rec.civilianLat, civilianLng: rec.civilianLng,
             civilianTracking: rec.trackLocation !== false, officerAssigned: null,
-            notes: rec.notes || '', evidenceCount: 0, source: 'civilian-app', via: rec.source,
+            notes: rec.notes || '', evidenceCount: 0, source: rec.source === 'walk-in' ? 'walk-in' : 'civilian-app', via: rec.source, civilianPhone: rec.civilianPhone, flagged: rec.flagged, stationNotes: rec.stationNotes,
           };
           StationData.incidents.unshift(inc);
           StationData.logActivity(inc.id, 'RECEIVED',
@@ -2382,6 +2406,7 @@ const GeamsStationSync = (() => {
         dispatchedIncidents: StationData.incidents.filter(i => i.status === 'dispatched').length,
         officersOnDuty: StationData.officers.filter(o => o.status !== 'off-duty').length,
         officersAvailable: StationData.officers.filter(o => o.status === 'available').length,
+        lockdown: (typeof StationLock!=='undefined'&&StationLock.get())||null,
         lastUpdate: new Date().toISOString(),
       };
       return m;
@@ -2538,13 +2563,15 @@ const StationAuth = (() => {
   // HQ-issued passphrases are verified by the GEAMS server; hashes never reach the browser.
   // Every control room, built-in or HQ-created, signs in through the GEAMS server, which checks the
   // passphrase and returns a signed token. The token is what lets this station read and write shared data.
+  let lastLoginError = '';
   async function checkPassphrase(match, pass) {
     await GeamsSync.ready;
     if (GeamsSync.mode !== 'server') throw new Error('Signing in needs the GEAMS server connection, which is not reachable right now');
-    const r = await fetch(GeamsSync.base + '/api/lcr/login', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ stationId: match.id, passphrase: pass }) });
+    const r = await fetch(GeamsSync.base + '/api/lcr/login', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ stationId: match.id, passphrase: pass, commander: needAcct ? { username: document.getElementById('login-cmd-user').value, password: document.getElementById('login-cmd-pass').value } : undefined }) });
     let j = {}; try { j = await r.json(); } catch (e) {}
     if (r.status === 429 || r.status === 403 || r.status === 404) throw new Error(j.error || 'Sign-in refused');
-    if (r.ok && j.token) { GeamsSync.setToken(j.token); return true; }
+    if (r.ok && j.token) { GeamsSync.setToken(j.token); lastCommander = j.commander || null; return true; }
+    lastLoginError = j.error || '';
     return false;
   }
   function applyLocationOverrides(map) {
@@ -2600,6 +2627,15 @@ const StationAuth = (() => {
     document.getElementById('login-screen').classList.add('active');
   }
 
+  let needAcct = false, acctFor = '', lastCommander = null;
+  async function checkLoginMode() {
+    const st = findStation(document.getElementById('login-station-id').value); if (!st || acctFor === st.id) return;
+    try {
+      const r = await fetch((GeamsSync.base || '') + '/api/lcr/login-info?stationId=' + encodeURIComponent(st.id), { cache: 'no-store' }); if (!r.ok) return; const j = await r.json();
+      needAcct = !!j.required; acctFor = st.id;
+      document.getElementById('login-cmd-acct').style.display = needAcct ? '' : 'none'; document.getElementById('login-cmd-self').style.display = needAcct ? 'none' : '';
+    } catch (e) {}
+  }
   function fillDemo(id) {
     document.getElementById('login-station-id').value = id;
     prefillCommander();
@@ -2611,6 +2647,7 @@ const StationAuth = (() => {
   // 'registry:lcrCommanders' key so partner control rooms see who is on duty.
   function cmdLocalKey(id) { return 'geams:lcrCommander:' + id; }
   function prefillCommander() {
+    acctFor = ''; checkLoginMode();
     const st = findStation(document.getElementById('login-station-id').value); if (!st) return;
     let c = null; try { c = JSON.parse(localStorage.getItem(cmdLocalKey(st.id)) || 'null'); } catch (e) {}
     if (!c && st.commanderName) c = { name: st.commanderName, rank: st.commanderRank, phone: st.phone };
@@ -2676,6 +2713,8 @@ const StationAuth = (() => {
     if (!idInput.trim() || !passInput.trim()) {
       showError('Enter both Station ID and passphrase'); return;
     }
+    acctFor = ''; await checkLoginMode();
+    if (needAcct && (!document.getElementById('login-cmd-user').value.trim() || !document.getElementById('login-cmd-pass').value)) { showError('Enter your commander username and password'); return; }
 
     let match = findStation(idInput);
     if (!match) { await refreshDynamicStations(); match = findStation(idInput); }
@@ -2686,12 +2725,16 @@ const StationAuth = (() => {
     let passOk = false;
     try { passOk = await checkPassphrase(match, passInput); } catch (e) { showError(e.message || 'Could not verify the passphrase'); return; }
     if (!passOk) {
-      showError('Incorrect passphrase for this Station ID'); return;
+      showError(lastLoginError || 'Incorrect passphrase for this Station ID'); return;
     }
 
-    const cmdName = (document.getElementById('login-cmd-name').value || '').trim();
-    if (cmdName.length < 3 || !/\s/.test(cmdName)) { showError('Enter your full name (first and last) as commander on duty'); return; }
-    setCommander(match.id, { name: cmdName, rank: document.getElementById('login-cmd-rank').value, phone: document.getElementById('login-cmd-phone').value });
+    if (lastCommander) {
+      setCommander(match.id, { name: lastCommander.name, rank: lastCommander.rank, phone: lastCommander.phone });
+    } else {
+      const cmdName = (document.getElementById('login-cmd-name').value || '').trim();
+      if (cmdName.length < 3 || !/\s/.test(cmdName)) { showError('Enter your full name (first and last) as commander on duty'); return; }
+      setCommander(match.id, { name: cmdName, rank: document.getElementById('login-cmd-rank').value, phone: document.getElementById('login-cmd-phone').value });
+    }
 
     // Authenticated — capture device geolocation to verify against
     // this station's registered jurisdiction before granting access.
@@ -2759,13 +2802,13 @@ const StationAuth = (() => {
     document.getElementById('app').style.display = 'none';
     document.getElementById('login-station-id').value = '';
     document.getElementById('login-passphrase').value = '';
-    document.getElementById('login-cmd-name').value = '';
+    document.getElementById('login-cmd-name').value = ''; document.getElementById('login-cmd-pass').value = ''; lastCommander = null;
     document.getElementById('login-cmd-phone').value = '';
     setGeoStatus('', 'Location not yet verified');
     document.getElementById('login-screen').classList.add('active');
   }
 
-  return { initLoginScreen, fillDemo, prefillCommander, setCommander, attemptLogin, getSession, getDirectory, getOtherStations, logout, findStation, haversineMeters };
+  return { initLoginScreen, fillDemo, prefillCommander, setCommander, attemptLogin, getSession, getCommander: () => lastCommander, getDirectory, getOtherStations, logout, findStation, haversineMeters };
 })();
 
 /* ============================================================
@@ -3186,7 +3229,7 @@ const StationData = (() => {
         officers.push(off);
       }
       off.name = rec.name; off.badge = rec.badge; off.rank = rec.rank || (rec.name||'').split('.')[0].trim();
-      off.phone = rec.phone; off.vehicle = rec.vehicle; off.liveSync = true;
+      off.phone = rec.phone; off.vehicle = rec.vehicle; off.equipment = rec.equipment || null; off.liveSync = true;
       off.lat = (rec.lat != null) ? rec.lat : null; off.lng = (rec.lng != null) ? rec.lng : null;
       // Don't override a locally-tracked active dispatch.
       if (off.status !== 'dispatched') off.status = 'available';
@@ -3605,7 +3648,7 @@ const StationApp = (() => {
         ⚠️ This sends a priority flag to National HQ. HQ may override dispatch or deploy additional resources.
       </div>
       <div class="form-group"><label class="form-label">Escalation Reason</label>
-        <select class="form-select">
+        <select class="form-select" id="esc-reason">
           <option>Incident exceeds station capacity</option>
           <option>Requires specialist unit (SWAT/K9/Forensics)</option>
           <option>Cross-station or cross-region incident</option>
@@ -3614,9 +3657,9 @@ const StationApp = (() => {
           <option>Mass casualty event</option>
         </select></div>
       <div class="form-group"><label class="form-label">Current Situation</label>
-        <textarea class="form-textarea" placeholder="Brief situation report for HQ..."></textarea></div>
+        <textarea class="form-textarea" id="esc-rep" placeholder="Brief situation report for HQ..."></textarea></div>
       <div class="form-group"><label class="form-label">Resources Needed</label>
-        <select class="form-select" multiple style="height:80px">
+        <select class="form-select" id="esc-res" multiple style="height:80px">
           <option selected>Additional patrol units</option>
           <option>SWAT / tactical unit</option>
           <option>K9 unit</option><option>Forensics team</option>
@@ -3627,14 +3670,17 @@ const StationApp = (() => {
   }
 
   function confirmEscalate(incId) {
+    const inc=StationData.incidents.find(i=>i.id===incId);
+    const sel=document.getElementById('esc-res');
+    const esc_={reason:val('esc-reason'),report:val('esc-rep'),resources:sel?[...sel.selectedOptions].map(o=>o.value):[],at:Date.now(),by:StationData.station.commanderName||'Control room'};
     closeModal();
-    StationData.logActivity(incId, 'ESCALATED',
-      'Incident escalated to HQ-NODE-001 — additional resources requested',
-      StationData.station.commanderName);
-    showToast('warning', 'Escalated to HQ', `${incId} flagged to HQ-NODE-001`, 6000);
-    StationData.authorizeExternalIncident(incId, 'Escalated to HQ — continued monitoring authorized');
+    if(inc) inc.hqEscalated=esc_;
+    shareInc(incId,{hqEscalated:esc_});
+    StationData.logActivity(incId,'ESCALATED','Escalated to HQ — '+esc_.reason+(esc_.report?' · '+esc_.report:''),esc_.by);
+    archiveNote(incId,'update','Escalated to HQ: '+esc_.reason);
+    showToast('warning','Escalated to HQ',`${incId} is flagged for HQ`,6000);
+    StationData.authorizeExternalIncident(incId,'Escalated to HQ — continued monitoring authorized');
   }
-
   /* ════════════════════════════════════════
      DISPATCH ACTIONS
   ════════════════════════════════════════ */
@@ -3737,55 +3783,109 @@ const StationApp = (() => {
     if (currentPage === 'dispatch')  StationDispatch.render();
   }
 
+
+  /* ── shared helpers for the incident actions below ── */
+  function esc(t){ return String(t==null?'':t).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  function openIncs(includeResolved){ return StationData.incidents.filter(i=>StationData.canViewIncident(i)&&(includeResolved||i.status!=='resolved')); }
+  function incSelect(id, sel, includeResolved, exceptId){
+    const l=openIncs(includeResolved).filter(i=>i.id!==exceptId);
+    if(!l.length) return '<div style="font-size:0.78rem;color:var(--text-muted);padding:6px 0">No incidents available.</div>';
+    return `<select class="form-select" id="${id}">${l.map(i=>`<option value="${esc(i.id)}" ${i.id===sel?'selected':''}>${esc(i.id)} — ${esc(i.type)} · ${esc(i.location)}</option>`).join('')}</select>`;
+  }
+  function val(id){ return (document.getElementById(id)?.value||'').trim(); }
+  // Write a patch onto the shared record of an incident (creating the record if this station made the incident itself).
+  function shareInc(incId, patch, base){
+    const lcr=StationData.station.id, inc=StationData.incidents.find(i=>i.id===incId)||{};
+    GeamsSync.mergeShared('lcr:'+lcr+':incidents', {}, (m)=>{
+      m=m||{};
+      if(!m[incId]) m[incId]=Object.assign({id:incId,type:inc.type,priority:inc.priority,location:inc.location,lat:inc.lat,lng:inc.lng,civilianName:inc.civilian,status:inc.status==='resolved'?'resolved':'active',source:'station',createdAt:Date.now()},base||{});
+      Object.assign(m[incId],patch); return m;
+    });
+  }
+  function archiveNote(incId, kind, text){ try{ GeamsArchive.log(incId,'lcr',kind,text); }catch(e){} }
+  function freeOfficer(name){ const o=StationData.officers.find(x=>x.name===name); if(o){ o.status='available'; o.currentIncident=null; } }
+  function needInc(id){ const inc=StationData.incidents.find(i=>i.id===id); if(!inc) showToast('error','No incident','Choose an incident first'); return inc; }
+
   function reassignDispatch(incId) {
-    openModal('🔄 Reassign Dispatch — ' + incId, `
-      <div class="form-group"><label class="form-label">Current Officer</label>
-        <input class="form-input" value="${StationData.incidents.find(i=>i.id===incId)?.officerAssigned||'Unassigned'}" disabled></div>
+    const cands=openIncs(false).filter(i=>i.officerAssigned);
+    openModal('🔄 Reassign Dispatch', `
+      <div class="form-group"><label class="form-label">Incident</label>
+        ${cands.length?`<select class="form-select" id="ra-inc">${cands.map(i=>`<option value="${esc(i.id)}" ${i.id===incId?'selected':''}>${esc(i.id)} — ${esc(i.type)} · now ${esc(i.officerAssigned)}</option>`).join('')}</select>`:'<div style="font-size:0.78rem;color:var(--text-muted)">No incident currently has an officer assigned.</div>'}</div>
       <div class="form-group"><label class="form-label">Reassign To</label>
-        <select class="form-select">
-          ${StationData.officers.filter(o=>o.status!=='off-duty').map(o=>`
-            <option>${o.name} · ${o.badge} · ${o.status.toUpperCase()}</option>`).join('')}
+        <select class="form-select" id="ra-off">
+          ${StationData.officers.filter(o=>o.status==='available').map(o=>`<option value="${esc(o.id)}">${esc(o.name)} · ${esc(o.badge)}</option>`).join('')||'<option value="">No available officers</option>'}
         </select></div>
       <div class="form-group"><label class="form-label">Reason for Reassignment</label>
-        <select class="form-select">
+        <select class="form-select" id="ra-reason">
           <option>Officer shift end</option><option>Officer injury / illness</option>
           <option>Higher priority incident</option><option>Vehicle breakdown</option>
-          <option>Request from officer</option>
-        </select></div>`,
+          <option>Request from officer</option></select></div>`,
       `<button class="btn btn-ghost btn-sm" onclick="StationApp.closeModal()">Cancel</button>
-       <button class="btn btn-warning" onclick="StationApp.showToast('success','Reassigned','Dispatch reassigned successfully');StationApp.closeModal()">🔄 Confirm Reassign</button>`);
+       <button class="btn btn-warning" ${cands.length?'':'disabled'} onclick="StationApp.confirmReassign()">🔄 Confirm Reassign</button>`);
   }
 
+  function callOfficer(id) {
+    const o=StationData.officers.find(x=>x.id===id); if(!o) return;
+    const ph=String(o.phone||'').replace(/[^+\d]/g,'');
+    if(!ph){ showToast('warning','No number',(o.name||'Officer')+' has no phone number on the roster'); return; }
+    StationData.logActivity('SHIFT','CALL','Call placed to '+o.name+' ('+o.badge+')',StationData.station.commanderName);
+    location.href='tel:'+ph;
+  }
+  function exportAuditLog() {
+    const a=StationData.auditLog||[]; if(!a.length){ showToast('warning','Nothing to export','The audit log is empty'); return; }
+    downloadText('audit-'+StationData.station.id+'.csv',[['Time','Source','Text']].concat(a.map(e=>[e.time,e.source,e.text])).map(r=>r.map(csvCell).join(',')).join('\r\n'));
+  }
+  async function downloadStationData() {
+    const m=await GeamsSync.getShared('lcr:'+StationData.station.id+':incidents',{});
+    downloadText('station-data-'+StationData.station.id+'.json',JSON.stringify({exportedAt:new Date().toISOString(),station:StationData.station.id,incidents:m||{}},null,2),'application/json');
+    showToast('success','Downloaded','Your copy of this station\'s incident record');
+  }
+
+  function confirmReassign() {
+    const inc=needInc(val('ra-inc')); if(!inc) return;
+    const off=StationData.officers.find(o=>o.id===val('ra-off'));
+    if(!off){ showToast('error','No officer','Pick an available officer'); return; }
+    const reason=val('ra-reason'), prev=inc.officerAssigned;
+    if(prev) freeOfficer(prev);
+    try{ DispatchTracker.resolveUnit(inc.id); }catch(e){}
+    inc.officerAssigned=off.name; inc.status='dispatched'; off.status='dispatched'; off.currentIncident=inc.id;
+    StationData.logActivity(inc.id,'REASSIGNED',`${prev||'nobody'} → ${off.name} (${off.badge}) · ${reason}`,StationData.station.commanderName);
+    try{ DispatchTracker.startTracking(inc.id, off); }catch(e){}
+    const unit=(()=>{try{return DispatchTracker.getUnit(inc.id);}catch(e){return null;}})();
+    shareInc(inc.id,{status:'dispatched',officerName:off.name,officerBadge:off.badge,officerStatus:'assigned',officerETA:unit?DispatchTracker.etaMin(unit):null,reassignedFrom:prev||null,reassignedAt:Date.now(),reassignReason:reason});
+    archiveNote(inc.id,'update','Reassigned from '+(prev||'nobody')+' to '+off.name+' — '+reason);
+    closeModal(); updateKPIs();
+    if (currentPage==='dispatch') StationDispatch.render();
+    showToast('success','Reassigned',`${off.name} now assigned to ${inc.id}`);
+  }
   function requestBackup(incId) {
-    openModal('🆘 Request Backup — ' + incId, `
+    openModal('🆘 Request Backup', `
+      <div style="font-size:0.76rem;color:var(--text-muted);margin-bottom:12px;line-height:1.5">
+        This writes the request onto the incident so HQ sees it at once. It does not dispatch anyone by itself — HQ or a neighbouring station must act on it.
+      </div>
+      <div class="form-group"><label class="form-label">Incident</label>${incSelect('bk-inc',incId,false)}</div>
       <div class="form-group"><label class="form-label">Backup Type</label>
-        <select class="form-select">
-          <option>Additional patrol officers</option>
-          <option>Armed response unit</option>
-          <option>K9 unit</option>
-          <option>Forensics team</option>
-          <option>Medical / paramedic support</option>
-          <option>Fire brigade</option>
-          <option>SWAT / tactical unit</option>
+        <select class="form-select" id="bk-type">
+          <option>Additional patrol officers</option><option>Armed response unit</option><option>K9 unit</option>
+          <option>Forensics team</option><option>Medical / paramedic support</option><option>Fire brigade</option><option>Tactical unit</option>
         </select></div>
       <div class="form-group"><label class="form-label">Urgency</label>
-        <select class="form-select">
-          <option>🔴 Immediate — officer in danger</option>
-          <option>🟠 Urgent — scene escalating</option>
-          <option>🟡 Standard — additional resource needed</option>
-        </select></div>
-      <div class="form-group"><label class="form-label">Source</label>
-        <select class="form-select">
-          <option>This station — available officers</option>
-          <option>Nearest station (auto-detect)</option>
-          <option>Escalate to HQ for national resource</option>
-        </select></div>
+        <select class="form-select" id="bk-urg"><option value="immediate">Immediate — officer in danger</option><option value="urgent">Urgent — scene escalating</option><option value="standard">Standard — more resources needed</option></select></div>
       <div class="form-group"><label class="form-label">Situation Report</label>
-        <textarea class="form-textarea" rows="2" placeholder="Describe the current scene for incoming officers..."></textarea></div>`,
-      `<button class="btn btn-ghost btn-sm" onclick="StationApp.closeModal()">Cancel</button>
-       <button class="btn btn-danger" onclick="StationApp.showToast('warning','Backup Requested','Backup units alerted — ETA being calculated');StationApp.closeModal()">🆘 Send Backup Request</button>`);
+        <textarea class="form-textarea" id="bk-rep" rows="2" placeholder="Describe the scene for incoming officers..."></textarea></div>`,
+      `<button class="btn btn-ghost btn-sm" onclick="StationApp.closeModal();StationApp.navigate('backup')">Station-to-station backup…</button>
+       <button class="btn btn-ghost btn-sm" onclick="StationApp.closeModal()">Cancel</button>
+       <button class="btn btn-danger" onclick="StationApp.confirmBackupRequest()">🆘 Send to HQ</button>`);
   }
-
+  function confirmBackupRequest() {
+    const inc=needInc(val('bk-inc')); if(!inc) return;
+    const req={type:val('bk-type'),urgency:val('bk-urg'),report:val('bk-rep'),at:Date.now(),by:StationData.station.commanderName||'Control room'};
+    inc.backupRequest=req;
+    shareInc(inc.id,{backupRequest:req});
+    StationData.logActivity(inc.id,'BACKUP',`Backup requested from HQ: ${req.type} (${req.urgency})${req.report?' — '+req.report:''}`,req.by);
+    archiveNote(inc.id,'update','Backup requested: '+req.type+' ('+req.urgency+')');
+    closeModal(); showToast('warning','Backup request sent',`${inc.id} now shows a backup request at HQ`);
+  }
   let medFireStations = []; // currently-loaded facility list for the open dispatch modal
 
   function dispatchMedicalFire(type, preselectIncId) {
@@ -3897,91 +3997,93 @@ const StationApp = (() => {
   ════════════════════════════════════════ */
 
   function callBackCivilian(incId) {
-    const inc = StationData.incidents.find(i => i.id === incId);
-    openModal('📞 Call Back Civilian — ' + incId, `
+    const inc=StationData.incidents.find(i=>i.id===incId);
+    if(!inc){ showToast('warning','No incident','Select an incident first'); return; }
+    const phone=(inc.civilianPhone||StationData.civilians.find(c=>c.name===inc.civilian)?.phone||'').replace(/[^+\d]/g,'');
+    openModal('📞 Call Back Civilian — '+inc.id, `
       <div style="text-align:center;padding:16px 0">
-        <div style="font-size:2rem;margin-bottom:10px">📞</div>
-        <div style="font-size:0.88rem;font-weight:700;margin-bottom:4px">${inc?.civilian || 'Unknown'}</div>
-        <div style="font-family:var(--font-mono);font-size:0.78rem;color:var(--primary);margin-bottom:16px">
-          ${StationData.civilians.find(c=>c.name===inc?.civilian)?.phone || '+233-XX-XXXXXXX'}
+        <div style="font-size:0.88rem;font-weight:700;margin-bottom:6px">${esc(inc.civilian||'Unknown')}</div>
+        ${phone?`<div style="font-family:var(--font-mono);font-size:0.9rem;color:var(--primary);margin-bottom:14px">${esc(phone)}</div>
+        <div style="display:flex;gap:8px;justify-content:center">
+          <a class="btn btn-primary" href="tel:${esc(phone)}" onclick="StationData.logActivity('${esc(inc.id)}','CALLBACK','Call placed to civilian ${esc(phone)}',StationData.station.commanderName)">📞 Call from this device</a>
+          <a class="btn btn-ghost" href="sms:${esc(phone)}">💬 Text</a>
         </div>
-      </div>
-      <div class="form-group"><label class="form-label">Call Type</label>
-        <select class="form-select">
-          <option>Voice call — standard</option>
-          <option>Video call — full comms</option>
-          <option>Encrypted channel via GEAMS app</option>
-        </select></div>
-      <div class="form-group"><label class="form-label">Purpose</label>
-        <select class="form-select">
-          <option>Status update — officer dispatched</option>
-          <option>Verify incident details</option>
-          <option>Check civilian safety</option>
-          <option>Request additional information</option>
-        </select></div>`,
-      `<button class="btn btn-ghost btn-sm" onclick="StationApp.closeModal()">Cancel</button>
-       <button class="btn btn-primary" onclick="StationApp.showToast('info','Calling','Connecting to ${inc?.civilian || 'civilian'}...');StationApp.closeModal()">📞 Initiate Call</button>`);
+        <div style="font-size:0.68rem;color:var(--text-muted);margin-top:12px">Opens your phone or calling app. GEAMS does not carry the call.</div>`
+        :`<div style="font-size:0.8rem;color:var(--text-muted)">No phone number is on record for this reporter.</div>`}
+      </div>`,
+      `<button class="btn btn-ghost btn-sm" onclick="StationApp.closeModal()">Close</button>`);
   }
-
   function requestScenePhoto(incId) {
-    openModal('📸 Request Scene Photo — ' + incId, `
-      <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:16px;line-height:1.6">
-        Sends a push prompt to the civilian's GEAMS app requesting they capture and upload a photo of the scene immediately.
+    openModal('📸 Request Scene Photo', `
+      <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:14px;line-height:1.6">
+        Puts a photo request on the incident. The reporter sees it in their GEAMS app while it is open and can attach a photo, which arrives as evidence. No push notification is sent.
       </div>
+      <div class="form-group"><label class="form-label">Incident</label>${incSelect('ph-inc',incId,false)}</div>
       <div class="form-group"><label class="form-label">Photo Request Type</label>
-        <select class="form-select">
-          <option>Scene overview — wide angle</option>
-          <option>Suspect photo — if safe to do so</option>
-          <option>Vehicle — plate and make</option>
-          <option>Injury documentation</option>
-          <option>Location landmark</option>
-        </select></div>
+        <select class="form-select" id="ph-type"><option>Scene overview — wide angle</option><option>Suspect photo — if safe to do so</option><option>Vehicle — plate and make</option><option>Injury documentation</option><option>Location landmark</option></select></div>
       <div class="form-group"><label class="form-label">Message to Civilian</label>
-        <textarea class="form-textarea" rows="2">Please take a clear photo of the scene and tap "Send to Police" in your app. Only do this if it is safe.</textarea></div>`,
+        <textarea class="form-textarea" id="ph-msg" rows="2">Please take a clear photo of the scene and send it from your app. Only do this if it is safe.</textarea></div>`,
       `<button class="btn btn-ghost btn-sm" onclick="StationApp.closeModal()">Cancel</button>
-       <button class="btn btn-primary" onclick="StationApp.showToast('info','Photo Requested','Push notification sent to civilian app');StationApp.closeModal()">📸 Send Request</button>`);
+       <button class="btn btn-primary" onclick="StationApp.confirmScenePhoto()">📸 Send Request</button>`);
   }
-
+  function confirmScenePhoto() {
+    const inc=needInc(val('ph-inc')); if(!inc) return;
+    const req={type:val('ph-type'),message:val('ph-msg'),at:Date.now()};
+    shareInc(inc.id,{photoRequest:req,photoRequestedAt:req.at});
+    StationData.logActivity(inc.id,'PHOTO_REQUEST','Scene photo requested: '+req.type,StationData.station.commanderName);
+    archiveNote(inc.id,'update','Scene photo requested from the reporter: '+req.type);
+    closeModal(); showToast('info','Photo requested','The reporter will see it in their app');
+  }
   function flagSuspiciousCaller(incId) {
-    openModal('🚩 Flag Suspicious Caller — ' + incId, `
+    openModal('🚩 Flag Suspicious Caller', `
       <div style="background:var(--orange-dim);border:1px solid var(--orange-border);border-radius:var(--r-md);padding:10px 14px;margin-bottom:14px;font-size:0.78rem;color:var(--orange)">
-        ⚠️ The incident will not be dismissed. It remains active but is flagged for AI verification. If the incident turns out to be real, the flag is auto-removed.
+        ⚠️ The incident stays active. The flag and your reason are recorded on it so HQ and the next operator see it. No automatic verification is run.
       </div>
+      <div class="form-group"><label class="form-label">Incident</label>${incSelect('fl-inc',incId,false)}</div>
       <div class="form-group"><label class="form-label">Reason for Flag</label>
-        <select class="form-select">
-          <option>Suspected prank / false alarm</option>
-          <option>Caller behaviour inconsistent</option>
-          <option>Location does not match description</option>
-          <option>Repeat caller — known false reporter</option>
-          <option>AI detection flagged as suspicious</option>
-        </select></div>
+        <select class="form-select" id="fl-reason"><option>Suspected prank / false alarm</option><option>Caller behaviour inconsistent</option><option>Location does not match description</option><option>Repeat caller — known false reporter</option></select></div>
       <div class="form-group"><label class="form-label">Notes</label>
-        <textarea class="form-textarea" rows="2" placeholder="Describe why this is suspicious..."></textarea></div>`,
+        <textarea class="form-textarea" id="fl-notes" rows="2" placeholder="Describe why this is suspicious..."></textarea></div>`,
       `<button class="btn btn-ghost btn-sm" onclick="StationApp.closeModal()">Cancel</button>
-       <button class="btn btn-warning" onclick="StationApp.showToast('warning','Caller Flagged','${incId} marked for AI verification — not dismissed');StationApp.closeModal()">🚩 Flag Caller</button>`);
+       <button class="btn btn-warning" onclick="StationApp.confirmFlag()">🚩 Flag Caller</button>`);
   }
-
+  function confirmFlag() {
+    const inc=needInc(val('fl-inc')); if(!inc) return;
+    const f={reason:val('fl-reason'),notes:val('fl-notes'),at:Date.now(),by:StationData.station.commanderName||'Control room'};
+    inc.flagged=f; shareInc(inc.id,{flagged:f});
+    StationData.logActivity(inc.id,'FLAGGED','Caller flagged: '+f.reason+(f.notes?' · '+f.notes:''),f.by);
+    archiveNote(inc.id,'update','Caller flagged: '+f.reason);
+    closeModal(); showToast('warning','Caller flagged',inc.id+' stays active and carries the flag');
+    if(currentPage==='incidents') StationIncidents.render();
+  }
   function mergeIncidents(incId) {
     openModal('🔁 Merge Duplicate Incidents', `
-      <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:16px;line-height:1.6">
-        If multiple callers reported the same event, merge their cases into one to prevent double-dispatching.
+      <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:14px;line-height:1.6">
+        If two reports describe one event, close the duplicate and point it at the one you keep. An officer assigned to the duplicate is released.
       </div>
-      <div class="form-group"><label class="form-label">Primary Incident (keep this one)</label>
-        <select class="form-select">
-          ${StationData.incidents.filter(i=>StationData.canViewIncident(i)&&i.status!=='resolved').slice(0,6).map(i=>`
-            <option value="${i.id}" ${i.id===incId?'selected':''}>${i.id} — ${i.type} · ${i.location}</option>`).join('')}
-        </select></div>
-      <div class="form-group"><label class="form-label">Merge Into (will be closed)</label>
-        <select class="form-select">
-          ${StationData.incidents.filter(i=>StationData.canViewIncident(i)&&i.status!=='resolved'&&i.id!==incId).slice(0,6).map(i=>`
-            <option>${i.id} — ${i.type} · ${i.location}</option>`).join('')}
-        </select></div>
-      <div class="form-group"><label class="form-label">Notes</label>
-        <textarea class="form-textarea" rows="2" placeholder="Reason for merge..."></textarea></div>`,
+      <div class="form-group"><label class="form-label">Keep this incident</label>${incSelect('mg-keep',incId,false)}</div>
+      <div class="form-group"><label class="form-label">Close this duplicate</label>${incSelect('mg-dup','',false,incId)}</div>
+      <div class="form-group"><label class="form-label">Notes</label><textarea class="form-textarea" id="mg-notes" rows="2" placeholder="Reason for merge..."></textarea></div>`,
       `<button class="btn btn-ghost btn-sm" onclick="StationApp.closeModal()">Cancel</button>
-       <button class="btn btn-primary" onclick="StationApp.showToast('success','Merged','Incidents merged — duplicate closed, no double dispatch');StationApp.closeModal()">🔁 Merge</button>`);
+       <button class="btn btn-primary" onclick="StationApp.confirmMerge()">🔁 Merge</button>`);
   }
-
+  function confirmMerge() {
+    const keep=needInc(val('mg-keep')), dup=needInc(val('mg-dup'));
+    if(!keep||!dup) return;
+    if(keep.id===dup.id){ showToast('error','Same incident','Choose two different incidents'); return; }
+    const note=val('mg-notes');
+    if(dup.officerAssigned){ freeOfficer(dup.officerAssigned); try{DispatchTracker.resolveUnit(dup.id);}catch(e){} }
+    dup.status='resolved'; dup.resolutionType='Merged into '+keep.id; dup.mergedInto=keep.id; dup.civilianTracking=false;
+    keep.mergedFrom=(keep.mergedFrom||[]).concat(dup.id);
+    shareInc(dup.id,{status:'resolved',resolutionType:dup.resolutionType,resolutionNotes:note||undefined,mergedInto:keep.id,resolvedAt:Date.now()});
+    shareInc(keep.id,{mergedFrom:keep.mergedFrom});
+    StationData.logActivity(dup.id,'MERGED','Merged into '+keep.id+(note?' · '+note:''),StationData.station.commanderName);
+    StationData.logActivity(keep.id,'MERGED','Absorbed duplicate '+dup.id,StationData.station.commanderName);
+    archiveNote(dup.id,'closed','Closed as a duplicate of '+keep.id); archiveNote(keep.id,'update','Duplicate '+dup.id+' merged in');
+    StationData.emit('incident_resolved',dup);
+    closeModal(); updateKPIs();
+    showToast('success','Merged',dup.id+' closed as a duplicate of '+keep.id);
+  }
   /* ════════════════════════════════════════
      STATION MANAGEMENT
   ════════════════════════════════════════ */
@@ -4096,102 +4198,87 @@ const StationApp = (() => {
   function refreshIdentity() { applyIdentityToChrome(); }
 
   function stationLockdown() {
-    openModal('🔒 Station Lockdown Mode', `
-      <div style="background:var(--red-dim);border:1px solid var(--red-border);border-radius:var(--r-md);padding:12px 14px;margin-bottom:14px;font-size:0.8rem;color:var(--red);line-height:1.6">
-        🔒 Lockdown stops all civilian walk-ins, secures the building, and routes incoming calls to the next nearest station automatically.
+    const on=StationLock.get();
+    if(on){ openModal('🔒 Station Lockdown', `<div style="font-size:0.82rem;line-height:1.6">Lockdown has been recorded since ${esc(new Date(on.since).toLocaleTimeString('en-GB'))} — ${esc(on.reason)}.</div>`,
+      `<button class="btn btn-ghost btn-sm" onclick="StationApp.closeModal()">Close</button><button class="btn btn-primary" onclick="StationApp.liftLockdown()">Lift lockdown</button>`); return; }
+    openModal('🔒 Station Lockdown', `
+      <div style="background:var(--red-dim);border:1px solid var(--red-border);border-radius:var(--r-md);padding:12px 14px;margin-bottom:14px;font-size:0.78rem;color:var(--red);line-height:1.5">
+        This records the lockdown on your station's status so HQ and neighbouring stations see it, and shows a banner here. GEAMS cannot lock doors or reroute phone calls — use your radio and the HQ line for that.
       </div>
       <div class="form-group"><label class="form-label">Lockdown Reason</label>
-        <select class="form-select">
-          <option>Threat to station security</option>
-          <option>Armed individual approaching</option>
-          <option>Active shooter in area</option>
-          <option>Civil unrest / crowd</option>
-          <option>Protective custody operation</option>
-        </select></div>
-      <div class="form-group"><label class="form-label">Reroute Calls To</label>
-        <select class="form-select">
-          <option>GH-GA-ACC-001 — Accra Central (auto)</option>
-          <option>GH-GA-ACC-003 — Tema Station</option>
-          <option>HQ Emergency Line</option>
-        </select></div>
-      <div class="form-group"><label class="form-label">Duration</label>
-        <select class="form-select">
-          <option>30 minutes</option><option>1 hour</option>
-          <option>2 hours</option><option>Until manually lifted</option>
-        </select></div>`,
-      `<button class="btn btn-ghost btn-sm" onclick="StationApp.closeModal()">Cancel</button>
-       <button class="btn btn-danger" onclick="StationApp.confirmLockdown()">🔒 Activate Lockdown</button>`);
+        <select class="form-select" id="ld-reason"><option>Threat to station security</option><option>Armed individual approaching</option><option>Active shooter in area</option><option>Civil unrest / crowd</option><option>Protective custody operation</option></select></div>`,
+      `<button class="btn btn-ghost btn-sm" onclick="StationApp.closeModal()">Cancel</button><button class="btn btn-danger" onclick="StationApp.confirmLockdown()">🔒 Record Lockdown</button>`);
   }
-
   function confirmLockdown() {
-    closeModal();
-    showToast('error', '🔒 Station Lockdown Active', 'Building secured · Calls rerouted · HQ notified', 8000);
-    const topbar = document.getElementById('topbar');
-    if (topbar) {
-      topbar.style.background = 'rgba(100,0,0,0.35)';
-      topbar.style.borderBottomColor = 'var(--red)';
-      setTimeout(() => { topbar.style.background=''; topbar.style.borderBottomColor=''; }, 12000);
-    }
+    const r=val('ld-reason'); closeModal();
+    StationLock.set({reason:r,since:Date.now(),by:StationData.station.commanderName||'Control room'});
+    StationData.logActivity('SHIFT','LOCKDOWN','Lockdown recorded: '+r,StationData.station.commanderName);
+    showToast('error','🔒 Lockdown recorded','HQ can see this station is in lockdown',8000);
+  }
+  function liftLockdown() {
+    StationLock.set(null); closeModal();
+    StationData.logActivity('SHIFT','LOCKDOWN','Lockdown lifted',StationData.station.commanderName);
+    showToast('success','Lockdown lifted','Status cleared for HQ');
   }
 
   function logIntelligence() {
-    openModal('🧠 Log Intelligence Report', `
-      <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:16px;line-height:1.6">
-        Submit community intelligence — tips, informant reports, or suspicious patterns — as a structured record separate from active incident cases.
-      </div>
-      <div class="form-group"><label class="form-label">Intelligence Type</label>
-        <select class="form-select">
-          <option>Community tip</option><option>Informant report</option>
-          <option>Officer observation</option><option>Suspicious activity pattern</option>
-          <option>Criminal network intelligence</option>
-        </select></div>
-      <div class="form-group"><label class="form-label">Subject / Person of Interest</label>
-        <input class="form-input" placeholder="Name, alias, or description if known"></div>
-      <div class="form-group"><label class="form-label">Location</label>
-        <input class="form-input" placeholder="Area, street, or landmark"></div>
-      <div class="form-group"><label class="form-label">Intelligence Details</label>
-        <textarea class="form-textarea" placeholder="Detailed report — who, what, where, when, how..."></textarea></div>
-      <div class="form-group"><label class="form-label">Confidentiality</label>
-        <select class="form-select">
-          <option>Station only</option>
-          <option>Share with HQ</option>
-          <option>Share with all regional stations</option>
-        </select></div>`,
-      `<button class="btn btn-ghost btn-sm" onclick="StationApp.closeModal()">Cancel</button>
-       <button class="btn btn-primary" onclick="StationApp.showToast('success','Intelligence Logged','Report filed and forwarded per confidentiality setting');StationApp.closeModal()">🧠 Submit Report</button>`);
+    GeamsSync.getShared('lcr:'+StationData.station.id+':intel',[]).then(list=>{
+      list=Array.isArray(list)?list:[];
+      openModal('🧠 Log Intelligence Report', `
+        <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:14px;line-height:1.6">
+          Saved as a record separate from incident cases. It is readable by this station and by HQ — it is not shared with other stations. Reports cannot be edited once saved.
+        </div>
+        <div class="form-group"><label class="form-label">Intelligence Type</label>
+          <select class="form-select" id="in-type"><option>Community tip</option><option>Informant report</option><option>Officer observation</option><option>Suspicious activity pattern</option><option>Criminal network intelligence</option></select></div>
+        <div class="form-group"><label class="form-label">Subject / Person of Interest</label><input class="form-input" id="in-subj" placeholder="Name, alias, or description if known"></div>
+        <div class="form-group"><label class="form-label">Location</label><input class="form-input" id="in-loc" placeholder="Area, street, or landmark"></div>
+        <div class="form-group"><label class="form-label">Intelligence Details</label><textarea class="form-textarea" id="in-det" placeholder="Who, what, where, when, how..."></textarea></div>
+        <div style="font-size:0.68rem;color:var(--text-muted)">${list.length} report${list.length===1?'':'s'} already on file for this station.</div>`,
+        `<button class="btn btn-ghost btn-sm" onclick="StationApp.closeModal()">Cancel</button>
+         <button class="btn btn-primary" onclick="StationApp.submitIntel()">🧠 Submit Report</button>`);
+    });
   }
-
+  function submitIntel() {
+    const det=val('in-det'); if(det.length<5){ showToast('error','Details needed','Describe what was reported'); return; }
+    const r={id:'INT-'+Date.now().toString(36).toUpperCase(),type:val('in-type'),subject:val('in-subj'),location:val('in-loc'),details:det,at:Date.now(),by:StationData.station.commanderName||'Control room'};
+    GeamsSync.mergeShared('lcr:'+StationData.station.id+':intel',[],(a)=>{a=Array.isArray(a)?a:[];a.push(r);return a;});
+    StationData.logActivity('INTEL','INTEL','Intelligence report '+r.id+' filed ('+r.type+')',r.by);
+    closeModal(); showToast('success','Report filed',r.id+' saved and visible to HQ');
+  }
   function registerComplainant() {
     openModal('🧑 Register Walk-In Complainant', `
-      <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:16px;line-height:1.6">
-        For civilians who arrive at the station without the app. Creates a case linked to their national ID.
+      <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:14px;line-height:1.6">
+        For people who arrive without the app. Creates a real case at this station and files it where HQ can see it. Only name and phone are stored — do not enter ID numbers here.
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-        <div class="form-group"><label class="form-label">Full Name</label>
-          <input class="form-input" placeholder="Complainant name"></div>
-        <div class="form-group"><label class="form-label">Ghana Card ID</label>
-          <input class="form-input" placeholder="GHA-XXXXXXXXX"></div>
-        <div class="form-group"><label class="form-label">Phone Number</label>
-          <input class="form-input" placeholder="+233-XX-XXXXXXX"></div>
-        <div class="form-group"><label class="form-label">Date of Birth</label>
-          <input type="date" class="form-input"></div>
+        <div class="form-group"><label class="form-label">Full Name</label><input class="form-input" id="wi-name" placeholder="Complainant name"></div>
+        <div class="form-group"><label class="form-label">Phone Number</label><input class="form-input" id="wi-phone" placeholder="+233…"></div>
       </div>
       <div class="form-group"><label class="form-label">Complaint Type</label>
-        <select class="form-select">
-          <option>Theft / Robbery</option><option>Assault</option>
-          <option>Domestic violence</option><option>Missing person</option>
-          <option>Property damage</option><option>Fraud</option><option>Other</option>
-        </select></div>
-      <div class="form-group"><label class="form-label">Incident Description</label>
-        <textarea class="form-textarea" placeholder="Complainant's account of the incident..."></textarea></div>
+        <select class="form-select" id="wi-type"><option>Theft / Robbery</option><option>Assault</option><option>Domestic violence</option><option>Missing person</option><option>Property damage</option><option>Fraud</option><option>Other</option></select></div>
+      <div class="form-group"><label class="form-label">Priority</label>
+        <select class="form-select" id="wi-prio"><option value="medium">Medium</option><option value="high">High</option><option value="low">Low</option><option value="critical">Critical</option></select></div>
+      <div class="form-group"><label class="form-label">Incident Description</label><textarea class="form-textarea" id="wi-desc" placeholder="Complainant's account..."></textarea></div>
       <div class="form-group"><label class="form-label">Receiving Officer</label>
-        <select class="form-select">
-          ${StationData.officerOptionsHTML(0,6)}
-        </select></div>`,
+        <select class="form-select" id="wi-off">${StationData.officers.map(o=>`<option>${esc(o.name)}</option>`).join('')||'<option>Duty officer</option>'}</select></div>`,
       `<button class="btn btn-ghost btn-sm" onclick="StationApp.closeModal()">Cancel</button>
-       <button class="btn btn-primary" onclick="StationApp.showToast('success','Complainant Registered','Case created and assigned — docket number generated');StationApp.closeModal()">📋 Register & Create Case</button>`);
+       <button class="btn btn-primary" onclick="StationApp.submitWalkIn()">📋 Register & Create Case</button>`);
   }
-
+  function submitWalkIn() {
+    const name=val('wi-name'), desc=val('wi-desc');
+    if(name.length<3){ showToast('error','Name required','Enter the complainant\'s name'); return; }
+    if(desc.length<5){ showToast('error','Description required','Record what was reported'); return; }
+    const st=StationData.station, phone=val('wi-phone'), by=val('wi-off');
+    const id='INC-W'+Date.now().toString(36).toUpperCase();
+    const inc=StationData.makeInc({id,type:val('wi-type'),priority:val('wi-prio'),status:'active',location:'Walk-in at '+st.name,lat:st.lat,lng:st.lng,
+      civilian:name,civilianPhone:phone,notes:desc,time:'Just now',minsAgo:0,evidenceCount:0,source:'walk-in',receivedBy:by,civilianTracking:false});
+    StationData.incidents.unshift(inc);
+    shareInc(id,{id,type:inc.type,priority:inc.priority,status:'active',location:inc.location,lat:inc.lat,lng:inc.lng,civilianName:name,civilianPhone:phone||undefined,notes:desc,source:'walk-in',receivedBy:by,createdAt:Date.now()});
+    StationData.logActivity(id,'RECEIVED','Walk-in complaint registered by '+by+' — '+inc.type,st.commanderName);
+    archiveNote(id,'received','Walk-in complaint registered at '+st.name+' (received by '+by+')');
+    StationData.emit('new_incident',inc);
+    closeModal(); showToast('success','Case created','Docket number '+id,7000);
+  }
   function findAndPrintDocket() {
     openModal('🔍 Find Incident to Print Docket', `
       <div class="form-group"><label class="form-label">Search</label>
@@ -4226,155 +4313,113 @@ const StationApp = (() => {
   }
 
   function printDocket(incId) {
-    openModal('🖨️ Print Incident Docket — ' + incId, `
-      <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:16px;line-height:1.6">
-        Generate a physical printout of the incident record for detainees, court submissions, or paper-based workflows.
-      </div>
+    const SEC=['Incident details','Officer notes','Dispatch log','Reporter statement'];
+    openModal('🖨️ Print Incident Docket — '+incId, `
+      <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:14px;line-height:1.6">Opens your browser's print dialog with the record laid out for paper. Choose a printer or "Save as PDF" there.</div>
       <div class="form-group"><label class="form-label">Docket Type</label>
-        <select class="form-select">
-          <option>Standard incident docket</option>
-          <option>Detainee custody record</option>
-          <option>Court submission format</option>
-          <option>Complainant receipt copy</option>
-        </select></div>
-      <div class="form-group"><label class="form-label">Include Sections</label>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
-          ${['Incident details','Officer notes','Evidence list','Civilian statement','Dispatch log','Chain of custody'].map(s=>`
-            <label style="display:flex;align-items:center;gap:6px;font-size:0.75rem;cursor:pointer">
-              <input type="checkbox" checked style="accent-color:var(--primary)"> ${s}
-            </label>`).join('')}
-        </div></div>
-      <div class="form-group"><label class="form-label">Copies</label>
-        <select class="form-select">
-          <option>1 copy</option><option>2 copies</option><option>3 copies</option>
-        </select></div>`,
+        <select class="form-select" id="dk-type"><option value="full">Full incident docket</option><option value="receipt">Complainant receipt copy</option></select></div>
+      <div class="form-group"><label class="form-label">Include Sections (full docket)</label>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">${SEC.map((x,i)=>`<label style="display:flex;align-items:center;gap:6px;font-size:0.75rem"><input type="checkbox" class="dk-sec" value="${i}" checked> ${x}</label>`).join('')}</div></div>`,
       `<button class="btn btn-ghost btn-sm" onclick="StationApp.closeModal()">Cancel</button>
-       <button class="btn btn-primary" onclick="StationApp.showToast('success','Docket Sent','Print job queued — station printer notified');StationApp.closeModal()">🖨️ Print Docket</button>`);
+       <button class="btn btn-primary" onclick="StationApp.doPrintDocket('${esc(incId)}')">🖨️ Print</button>`);
   }
-
+  function printHTML(title, body) {
+    const f=document.createElement('iframe'); f.style.cssText='position:fixed;right:0;bottom:0;width:0;height:0;border:0'; f.id='geams-print-frame';
+    document.getElementById('geams-print-frame')?.remove(); document.body.appendChild(f);
+    f.srcdoc='<!doctype html><meta charset="utf-8"><title>'+esc(title)+'</title><style>body{font:13px/1.5 Arial,sans-serif;margin:24px;color:#000}h1{font-size:18px;margin:0 0 4px}h2{font-size:14px;border-bottom:1px solid #000;margin:18px 0 6px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #888;padding:4px 6px;text-align:left;font-size:12px;vertical-align:top}.k{width:30%;font-weight:bold}</style>'+body;
+    f.onload=()=>{ try{ f.contentWindow.focus(); f.contentWindow.print(); }catch(e){ showToast('error','Print failed',String(e.message||e)); } };
+  }
+  function doPrintDocket(incId) {
+    const inc=StationData.incidents.find(i=>i.id===incId); if(!inc){ showToast('error','Not found','Incident not found'); return; }
+    const st=StationData.station, full=val('dk-type')!=='receipt', secs=[...document.querySelectorAll('.dk-sec:checked')].map(x=>+x.value);
+    const row=(k,v)=>`<tr><td class="k">${esc(k)}</td><td>${esc(v==null||v===''?'—':v)}</td></tr>`;
+    let b=`<h1>${esc(st.name)} — ${full?'Incident docket':'Complaint receipt'}</h1><div>Docket no. <b>${esc(inc.id)}</b> · printed ${esc(new Date().toLocaleString('en-GB'))} by ${esc(st.commanderName||'control room')}</div>`;
+    if(!full||secs.includes(0)) b+=`<h2>Incident details</h2><table>${row('Type',inc.type)}${row('Priority',inc.priority)}${row('Status',inc.status)}${row('Location',inc.location)}${row('Coordinates',inc.lat!=null?inc.lat.toFixed(5)+', '+inc.lng.toFixed(5):'')}${row('Reported by',inc.civilian)}${row('Phone',inc.civilianPhone)}${row('Officer',inc.officerAssigned)}${row('Resolution',inc.resolutionType)}</table>`;
+    if(full&&secs.includes(3)) b+=`<h2>Reporter statement</h2><p>${esc(inc.notes||'None recorded')}</p>`;
+    if(full&&secs.includes(1)) b+=`<h2>Station notes</h2>${(inc.stationNotes||[]).length?`<table>${inc.stationNotes.map(n=>`<tr><td>${esc(new Date(n.at).toLocaleString('en-GB'))}</td><td>${esc(n.type)}</td><td>${esc(n.text)}</td></tr>`).join('')}</table>`:'<p>None recorded</p>'}`;
+    if(full&&secs.includes(2)){ const lg=StationData.getActivityLog(inc.id); b+=`<h2>Dispatch log</h2>${lg.length?`<table>${lg.slice().reverse().map(e=>`<tr><td>${esc(e.date+' '+e.ts)}</td><td>${esc(e.action)}</td><td>${esc(e.detail)}</td><td>${esc(e.actor)}</td></tr>`).join('')}</table>`:'<p>None recorded</p>'}`; }
+    closeModal(); printHTML('Docket '+inc.id,b);
+  }
   function testConnection() {
-    openModal('🔌 Test Station Connection', `
-      <div style="background:var(--bg-deep);border:1px solid var(--border-base);border-radius:var(--r-md);padding:16px;margin-bottom:14px">
-        <div style="font-family:var(--font-mono);font-size:0.6rem;letter-spacing:1.5px;color:var(--text-muted);margin-bottom:12px">CONNECTION DIAGNOSTICS</div>
-        ${[
-          {label:'Station ID Auth',      status:'✅ Authenticated', color:'var(--green)'},
-          {label:'HQ Tunnel',            status:'✅ Connected · 18ms', color:'var(--green)'},
-          {label:'WebSocket Live Feed',  status:'✅ Active · 99.9%', color:'var(--green)'},
-          {label:'Civilian App Gateway', status:'✅ Reachable', color:'var(--green)'},
-          {label:'Biometric Service',    status:'✅ Online', color:'var(--green)'},
-          {label:'Evidence Storage',     status:'✅ S3 bucket accessible', color:'var(--green)'},
-          {label:'DVLA Integration',     status:'⚠️ Degraded · 420ms', color:'var(--orange)'},
-          {label:'Watchlist Sync',       status:'✅ Last sync: 14:09', color:'var(--green)'},
-        ].map(r=>`
-          <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border-dim);font-size:0.75rem">
-            <span style="color:var(--text-base)">${r.label}</span>
-            <span style="font-family:var(--font-mono);font-size:0.68rem;color:${r.color}">${r.status}</span>
-          </div>`).join('')}
-      </div>
-      <div style="font-family:var(--font-mono);font-size:0.65rem;color:var(--text-muted)">Station ID: <span style="color:var(--primary)">${StationData.station.id}</span></div>`,
+    openModal('🔌 Test Station Connection', `<div id="tc-body" style="font-size:0.78rem;color:var(--text-muted)">Running checks…</div>`,
       `<button class="btn btn-ghost btn-sm" onclick="StationApp.closeModal()">Close</button>
-       <button class="btn btn-primary btn-sm" onclick="StationApp.showToast('info','Ping','Pinging HQ...');setTimeout(()=>StationApp.showToast('success','HQ Ping','Response: 18ms — connection healthy'),1200)">🔄 Re-run Diagnostics</button>`);
+       <button class="btn btn-primary btn-sm" onclick="StationApp.testConnection()">🔄 Re-run</button>`);
+    runChecks();
   }
-
+  async function runChecks() {
+    const rows=[]; const add=(label,ok,detail,warn)=>rows.push({label,ok,detail,warn});
+    const base=GeamsSync.base||'';
+    add('Online (browser)',navigator.onLine,navigator.onLine?'Yes':'The device reports no network');
+    add('Sync mode',GeamsSync.mode==='server',String(GeamsSync.mode),GeamsSync.mode!=='server');
+    if(GeamsSync.mode==='server'){
+      try{ const t0=performance.now(); const r=await fetch(base+'/api/health',{cache:'no-store'}); const j=await r.json(); const ms=Math.round(performance.now()-t0);
+        add('GEAMS server',r.ok&&j.ok,r.ok?ms+' ms':'HTTP '+r.status,ms>1500); }catch(e){ add('GEAMS server',false,'Unreachable'); }
+      try{ const t0=performance.now(); const v=await GeamsSync.getShared('lcr:'+StationData.station.id+':incidents',{}); add('Station incident data (signed in)',v!=null,Object.keys(v||{}).length+' records · '+Math.round(performance.now()-t0)+' ms'); }catch(e){ add('Station incident data (signed in)',false,String(e.message||e)); }
+    }
+    try{ const cfg=(window.GEAMS_CONFIG&&GEAMS_CONFIG.tileUrl)||''; add('Map pictures',!!window.L,window.L?(cfg?'Configured server':'Default tile server'):'Map library not loaded',!window.L); }catch(e){}
+    add('Live devices connected',true,String(GeamsSync.devices==null?'unknown':GeamsSync.devices));
+    const el=document.getElementById('tc-body'); if(!el) return;
+    el.innerHTML=`<div style="background:var(--bg-deep);border:1px solid var(--border-base);border-radius:var(--r-md);padding:14px">`+rows.map(r=>`<div style="display:flex;justify-content:space-between;gap:12px;padding:5px 0;border-bottom:1px solid var(--border-dim);font-size:0.75rem"><span>${esc(r.label)}</span><span style="font-family:var(--font-mono);font-size:0.68rem;color:${r.ok?(r.warn?'var(--orange)':'var(--green)'):'var(--red)'}">${r.ok?(r.warn?'⚠️ ':'✅ '):'❌ '}${esc(r.detail)}</span></div>`).join('')+`</div><div style="font-family:var(--font-mono);font-size:0.65rem;color:var(--text-muted);margin-top:10px">Station ID: <span style="color:var(--primary)">${esc(StationData.station.id)}</span> · checked ${new Date().toLocaleTimeString('en-GB')}</div>`;
+  }
   function addIncidentNotes(incId) {
-    openModal('🗒 Add Incident Notes — ' + incId, `
+    openModal('🗒 Add Incident Notes', `
+      <div class="form-group"><label class="form-label">Incident</label>${incSelect('nt-inc',incId,true)}</div>
       <div class="form-group"><label class="form-label">Notes</label>
-        <textarea class="form-textarea" style="min-height:120px" placeholder="Add operational notes, observations, or updates visible to all officers on this case..."></textarea></div>
+        <textarea class="form-textarea" id="nt-text" style="min-height:110px" placeholder="Operational notes, observations, updates..."></textarea></div>
       <div class="form-group"><label class="form-label">Note Type</label>
-        <select class="form-select">
-          <option>Operational update</option><option>Witness observation</option>
-          <option>Scene description</option><option>Suspect information</option>
-          <option>Evidence note</option><option>Internal only</option>
-        </select></div>
+        <select class="form-select" id="nt-type"><option>Operational update</option><option>Witness observation</option><option>Scene description</option><option>Suspect information</option><option>Evidence note</option></select></div>
       <div class="form-group"><label class="form-label">Visibility</label>
-        <select class="form-select">
-          <option>All officers on case + HQ</option>
-          <option>Station only</option>
-          <option>Commander only</option>
-        </select></div>`,
+        <select class="form-select" id="nt-vis"><option value="shared">Shared — on the incident (officer on case and HQ can read it)</option><option value="station">This session only — not sent anywhere</option></select></div>`,
       `<button class="btn btn-ghost btn-sm" onclick="StationApp.closeModal()">Cancel</button>
-       <button class="btn btn-primary" onclick="StationApp.showToast('success','Notes Saved','Notes added to ${incId} and synced to HQ');StationApp.closeModal()">💾 Save Notes</button>`);
+       <button class="btn btn-primary" onclick="StationApp.saveNotes()">💾 Save Notes</button>`);
+  }
+  function saveNotes() {
+    const inc=needInc(val('nt-inc')); if(!inc) return;
+    const text=val('nt-text'); if(!text){ showToast('error','Empty note','Write something first'); return; }
+    const vis=val('nt-vis'), n={text,type:val('nt-type'),at:Date.now(),by:StationData.station.commanderName||'Control room'};
+    inc.stationNotes=(inc.stationNotes||[]).concat({...n,vis});
+    StationData.logActivity(inc.id,'NOTE',n.type+': '+text,n.by);
+    if(vis==='shared'){ shareInc(inc.id,{stationNotes:inc.stationNotes.filter(x=>x.vis==='shared').map(({vis:_v,...r})=>r)}); archiveNote(inc.id,'update','Station note: '+text.slice(0,160)); }
+    closeModal(); showToast('success','Note saved',vis==='shared'?'Added to the incident and visible to HQ':'Kept in this session only');
   }
 
-  function issueRoadblock(incId) {
-    openModal('🚧 Issue Roadblock Order', `
-      <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:16px;line-height:1.6">
-        Alert all officers and nearby stations to establish checkpoints on specific roads. GPS coordinates pushed to all units.
-      </div>
-      <div class="form-group"><label class="form-label">Road / Location</label>
-        <input class="form-input" placeholder="e.g. Ring Road Central near Danquah Circle"></div>
-      <div class="form-group"><label class="form-label">Linked Incident</label>
-        <select class="form-select">
-          ${StationData.incidents.filter(i=>StationData.canViewIncident(i)&&i.status!=='resolved').slice(0,6).map(i=>`
-            <option ${i.id===incId?'selected':''}>${i.id} — ${i.type}</option>`).join('')}
-        </select></div>
-      <div class="form-group"><label class="form-label">Roadblock Type</label>
-        <select class="form-select">
-          <option>Vehicle check — all vehicles</option>
-          <option>Target check — specific plate</option>
-          <option>Pedestrian stop — search</option>
-          <option>Total closure</option>
-        </select></div>
-      <div class="form-group"><label class="form-label">Officers to Deploy</label>
-        <select class="form-select" multiple style="height:72px">
-          ${StationData.officers.filter(o=>o.status==='available').map(o=>`<option>${o.name}</option>`).join('')}
-        </select></div>`,
-      `<button class="btn btn-ghost btn-sm" onclick="StationApp.closeModal()">Cancel</button>
-       <button class="btn btn-warning" onclick="StationApp.showToast('warning','Roadblock Active','All units notified — checkpoint coordinates broadcast');StationApp.closeModal()">🚧 Issue Order</button>`);
-  }
-
-  function assignPlainclothes(incId) {
-    openModal('🕵️ Assign Plainclothes Officer', `
-      <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:16px;line-height:1.6">
-        Deploy an unmarked officer for surveillance. Their GPS is hidden from the standard map but visible to you only.
-      </div>
-      <div class="form-group"><label class="form-label">Select Officer</label>
-        <select class="form-select">
-          ${StationData.officers.filter(o=>o.status==='available').map(o=>`<option>${o.name} · ${o.badge}</option>`).join('')}
-        </select></div>
-      <div class="form-group"><label class="form-label">Assignment</label>
-        <input class="form-input" placeholder="Describe the surveillance objective..."></div>
-      <div class="form-group"><label class="form-label">Target Location</label>
-        <input class="form-input" placeholder="e.g. Osu Food Court vicinity"></div>
-      <div class="form-group"><label class="form-label">Duration</label>
-        <select class="form-select">
-          <option>2 hours</option><option>4 hours</option><option>8 hours</option><option>Until recalled</option>
-        </select></div>
-      <div style="background:var(--orange-dim);border:1px solid var(--orange-border);border-radius:var(--r-sm);padding:8px 12px;font-size:0.72rem;color:var(--orange)">
-        ⚠️ Officer's GPS hidden from standard map. Accessible only via Commander view.
-      </div>`,
-      `<button class="btn btn-ghost btn-sm" onclick="StationApp.closeModal()">Cancel</button>
-       <button class="btn btn-primary" onclick="StationApp.showToast('success','Plainclothes Deployed','Officer briefed — GPS masked on standard map');StationApp.closeModal()">🕵️ Deploy Officer</button>`);
-  }
 
   function generateStationReport() {
     openModal('📊 Generate Station Report', `
       <div class="form-group"><label class="form-label">Report Type</label>
-        <select class="form-select">
-          <option>Daily incident summary</option>
-          <option>Weekly performance report</option>
-          <option>Officer activity log</option>
-          <option>Evidence chain of custody</option>
-          <option>Court-ready incident docket</option>
-          <option>Shift handover report</option>
-        </select></div>
-      <div class="form-group"><label class="form-label">Period</label>
-        <select class="form-select">
-          <option>Today</option><option>Last 7 days</option>
-          <option>Last 30 days</option><option>Custom range</option>
-        </select></div>
-      <div class="form-group"><label class="form-label">Format</label>
-        <select class="form-select">
-          <option>PDF — standard</option>
-          <option>PDF — digitally signed (court-ready)</option>
-          <option>CSV — data export</option>
-          <option>Print-ready docket</option>
-        </select></div>`,
+        <select class="form-select" id="rp-type"><option value="summary">Incident summary</option><option value="activity">Dispatch activity log</option><option value="handover">Shift handover (open incidents and officers)</option></select></div>
+      <div class="form-group"><label class="form-label">Period (summary and activity)</label>
+        <select class="form-select" id="rp-days"><option value="1">Today</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="0">Everything on file</option></select></div>
+      <div class="form-group"><label class="form-label">Output</label>
+        <select class="form-select" id="rp-fmt"><option value="print">Print / save as PDF</option><option value="csv">CSV download</option></select></div>
+      <div style="font-size:0.7rem;color:var(--text-muted)">Built from this station's shared incident record. It is not digitally signed.</div>`,
       `<button class="btn btn-ghost btn-sm" onclick="StationApp.closeModal()">Cancel</button>
-       <button class="btn btn-primary" onclick="StationApp.showToast('success','Report Generated','Report ready — downloading...');StationApp.closeModal()">📊 Generate Report</button>`);
+       <button class="btn btn-primary" onclick="StationApp.runReport()">📊 Generate</button>`);
   }
-
-  /* ── BOOT ── */
+  function csvCell(v){ v=v==null?'':String(v); if(/^[=+\-@\t\r]/.test(v)) v="'"+v; return /[",\n\r]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; }
+  function downloadText(name, text, mime){ const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([text],{type:mime||'text/csv'})); a.download=name; document.body.appendChild(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},500); }
+  async function runReport() {
+    const type=val('rp-type'), days=+val('rp-days'), fmt=val('rp-fmt'), st=StationData.station;
+    const map=await GeamsSync.getShared('lcr:'+st.id+':incidents',{})||{};
+    const since=days?Date.now()-days*86400000:0;
+    const t=r=>(r.createdAt||(r.srv&&r.srv.received)||0);
+    let head,rows,title;
+    if(type==='summary'){
+      title='Incident summary'; head=['ID','Type','Priority','Status','Location','Reporter','Officer','Received','Resolved'];
+      rows=Object.values(map).filter(r=>!since||t(r)>=since).sort((a,b)=>t(b)-t(a)).map(r=>[r.id,r.type,r.priority,r.status,r.location,r.civilianName,r.officerName,t(r)?new Date(t(r)).toLocaleString('en-GB'):'',r.srv&&r.srv.resolved?new Date(r.srv.resolved).toLocaleString('en-GB'):'']);
+    } else if(type==='activity'){
+      title='Dispatch activity log'; head=['Date','Time','Incident','Action','Detail','Actor'];
+      rows=[]; Object.keys(StationData.incidents.reduce((o,i)=>(o[i.id]=1,o),{})).forEach(id=>StationData.getActivityLog(id).forEach(e=>rows.push([e.date,e.ts,id,e.action,e.detail,e.actor])));
+    } else {
+      title='Shift handover'; head=['Kind','Name / ID','Status','Detail'];
+      rows=StationData.incidents.filter(i=>i.status!=='resolved').map(i=>['Incident',i.id,i.status,i.type+' · '+i.location+(i.officerAssigned?' · '+i.officerAssigned:'')])
+        .concat(StationData.officers.map(o=>['Officer',o.name+' ('+o.badge+')',o.status,o.currentIncident||'']));
+    }
+    if(!rows.length){ showToast('warning','Nothing to report','No records match that period'); return; }
+    closeModal();
+    if(fmt==='csv'){ downloadText('geams-'+type+'-'+new Date().toISOString().slice(0,10)+'.csv',[head].concat(rows).map(r=>r.map(csvCell).join(',')).join('\r\n')); showToast('success','Report downloaded',rows.length+' rows'); }
+    else printHTML(title,`<h1>${esc(st.name)} — ${esc(title)}</h1><div>${esc(new Date().toLocaleString('en-GB'))} · ${rows.length} rows</div><table style="margin-top:12px"><tr>${head.map(h=>'<th>'+esc(h)+'</th>').join('')}</tr>${rows.map(r=>'<tr>'+r.map(c=>'<td>'+esc(c)+'</td>').join('')+'</tr>').join('')}</table>`);
+  }
   function boot() {
     applyIdentityToChrome();
     startClock();
@@ -4382,6 +4427,8 @@ const StationApp = (() => {
     // No demo incidents, no fake alert toasts — the incident list starts
     // empty and stays that way until a real report arrives.
     bindLive();
+    StationLock.banner();
+    try { GeamsSync.watch('hq:lockdown', null, (v) => { let b=document.getElementById('sys-lockdown-banner'); if(v&&v.on){ if(!b){ b=document.createElement('div'); b.id='sys-lockdown-banner'; b.style.cssText='position:fixed;top:0;left:0;right:0;z-index:9100;background:#7a0000;color:#fff;text-align:center;font:700 12px var(--font-mono,monospace);padding:4px 8px'; document.body.appendChild(b);} b.textContent='🔒 HQ SYSTEM LOCKDOWN — changes are paused until HQ lifts it'; } else if(b) b.remove(); }, 3000); } catch(e) {}
     CrewApprovals.start();
     updateKPIs();
     setTimeout(() => showToast('success','Station Online',`${StationData.station.id} connected to HQ · All systems nominal`, 5000), 500);
@@ -4428,7 +4475,7 @@ const StationApp = (() => {
                      stationLockdown, confirmLockdown, logIntelligence,
                      registerComplainant, printDocket, findAndPrintDocket,
                      renderDocketSearchResults, testConnection,
-                     issueRoadblock, assignPlainclothes, generateStationReport,
+                     generateStationReport, esc, confirmReassign, confirmBackupRequest, confirmScenePhoto, confirmFlag, confirmMerge, saveNotes, submitIntel, submitWalkIn, doPrintDocket, runReport, liftLockdown, printHTML, downloadText, callOfficer, exportAuditLog, downloadStationData,
     boot, confirmLogout
   };
 })();
@@ -4519,7 +4566,7 @@ const StationPlaceSearch = (() => {
 
     const s = StationData.station;
     const bbox = restrictToJurisdiction ? jurisdictionBBox(1.3) : GHANA_BBOX;
-    const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(text)}&limit=8&lang=en&lat=${s.lat}&lon=${s.lng}&bbox=${bbox}`;
+    const url = `${((window.GEAMS_CONFIG||{}).geocodeUrl||'https://photon.komoot.io')}/api/?q=${encodeURIComponent(text)}&limit=8&lang=en&lat=${s.lat}&lon=${s.lng}&bbox=${bbox}`;
 
     const res = await fetch(url, { signal: abortCtrl.signal });
     if (!res.ok) throw new Error('Place search request failed (' + res.status + ')');
@@ -4732,7 +4779,7 @@ const StationPlaceSearch = (() => {
       (kind === 'fire_station' ? 'fire station' : 'hospital');
     const s = StationData.station;
     const bbox = restrictToJurisdiction ? jurisdictionBBox(1.3) : GHANA_BBOX;
-    const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(qText)}&limit=12&lang=en&lat=${s.lat}&lon=${s.lng}&bbox=${bbox}&osm_tag=${encodeURIComponent(tag)}`;
+    const url = `${((window.GEAMS_CONFIG||{}).geocodeUrl||'https://photon.komoot.io')}/api/?q=${encodeURIComponent(qText)}&limit=12&lang=en&lat=${s.lat}&lon=${s.lng}&bbox=${bbox}&osm_tag=${encodeURIComponent(tag)}`;
     const res = await fetch(url);
     if (!res.ok) throw new Error('Facility search failed (' + res.status + ')');
     const data = await res.json();
@@ -4797,7 +4844,7 @@ const StationPlaceSearch = (() => {
 
 const StationRouting = (() => {
   async function route(fromLat, fromLng, toLat, toLng, alternatives) {
-    const url = `https://router.project-osrm.org/route/v1/driving/` +
+    const url = `${((window.GEAMS_CONFIG||{}).routeUrl||'https://router.project-osrm.org')}/route/v1/driving/` +
       `${fromLng},${fromLat};${toLng},${toLat}` +
       `?overview=full&geometries=geojson&alternatives=${alternatives ? 'true' : 'false'}`;
     const res = await fetch(url);
@@ -5492,7 +5539,7 @@ const StationDashboard = (() => {
           </div>
         </div>
         <div class="officer-actions">
-          <button class="btn btn-ghost btn-sm btn-icon" title="Call" onclick="event.stopPropagation();StationApp.showToast('info','Comms','Opening channel to ${o.name}')">💬</button>
+          <button class="btn btn-ghost btn-sm btn-icon" title="Call officer" onclick="event.stopPropagation();StationApp.callOfficer('${o.id}')">📞</button>
           <button class="btn btn-ghost btn-sm btn-icon" title="Track" onclick="event.stopPropagation();StationMap.panToOfficer('${o.id}')">📍</button>
         </div>
       </div>`).join('');
@@ -6445,6 +6492,10 @@ const DispatchTracker = (() => {
     StationApp.showToast('success','Pinned','Annotation added to map');
   }
 
+  function exportActivityLog(incId) {
+    const log=StationData.getActivityLog(incId); if(!log.length){ StationApp.showToast('warning','Nothing to export','No activity yet'); return; }
+    StationApp.downloadText('activity-'+incId+'.csv',[['Date','Time','Action','Detail','Actor','GPS']].concat(log.map(e=>[e.date,e.ts,e.action,e.detail,e.actor,e.gps])).map(r=>r.map(c=>{c=c==null?'':String(c);if(/^[=+\-@\t\r]/.test(c))c="'"+c;return /[",\n\r]/.test(c)?'"'+c.replace(/"/g,'""')+'"':c;}).join(',')).join('\r\n'));
+  }
   function openActivityLog() {
     showActivityLog(fsIncId);
   }
@@ -6472,14 +6523,14 @@ const DispatchTracker = (() => {
         </table>
        </div>`,
       `<button class="btn btn-ghost btn-sm" onclick="StationApp.closeModal()">Close</button>
-       <button class="btn btn-primary btn-sm" onclick="StationApp.showToast('success','Exported','Activity log exported — PDF generated')">📤 Export Report</button>`);
+       <button class="btn btn-primary btn-sm" onclick="StationApp.exportActivityLog('${incId}')">📤 Download CSV</button>`);
   }
 
   return {
     startTracking, openTrackingModal, getUnit, getAllUnits,
     getTrackedCount, etaMin, etaLabel, spdLabel, distLeftKm, mirrorLivePosition,
     resolveUnit, openFullscreen, closeFullscreen,
-    openAnnotateFS, submitAnnotateFS, openActivityLog, showActivityLog,
+    openAnnotateFS, submitAnnotateFS, openActivityLog, showActivityLog, exportActivityLog,
   };
 })();
 
@@ -6803,7 +6854,6 @@ const StationDispatch = (() => {
         <div class="panel-header">
           <span>👮</span><span class="panel-title">Officer Availability</span>
           <button class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="StationApp.navigate('backup')">🤝 Backup Requests</button>
-          <button class="btn btn-primary btn-sm" onclick="StationApp.assignPlainclothes(null)">🕵️ Plainclothes</button>
         </div>
         <div class="panel-body no-pad">
           <table class="data-table">
@@ -6815,14 +6865,13 @@ const StationDispatch = (() => {
                     <div class="status-dot ${o.status}"></div>
                     <span style="font-size:0.7rem;font-family:var(--font-mono)">${o.status.toUpperCase()}</span>
                   </div></td>
-                  <td style="font-weight:600">${o.name}${o.liveSync ? ' <span style="font-size:0.58rem;color:var(--green);font-weight:700">\u25cf LIVE</span>' : ''}</td>
+                  <td style="font-weight:600">${o.name}${o.liveSync ? ' <span style="font-size:0.58rem;color:var(--green);font-weight:700">\u25cf LIVE</span>' : ''}${(o.equipment&&o.equipment.items&&o.equipment.items.some(x=>!x.ok))||(o.equipment&&o.equipment.issues)?` <span title="${StationApp.esc(((o.equipment.items||[]).filter(x=>!x.ok).map(x=>x.name||x.label||x.id).join(', '))+(o.equipment.issues?' — '+o.equipment.issues:''))}" style="font-size:0.6rem;color:var(--orange);font-weight:700">⚠ EQUIPMENT</span>`:''}</td>
                   <td class="td-mono td-muted">${o.badge}</td>
                   <td class="td-muted">${o.vehicle}</td>
                   <td style="font-size:0.72rem;color:${o.currentIncident?'var(--orange)':'var(--text-muted)'}">${o.currentIncident||'—'}</td>
                   <td><div style="display:flex;gap:3px">
                     <button class="btn btn-ghost btn-sm" onclick="StationMap.panToOfficer('${o.id}')">📍</button>
-                    <button class="btn btn-ghost btn-sm" onclick="StationApp.showToast('info','Comms','Opening channel to ${o.name}')">💬</button>
-                    <button class="btn btn-warning btn-sm" onclick="StationApp.showToast('warning','Reassigned','${o.name} reassigned')">🔄</button>
+                    <button class="btn btn-ghost btn-sm" title="Call officer" onclick="StationApp.callOfficer('${o.id}')">📞</button>
                   </div></td>
                 </tr>`).join('')}
             </tbody>
@@ -7214,7 +7263,6 @@ const StationOfficers = (() => {
         <div class="section-title">Officer Management</div>
         <div class="section-line"></div>
         <div style="display:flex;gap:8px">
-          <button class="btn btn-primary btn-sm" onclick="StationApp.assignPlainclothes(null)">🕵️ Plainclothes</button>
           <button class="btn btn-warning btn-sm" onclick="StationApp.navigate('backup')">🤝 Backup Requests</button>
           <button class="btn btn-ghost btn-sm" onclick="StationApp.shiftHandover()">🔄 Shift Handover</button>
         </div>
@@ -7238,15 +7286,14 @@ const StationOfficers = (() => {
                     <div class="status-dot ${o.status}"></div>
                     <span style="font-size:0.65rem;font-family:var(--font-mono)">${o.status.toUpperCase()}</span>
                   </div></td>
-                  <td style="font-weight:600">${o.name}${o.liveSync ? ' <span style="font-size:0.58rem;color:var(--green);font-weight:700">\u25cf LIVE</span>' : ''}</td>
+                  <td style="font-weight:600">${o.name}${o.liveSync ? ' <span style="font-size:0.58rem;color:var(--green);font-weight:700">\u25cf LIVE</span>' : ''}${(o.equipment&&o.equipment.items&&o.equipment.items.some(x=>!x.ok))||(o.equipment&&o.equipment.issues)?` <span title="${StationApp.esc(((o.equipment.items||[]).filter(x=>!x.ok).map(x=>x.name||x.label||x.id).join(', '))+(o.equipment.issues?' — '+o.equipment.issues:''))}" style="font-size:0.6rem;color:var(--orange);font-weight:700">⚠ EQUIPMENT</span>`:''}</td>
                   <td class="td-mono" style="color:var(--primary)">${o.badge}</td>
                   <td class="td-muted">${o.rank}</td>
                   <td class="td-muted">${o.vehicle}</td>
                   <td style="color:${o.currentIncident?'var(--orange)':'var(--text-muted)'};font-size:0.72rem">${o.currentIncident||'—'}</td>
                   <td><div style="display:flex;gap:3px">
                     <button class="btn btn-ghost btn-sm" onclick="StationMap.panToOfficer('${o.id}')">📍 Track</button>
-                    <button class="btn btn-ghost btn-sm" onclick="StationApp.showToast('info','Comms','Opening channel to ${o.name}')">💬</button>
-                    <button class="btn btn-warning btn-sm" onclick="StationApp.showToast('warning','Reassigned','${o.name} reassigned')">🔄</button>
+                    <button class="btn btn-ghost btn-sm" title="Call officer" onclick="StationApp.callOfficer('${o.id}')">📞</button>
                   </div></td>
                 </tr>`).join('')}
             </tbody>
@@ -8408,7 +8455,6 @@ const StationSettings = (() => {
             </div>
             <div style="display:flex;flex-direction:column;gap:8px">
               <button class="btn btn-primary w-full" onclick="StationApp.testConnection()">🔌 Test HQ Connection</button>
-              <button class="btn btn-ghost w-full" onclick="StationApp.showToast('info','Profile','Station profile update form opened')">✏️ Update Station Profile</button>
               <button class="btn btn-ghost w-full" onclick="StationApp.shiftHandover()">🔄 Shift Handover</button>
             </div>
           </div>
@@ -8440,6 +8486,14 @@ const StationSettings = (() => {
               </div>
             </div>
           </div>
+          ${StationAuth.getCommander() ? `<div class="panel">
+            <div class="panel-header"><span>👤</span><span class="panel-title">My Commander Account</span></div>
+            <div class="panel-body">
+              <div style="font-size:0.74rem;color:var(--text-muted);margin-bottom:8px">Signed in as <strong style="color:var(--text-bright)">${StationAuth.getCommander().name}</strong> · ${StationAuth.getCommander().rank} · ${StationAuth.getCommander().user}</div>
+              <input class="form-input" type="password" id="cpw-cur" placeholder="Current password" autocomplete="current-password" style="margin-bottom:6px">
+              <input class="form-input" type="password" id="cpw-new" placeholder="New password (10+ characters)" autocomplete="new-password" style="margin-bottom:6px">
+              <button class="btn btn-primary btn-sm" onclick="StationSettings.changeMyPassword()">Change password</button> <span id="cpw-msg" style="font-size:0.72rem;color:var(--text-muted)"></span>
+            </div></div>` : ''}
           <div class="panel">
             <div class="panel-header"><span>⚙️</span><span class="panel-title">System Actions</span></div>
             <div class="panel-body">
@@ -8457,9 +8511,8 @@ const StationSettings = (() => {
             <div class="panel-header"><span>🔐</span><span class="panel-title">Security</span></div>
             <div class="panel-body">
               <div style="display:flex;flex-direction:column;gap:8px">
-                <button class="btn btn-ghost w-full btn-sm" onclick="StationApp.showToast('info','Token','Auth token refreshed — valid 30 days')">🔄 Refresh Auth Token</button>
-                <button class="btn btn-ghost w-full btn-sm" onclick="StationApp.showToast('info','Audit','Audit log exported')">📋 Export Audit Log</button>
-                <button class="btn btn-ghost w-full btn-sm" onclick="StationApp.showToast('info','Backup','Station data backed up to HQ')">💾 Backup to HQ</button>
+                <button class="btn btn-ghost w-full btn-sm" onclick="StationApp.exportAuditLog()">📋 Export Audit Log (CSV)</button>
+                <button class="btn btn-ghost w-full btn-sm" onclick="StationApp.downloadStationData()">💾 Download station data (JSON)</button>
                 <button class="btn btn-danger w-full btn-sm" onclick="StationApp.confirmLogout()">🚪 Log Out</button>
               </div>
               <div style="margin-top:12px;font-family:var(--font-mono);font-size:0.62rem;color:var(--text-muted)">
@@ -8603,10 +8656,18 @@ const StationSettings = (() => {
     await confirmVerifiedLocation(lat, lng, 'map-pin');
   }
 
+  async function changeMyPassword() {
+    const msg = document.getElementById('cpw-msg'); msg.textContent = 'Saving…';
+    try {
+      const r = await fetch((GeamsSync.base || '') + '/api/lcr/commander/password', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (GeamsSync.token || '') }, body: JSON.stringify({ current: document.getElementById('cpw-cur').value, password: document.getElementById('cpw-new').value }) });
+      const j = await r.json().catch(() => ({})); if (!r.ok) { msg.style.color = 'var(--red)'; msg.textContent = j.error || 'Not changed'; return; }
+      GeamsSync.setToken(j.token); document.getElementById('cpw-cur').value = ''; document.getElementById('cpw-new').value = ''; msg.style.color = 'var(--green)'; msg.textContent = '✓ Password changed';
+    } catch (e) { msg.textContent = 'Could not reach the server'; }
+  }
   return {
     render, verifyFromDeviceGPS, confirmVerifiedLocation,
     openLocationCorrectionMap, useMyLocationInCorrectionMap,
-    closeLocationCorrectionMap, saveLocationCorrectionMap,
+    closeLocationCorrectionMap, saveLocationCorrectionMap, changeMyPassword,
   };
 })();
 document.addEventListener('DOMContentLoaded', () => { StationAuth.initLoginScreen(); });

@@ -5,15 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>GEAMS HQ — National Command Dashboard v3.1</title>
 <!-- Leaflet satellite map -->
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+<script src="config.js"></script>
+<script src="vendor/leaflet/leaflet.js"></script>
+<script src="vendor/geams-map.js"></script>
 <style>
 /* ============================================================
    GEAMS HQ — base.css
    Variables · Reset · Typography
    ============================================================ */
 
-@import url('https://fonts.googleapis.com/css2?family=Exo+2:wght@200;300;400;500;600;700;800;900&family=Share+Tech+Mono&display=swap');
+@import url('vendor/fonts/fonts.css');
 
 /* ── DESIGN TOKENS ── */
 :root {
@@ -1937,7 +1939,7 @@ const HqAuth = (() => {
     startFn = start;
     await GeamsSync.ready;
     if (GeamsSync.mode !== 'server') { const b = document.getElementById('hq-nobackend'); if (b) b.style.display = 'block'; started = true; start(); return; }
-    if (token()) { const r = await api('/api/hq/me').catch(() => null); if (r && r.ok) { me = r.j; applyMe(); hide(); begin(); return; } setToken(''); }
+    if (token()) { const r = await api('/api/hq/me').catch(() => null); if (r && r.ok) { me = r.j; applyMe(); hide(); begin(); setTimeout(storageWarn, 4000); return; } setToken(''); }
     show();
   }
   function begin() { if (!started && startFn) { started = true; startFn(); } }
@@ -1948,7 +1950,7 @@ const HqAuth = (() => {
       const r = await api('/api/hq/login', { method: 'POST', body: JSON.stringify({ username: document.getElementById('hq-user').value, password: document.getElementById('hq-pass').value }) });
       if (!r.ok) { showErr(r.j.error || 'Sign-in failed'); return; }
       setToken(r.j.token); me = { user: r.j.user, role: r.j.role }; document.getElementById('hq-pass').value = '';
-      applyMe(); hide(); begin();
+      applyMe(); hide(); begin(); setTimeout(storageWarn, 4000);
     } catch (e) { showErr('Cannot reach the GEAMS server'); }
     finally { btn.disabled = false; btn.textContent = 'Sign in'; }
   }
@@ -1958,10 +1960,11 @@ const HqAuth = (() => {
     if (GeamsSync.mode !== 'server') { GeamsApp.showToast('info','No sign-in','HQ is running without a backend'); return; }
     GeamsApp.openModal('👤 ' + (me ? me.user : 'Account'), `
       <div style="font-size:.82rem;color:var(--text-muted);line-height:1.6">Signed in as <strong style="color:var(--text-white)">${me ? me.user : ''}</strong> (${me && me.role === 'admin' ? 'HQ owner' : 'HQ operator'}). Everything you issue from HQ is recorded under this name.</div>
-      <div id="hq-ops-area" style="margin-top:14px"></div>`,
+      <div id="hq-ops-area" style="margin-top:14px"></div><div id="hq-store-area" style="margin-top:14px"></div>`,
       `<button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal()">Close</button>
        <button class="btn btn-danger btn-sm" onclick="HqAuth.signOut()">⎋ Sign out</button>`);
     if (me && me.role === 'admin') loadOperators();
+    loadStorage();
   }
   async function loadOperators() {
     const area = document.getElementById('hq-ops-area'); if (!area) return;
@@ -1973,7 +1976,47 @@ const HqAuth = (() => {
         <input class="form-input" id="op-name" placeholder="username" autocapitalize="none">
         <input class="form-input" id="op-pass" type="password" placeholder="password (10+ chars)">
         <button class="btn btn-primary btn-sm" onclick="HqAuth.addOperator()">Add</button></div>
-      <div style="font-size:.66rem;color:var(--text-muted);margin-top:6px;line-height:1.5">Adding an existing username sets a new password. Operator accounts are kept in a file on the server's disk: use a persistent disk or they are lost on redeploy (the owner account always survives).</div>`;
+      <div style="font-size:.66rem;color:var(--text-muted);margin-top:6px;line-height:1.5">Adding an existing username sets a new password. Operator accounts are saved with the rest of GEAMS data (see Storage and backups below).</div>`;
+  }
+  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const ago = (iso) => { if (!iso) return 'never'; const m = Math.round((Date.now() - Date.parse(iso)) / 60000); return m < 1 ? 'just now' : m < 90 ? m + ' min ago' : m < 2880 ? Math.round(m / 60) + ' h ago' : Math.round(m / 1440) + ' days ago'; };
+  const kb = (n) => n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+  async function loadStorage() {
+    const area = document.getElementById('hq-store-area'); if (!area) return;
+    const r = await api('/api/storage/status'); if (!r.ok) { area.textContent = ''; return; } const s = r.j, owner = me && me.role === 'admin', b = s.backups;
+    const bad = (t) => '<div style="color:var(--red);margin-top:4px">' + t + '</div>';
+    let h = '<div style="font-family:var(--font-mono);font-size:.6rem;letter-spacing:1.5px;color:var(--text-muted);margin-bottom:6px">STORAGE AND BACKUPS</div><div style="font-size:.74rem;line-height:1.55;padding:8px 10px;background:var(--bg-deep);border-radius:var(--r-sm)">';
+    h += s.databaseConfigured ? 'Database: <b>' + esc(s.kind) + '</b> · ' + (s.databaseOk ? '<span style="color:var(--green)">connected</span>' : '<span style="color:var(--red)">NOT reachable</span>') + ' · ' + s.records + ' records · ' + (s.pending ? s.pending + ' waiting to be saved' : 'everything saved') + (s.lastDatabaseWrite ? ' · last save ' + ago(s.lastDatabaseWrite) : '') : 'Database: <b>none</b>';
+    if (s.note) h += bad(esc(s.note));
+    if (s.lastError) h += bad('Last database error: ' + esc(s.lastError));
+    h += '<div style="margin-top:6px">Backups: ' + (b.everyHours ? 'automatic every ' + b.everyHours + ' h, keeping ' + b.keep : 'automatic backups are off') + ' · ' + (b.encrypted ? 'encrypted' : 'not encrypted (signing keys are left out)') + ' · ' + (b.offsite ? 'copied off the server' : 'kept on this server only') + '</div>';
+    h += '<div>Latest: ' + (b.last ? esc(b.last.name) + ' (' + kb(b.last.size) + ', ' + ago(b.last.createdAt) + ')' : 'none yet') + '</div>';
+    if (b.overdue) h += bad('The latest backup is overdue.'); if (b.lastRun && b.lastRun.ok === false) h += bad('The last backup failed: ' + esc(b.lastRun.error));
+    if (!b.offsite) h += '<div style="color:var(--text-muted);margin-top:4px">Backups on the same disk are lost if the disk is lost. Download one regularly, or set an off-server copy.</div>';
+    h += '</div>';
+    if (owner) {
+      const l = await api('/api/backup/list'), items = (l.ok ? l.j.backups : []).slice(0, 6);
+      h += '<div style="margin-top:6px">' + items.map(x => '<div style="display:flex;justify-content:space-between;align-items:center;font-size:.72rem;padding:5px 10px;background:var(--bg-deep);border-radius:var(--r-sm);margin-bottom:4px"><span>' + esc(x.name.replace('geams-backup-', '')) + ' · ' + kb(x.size) + '</span><button class="btn btn-ghost btn-sm" onclick="HqAuth.downloadBackup(\'' + esc(x.name) + '\')">⬇</button></div>').join('') + '</div>' +
+        '<div style="margin-top:6px"><button class="btn btn-primary btn-sm" id="bk-run" onclick="HqAuth.runBackup()">Back up now</button> <span id="bk-msg" style="font-size:.7rem;color:var(--text-muted)"></span></div>' +
+        '<div style="font-size:.66rem;color:var(--text-muted);margin-top:6px;line-height:1.5">To restore, stop the server and run <code>node geams-persist.js restore &lt;file&gt;</code>. Restoring is done at the server on purpose, so no one can do it by accident from a browser.</div>';
+    }
+    area.innerHTML = h;
+  }
+  async function runBackup() {
+    const btn = document.getElementById('bk-run'), msg = document.getElementById('bk-msg'); btn.disabled = true; msg.textContent = 'Backing up…';
+    const r = await api('/api/backup/run', { method: 'POST' }); btn.disabled = false;
+    if (r.ok) { GeamsApp.showToast('success', 'Backup written', r.j.backup.name); loadStorage(); } else { msg.textContent = ''; GeamsApp.showToast('error', 'Backup failed', r.j.error || ''); }
+  }
+  async function downloadBackup(name) {
+    const r = await fetch(GeamsSync.base + '/api/backup/download?name=' + encodeURIComponent(name), { headers: { Authorization: 'Bearer ' + token() } });
+    if (!r.ok) { GeamsApp.showToast('error', 'Download failed', ''); return; }
+    const blob = await r.blob(), a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+  }
+  async function storageWarn() {
+    if (!me || me.role !== 'admin') return; const r = await api('/api/storage/status'); if (!r.ok) return; const s = r.j;
+    if (s.databaseConfigured && s.databaseOk === false) GeamsApp.showToast('error', 'Database not reachable', 'New data is held on the server and will be saved when the database returns', 12000);
+    else if (!s.databaseConfigured) GeamsApp.showToast('warn', 'No database configured', 'Data lives on this server\'s disk only. Open your account menu for details.', 9000);
+    else if (s.backups.overdue) GeamsApp.showToast('warn', 'Backup overdue', 'The latest backup is older than expected', 9000);
   }
   async function addOperator() {
     const r = await api('/api/hq/users', { method: 'POST', body: JSON.stringify({ username: document.getElementById('op-name').value, password: document.getElementById('op-pass').value }) });
@@ -1985,7 +2028,7 @@ const HqAuth = (() => {
     await api('/api/hq/users', { method: 'POST', body: JSON.stringify({ username: name, remove: true }) }); loadOperators();
   }
   document.addEventListener('visibilitychange', () => {});
-  return { gate, submit, sessionExpired, signOut, openMenu, addOperator, removeOperator, api, user: () => (me ? me.user : 'HQ'), token };
+  return { gate, submit, sessionExpired, signOut, openMenu, addOperator, removeOperator, runBackup, downloadBackup, storageWarn, api, user: () => (me ? me.user : 'HQ'), token };
 })();
 GeamsSync.onAuthLost(() => { try { HqAuth.sessionExpired(); } catch (e) {} });
 
@@ -2607,7 +2650,7 @@ const GeamsData = (() => {
       GeamsSync.watch('lcr:' + st.id + ':incidents', {}, (map) => {
         let open = 0;
         Object.values(map).forEach(rec => {
-          if (rec.source !== 'civilian-app' && rec.source !== 'sms') return;   // 'sms' = a text message the server turned into an incident; handled like an app alert
+          if (rec.source !== 'civilian-app' && rec.source !== 'sms' && rec.source !== 'walk-in') return;   // 'sms' = a text message the server turned into an incident; 'walk-in' = registered at the station desk
           const closed = rec.status === 'resolved' || rec.status === 'cancelled';
           if (!closed) open++;
           let inc = incidents.find(i => i.id === rec.id);
@@ -2622,11 +2665,14 @@ const GeamsData = (() => {
               officerBadge: rec.officerBadge || null, liveSync: true,
               lat: rec.lat, lng: rec.lng,
             };
+            Object.assign(inc, { backupRequest: rec.backupRequest, hqEscalated: rec.hqEscalated, flagged: rec.flagged, stationNotes: rec.stationNotes, hqNotes: rec.hqNotes });
             incidents.unshift(inc);
             logAudit(st.id, '<strong>Incident ' + rec.id + '</strong> received — ' + rec.type + ', ' + st.name);
             emit('new_incident', inc);
           } else {
             const wasResolved = inc.status === 'resolved';
+            Object.assign(inc, { backupRequest: rec.backupRequest, hqEscalated: rec.hqEscalated, flagged: rec.flagged, stationNotes: rec.stationNotes, hqNotes: rec.hqNotes });
+            inc.priority = rec.priority || inc.priority;
             inc.officerAssigned = !!rec.officerName;
             inc.officerName = rec.officerName || null;
             if (closed && !wasResolved) {
@@ -3009,13 +3055,11 @@ const GeamsApp = (() => {
       <div class="section-header"><div class="section-title">Station Actions</div><div class="section-line"></div></div>
       <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">
         <button class="btn btn-cyan btn-sm" onclick="GeamsApp.closeModal();(function(){var inc=GeamsData.incidents.find(i=>i.station==='${s.id}'&&i.status!=='resolved');if(inc)GeamsLiveView.open(inc.id);else GeamsApp.showToast('info','Live View','No active incidents for this station')})()">📡 Live View</button>
-        <button class="btn btn-warning btn-sm" onclick="GeamsApp.showToast('warning','Override','Dispatch override sent to ${s.name}');GeamsApp.closeModal()">⚡ Override Dispatch</button>
         <button class="btn btn-primary btn-sm" onclick="GeamsBroadcast.openQuickBroadcast('${s.id}');GeamsApp.closeModal()">📢 Send Alert</button>
-        <button class="btn btn-ghost btn-sm" onclick="GeamsApp.showToast('info','Reports','Generating report for ${s.name}');GeamsApp.closeModal()">📊 View Reports</button>
+        <button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal();GeamsApp.navigate('analytics')">📊 Response Reports</button>
         <button class="btn btn-warning btn-sm" onclick="GeamsApp.closeModal();GeamsApp.cordonZone('${s.id}')">🔴 Cordon Zone</button>
         <button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal();GeamsApp.mobiliseReserves('${s.id}')">📣 Mobilise Reserves</button>
-        ${s.status === 'offline' ? `<button class="btn btn-danger btn-sm" onclick="GeamsApp.showToast('error','Offline','${s.name} is offline — contact station admin');GeamsApp.closeModal()">⚠️ Station Offline</button>` : ''}
-        <button class="btn btn-danger btn-sm" onclick="if(confirm('Revoke Station ID for ${s.name}?')){GeamsApp.showToast('error','Security','Station ID revoked for ${s.id}');GeamsApp.closeModal()}">🔒 Revoke ID</button>
+        <button class="btn btn-danger btn-sm" onclick="HqOps.revokeStation('${s.id}','${String(s.name).replace(/'/g,"\\'")}')">🔒 Disable Station</button>
       </div>`;
     openModal('Station Detail — ' + s.name, body,
       `<button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal()">Close</button>`);
@@ -3564,7 +3608,7 @@ ${want.files ? `<h2>Attached files (${(B.media||[]).length})</h2><table><tr><th>
       // Civilian's live-location fixes. Falls back to the demo feed if
       // opened standalone (no sync detected).
       GeamsData.clearDemoIncidents();
-      GeamsData.startLiveIncidentFeed();
+      GeamsData.startLiveIncidentFeed(); try { HqOps.watchLockdown(); } catch (e) {}
       bindLiveUpdates();
       updateKPIs();
     }, 3200);
@@ -4753,10 +4797,6 @@ const GeamsLiveView = (() => {
             <div style="font-size:0.67rem;color:var(--text-muted);font-family:var(--font-mono)">Badge: ${inc.officerBadge || '—'}</div>
             <div style="font-size:0.67rem;color:var(--text-muted);margin-top:2px">Station: ${station?station.name:'Unknown'}</div>
             <div style="font-size:0.67rem;color:var(--cyan);margin-top:2px;font-family:var(--font-mono)" id="lv-eta-card">En route →</div>
-            <div style="display:flex;gap:5px;margin-top:8px">
-              <button class="btn btn-cyan btn-sm" style="flex:1" onclick="GeamsApp.showToast('info','Comms','Opening channel to ${officer}')">💬 Call</button>
-              <button class="btn btn-warning btn-sm" style="flex:1" onclick="GeamsApp.showToast('warning','Backup','Backup request sent')">🆘 Backup</button>
-            </div>
           </div>
 
           <!-- Live Evidence (Police Harassment reports only) — a real
@@ -4827,7 +4867,7 @@ const GeamsLiveView = (() => {
       <button class="btn btn-ghost btn-sm" onclick="GeamsLiveView.close()">✕ Close</button>
       <button class="btn btn-ghost btn-sm" onclick="GeamsLiveView.resetView()">🗺 Reset Map</button>
       <button class="btn btn-cyan btn-sm" onclick="GeamsApp.patchAudioFeed()">🎙 Patch Audio</button>
-      <button class="btn btn-warning btn-sm" onclick="GeamsApp.showToast('warning','Escalated','${incId} escalated to national priority')">⬆️ Escalate</button>
+      <button class="btn btn-warning btn-sm" onclick="HqOps.escalate('${incId}')">⬆️ Escalate</button>
       <button class="btn btn-primary btn-sm" onclick="GeamsApp.generateCourtReport()">⚖️ Court Report</button>
       ${assessBtn}`;
   }
@@ -5032,6 +5072,126 @@ const GeamsOverview = (() => {
 /* ─────────────────────────────────────────
    INCIDENTS PAGE
 ───────────────────────────────────────── */
+
+/* ─────────────────────────────
+   HQ OPERATIONS — incident actions, exports, lockdown, token rotation, security check
+───────────────────────────── */
+const HqOps = (() => {
+  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const toast = (t, a, b, d) => GeamsApp.showToast(t, a, b, d);
+  const cell = (v) => { v = v == null ? '' : String(v); if (/^[=+\-@\t\r]/.test(v)) v = "'" + v; return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+  function download(name, text, mime) { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: mime || 'text/csv' })); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500); }
+  function csv(name, head, rows) { if (!rows.length) { toast('warning', 'Nothing to export', 'There are no rows yet'); return; } download(name, [head].concat(rows).map(r => r.map(cell).join(',')).join('\r\n')); toast('success', 'Downloaded', rows.length + ' rows'); }
+  const day = () => new Date().toISOString().slice(0, 10);
+
+  // Write a change onto the shared record of an incident, at the station that owns it.
+  function incUpdate(incId, fn) {
+    const inc = GeamsData.incidents.find(i => i.id === incId); if (!inc) { toast('error', 'Not found', 'That incident is not loaded'); return Promise.resolve(false); }
+    return GeamsSync.mergeShared('lcr:' + inc.station + ':incidents', {}, (m) => { m = m || {}; if (m[incId]) fn(m[incId]); return m; });
+  }
+  function who() { return (typeof HqAuth !== 'undefined' ? HqAuth.user() : 'HQ'); }
+
+  async function escalate(incId) {
+    const ok = await incUpdate(incId, r => { r.priority = 'critical'; r.hqEscalated = { at: Date.now(), by: who(), reason: 'Raised to national priority by HQ' }; });
+    if (!ok) { toast('error', 'Not sent', 'The change could not be saved'); return; }
+    const inc = GeamsData.incidents.find(i => i.id === incId); if (inc) { inc.priority = 'critical'; inc.hqEscalated = true; }
+    try { GeamsArchive.log(incId, 'hq', 'update', 'HQ raised this incident to national priority'); } catch (e) {}
+    toast('warning', 'Escalated', incId + ' is now critical priority and the station can see HQ has taken note', 5000);
+    try { GeamsIncidents.render(); } catch (e) {}
+  }
+  function notes(incId) {
+    GeamsApp.openModal('🗒 HQ Notes — ' + incId, `
+      <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:10px;line-height:1.5">The note is written onto the incident. The control room that owns it sees it, and so does the officer on the case.</div>
+      <textarea class="form-textarea" id="hqn-text" rows="4" placeholder="Instruction or observation for the control room..."></textarea>`,
+      `<button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal()">Cancel</button><button class="btn btn-primary btn-sm" onclick="HqOps.saveNotes('${esc(incId)}')">💾 Save note</button>`);
+  }
+  async function saveNotes(incId) {
+    const t = (document.getElementById('hqn-text') || {}).value || ''; if (t.trim().length < 2) { toast('warning', 'Empty note', 'Write something first'); return; }
+    const n = { text: t.trim().slice(0, 1000), at: Date.now(), by: who() };
+    const ok = await incUpdate(incId, r => { r.hqNotes = (Array.isArray(r.hqNotes) ? r.hqNotes : []).concat(n).slice(-50); });
+    if (!ok) { toast('error', 'Not saved', 'The change could not be saved'); return; }
+    const inc = GeamsData.incidents.find(i => i.id === incId); if (inc) inc.hqNotes = (inc.hqNotes || []).concat(n);
+    try { GeamsArchive.log(incId, 'hq', 'update', 'HQ note: ' + n.text.slice(0, 160)); } catch (e) {}
+    GeamsApp.closeModal(); toast('success', 'Note saved', 'Visible on the incident to the station');
+  }
+
+  function exportIncidents() {
+    csv('geams-incidents-' + day() + '.csv', ['ID', 'Type', 'Priority', 'Status', 'Station', 'Region', 'Location', 'Officer', 'Received'],
+      GeamsData.incidents.map(i => [i.id, i.type, i.priority, i.status, i.stationName, i.region, i.location, i.officerName || '', i.createdAt ? new Date(i.createdAt).toISOString() : '']));
+  }
+  function exportStations() {
+    csv('geams-stations-' + day() + '.csv', ['ID', 'Name', 'Region', 'Status', 'Officers on duty', 'Open incidents', 'Last heartbeat'],
+      GeamsData.stations.map(s => [s.id, s.name, s.region, s.status, s.onDuty, s.incidents, s.lastLiveUpdate || '']));
+  }
+  function exportAudit() { csv('geams-audit-' + day() + '.csv', ['Time', 'Source', 'Event'], GeamsData.auditLogs.map(l => [l.time, l.source, String(l.text).replace(/<[^>]*>/g, '')])); }
+  function exportHealth() {
+    csv('geams-station-health-' + day() + '.csv', ['Station', 'ID', 'Status', 'Last heartbeat', 'On duty', 'Officers'],
+      GeamsData.stations.map(s => [s.name, s.id, s.status, s.lastLiveUpdate || 'never', s.onDuty, s.officers]));
+  }
+
+  async function backupNow() {
+    toast('info', 'Backup', 'Backing up…');
+    const r = await HqAuth.api('/api/backup/run', { method: 'POST' });
+    if (r.ok) toast('success', 'Backup written', r.j.backup.name, 6000); else toast('error', 'Backup failed', (r.j && r.j.error) || 'Only the HQ owner can back up', 7000);
+  }
+
+  async function rotateTokens() {
+    if (!confirm('Sign out every control room, officer, fire and ambulance device now? They must sign in again. HQ sessions are not affected.')) return;
+    const r = await HqAuth.api('/api/hq/rotate-tokens', { method: 'POST' });
+    if (r.ok) toast('success', 'Tokens rotated', 'All station-side sign-ins are now invalid', 7000); else toast('error', 'Not done', (r.j && r.j.error) || 'Failed', 7000);
+  }
+  let lockdown = null;
+  function watchLockdown() {
+    GeamsSync.watch('hq:lockdown', null, (v) => { lockdown = v && v.on ? v : null; banner(); }, 3000);
+  }
+  function banner() {
+    let b = document.getElementById('sys-lockdown-banner');
+    if (!lockdown) { if (b) b.remove(); return; }
+    if (!b) { b = document.createElement('div'); b.id = 'sys-lockdown-banner'; b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9000;background:#7a0000;color:#fff;text-align:center;font:700 12px var(--font-mono,monospace);padding:4px 8px'; document.body.appendChild(b); }
+    b.textContent = '🔒 SYSTEM LOCKDOWN — read-only for stations, officers, fire and ambulance. Civilian SOS and HQ still work.';
+  }
+  function lockdownDialog() {
+    const on = !!lockdown;
+    GeamsApp.openModal(on ? '🔓 Lift System Lockdown' : '🔒 System Lockdown', `
+      <div style="font-size:0.8rem;line-height:1.6;color:var(--text-muted);margin-bottom:12px">${on
+        ? 'Lockdown has been on since ' + esc(new Date(lockdown.since).toLocaleString('en-GB')) + (lockdown.reason ? ' — ' + esc(lockdown.reason) : '') + '. Lifting it lets stations, officers, fire and ambulance write again.'
+        : 'The server will refuse every change from control rooms, officers, fire and ambulance until you lift it. Civilian SOS alerts and all HQ actions keep working. People already signed in stay signed in; they just cannot save changes.'}</div>
+      ${on ? '' : '<input class="form-input" id="ld-why" placeholder="Reason (shown in the record)">'}`,
+      `<button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal()">Cancel</button><button class="btn ${on ? 'btn-success' : 'btn-danger'} btn-sm" onclick="HqOps.setLockdown(${!on})">${on ? 'Lift lockdown' : 'Activate lockdown'}</button>`);
+  }
+  async function setLockdown(on) {
+    const reason = ((document.getElementById('ld-why') || {}).value || '').trim();
+    const r = await HqAuth.api('/api/hq/lockdown', { method: 'POST', body: JSON.stringify({ on, reason }) });
+    GeamsApp.closeModal();
+    if (r.ok) toast(on ? 'error' : 'success', on ? 'Lockdown active' : 'Lockdown lifted', on ? 'Stations are now read-only' : 'Normal operation', 6000);
+    else toast('error', 'Not changed', (r.j && r.j.error) || 'Only the HQ owner can change lockdown', 7000);
+  }
+  async function securityCheck() {
+    GeamsApp.openModal('🛡 Security Configuration Check', '<div style="font-size:0.8rem;color:var(--text-muted)">Checking…</div>', '<button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal()">Close</button>');
+    const r = await HqAuth.api('/api/security/check');
+    const body = document.getElementById('modal-body') || document.querySelector('.modal-body'); if (!body) return;
+    if (!r.ok) { body.innerHTML = '<div style="color:var(--red)">Could not run the check: ' + esc((r.j && r.j.error) || 'error') + '</div>'; return; }
+    body.innerHTML = r.j.checks.map(c => `<div style="display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-bottom:1px solid var(--border-dim);font-size:0.78rem"><span>${c.ok ? '✅' : c.sev === 'high' ? '❌' : '⚠️'} ${esc(c.name)}</span><span style="color:var(--text-muted);text-align:right;max-width:55%">${esc(c.detail)}</span></div>`).join('')
+      + '<div style="font-size:0.68rem;color:var(--text-muted);margin-top:10px;line-height:1.5">' + esc(r.j.note) + '</div>';
+  }
+  async function faceAudit() {
+    GeamsApp.openModal('🧬 Face & ID checks log', '<div style="font-size:0.8rem;color:var(--text-muted)">Loading…</div>', '<button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal()">Close</button>');
+    const r = await HqAuth.api('/api/face/audit');
+    const body = document.getElementById('modal-body') || document.querySelector('.modal-body'); if (!body) return;
+    if (!r.ok) { body.innerHTML = '<div style="color:var(--red)">Could not load: ' + esc((r.j && r.j.error) || 'error') + '</div>'; return; }
+    const rows = r.j.entries || [];
+    const label = { verify: 'Verify account holder', search: 'Face search', lookup: 'Ghana Card lookup' };
+    body.innerHTML = '<div style="font-size:0.68rem;color:var(--text-muted);margin-bottom:8px;line-height:1.5">Every face or ID check an officer or control room made. Newest first. Stored faces are never shown here.</div>'
+      + (rows.length ? rows.map(e => `<div style="padding:7px 0;border-bottom:1px solid var(--border-dim);font-size:0.76rem"><div style="display:flex;justify-content:space-between;gap:10px"><b>${esc(label[e.what] || e.what)}</b><span style="color:var(--text-muted)">${esc(new Date(e.at).toLocaleString())}</span></div><div style="color:var(--text-muted)">${esc(e.by || '')}${e.badge ? ' · ' + esc(e.badge) : ''} · incident ${esc(e.inc || '—')}${e.subject ? ' · ' + esc(e.subject) : ''}</div><div>${e.what === 'verify' ? (e.match ? '✅ match' : '❌ no match') + ' · ' + esc(e.who || '') + ' · distance ' + esc(e.distance) : e.found ? '✅ found ' + esc(e.who || '') + (e.distance != null ? ' · distance ' + esc(e.distance) : '') : '— nobody found'}</div></div>`).join('') : '<div style="color:var(--text-muted)">No checks recorded yet.</div>');
+  }
+  async function revokeStation(id, name) {
+    if (!confirm('Disable ' + name + '? Its control room is signed out and cannot sign in until HQ enables it again.')) return;
+    try { await GeamsData.setLcrDisabled(id, true); GeamsApp.closeModal(); toast('error', 'Station disabled', name + ' can no longer sign in', 6000); } catch (e) { toast('error', 'Not changed', e.message || ''); }
+  }
+  return { escalate, notes, saveNotes, exportIncidents, exportStations, exportAudit, exportHealth, backupNow, rotateTokens, watchLockdown, lockdownDialog, setLockdown, securityCheck, faceAudit, revokeStation };
+})();
+
+const HqOps_e = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const GeamsIncidents = (() => {
 
   let filter = 'all';
@@ -5096,9 +5256,8 @@ const GeamsIncidents = (() => {
         <td onclick="event.stopPropagation()">
           <div style="display:flex;gap:3px">
             <button class="btn btn-ghost btn-sm" title="Live Feed" onclick="GeamsLiveView.open('${inc.id}')">📡</button>
-            <button class="btn btn-warning btn-sm" title="Escalate" onclick="GeamsApp.showToast('warning','Escalated','${inc.id} escalated')">⬆</button>
+            <button class="btn btn-warning btn-sm" title="Escalate" onclick="HqOps.escalate('${inc.id}')">⬆</button>
             <button class="btn btn-cyan btn-sm" title="Patch Audio" onclick="GeamsApp.patchAudioFeed()">🎙</button>
-            <button class="btn btn-success btn-sm" title="Resolve" onclick="GeamsApp.showToast('success','Resolved','${inc.id} closed')">✓</button>
           </div>
         </td>
       </tr>`).join('') || `<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:30px">No incidents match filter</td></tr>`;
@@ -5106,7 +5265,7 @@ const GeamsIncidents = (() => {
 
   function setFilter(f) { filter = f; render(); }
   function search(v) { renderTable(v); }
-  function exportReport() { GeamsApp.showToast('success','Export','Incident report generated — downloading PDF...'); }
+  function exportReport() { HqOps.exportIncidents(); }
 
   function buildDetailHTML(incId) {
     const inc = GeamsData.incidents.find(i => i.id === incId);
@@ -5124,17 +5283,21 @@ const GeamsIncidents = (() => {
         <div class="detail-field"><div class="detail-key">Officer Assigned</div><div class="detail-val" style="color:${inc.officerAssigned?'var(--green)':'var(--text-muted)'}">${inc.officerAssigned ? (inc.officerName || 'Assigned') : 'Unassigned'}</div></div>
         <div class="detail-field"><div class="detail-key">Region</div><div class="detail-val">${inc.region}</div></div>
       </div>
+      ${(inc.backupRequest||inc.hqEscalated||inc.flagged||(inc.stationNotes&&inc.stationNotes.length)||(inc.hqNotes&&inc.hqNotes.length))?`<div style="background:var(--bg-deep);border:1px solid var(--border-base);border-radius:var(--r-md);padding:10px 12px;margin-bottom:12px;font-size:0.76rem;line-height:1.6">
+        ${inc.backupRequest?`<div>🆘 <b>Backup requested</b> — ${HqOps_e(inc.backupRequest.type)} (${HqOps_e(inc.backupRequest.urgency)})${inc.backupRequest.report?' · '+HqOps_e(inc.backupRequest.report):''}</div>`:''}
+        ${inc.hqEscalated?`<div>⬆️ <b>Escalated</b>${inc.hqEscalated.reason?' — '+HqOps_e(inc.hqEscalated.reason):''}${inc.hqEscalated.report?' · '+HqOps_e(inc.hqEscalated.report):''}</div>`:''}
+        ${inc.flagged?`<div>🚩 <b>Caller flagged</b> — ${HqOps_e(inc.flagged.reason)}${inc.flagged.notes?' · '+HqOps_e(inc.flagged.notes):''}</div>`:''}
+        ${(inc.stationNotes||[]).map(n=>`<div>🗒 <b>Station</b> — ${HqOps_e(n.text)}</div>`).join('')}
+        ${(inc.hqNotes||[]).map(n=>`<div>🗒 <b>HQ</b> (${HqOps_e(n.by)}) — ${HqOps_e(n.text)}</div>`).join('')}
+      </div>`:''}
       <div class="section-header"><div class="section-title">Incident Actions</div><div class="section-line"></div></div>
       <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">
         <button class="btn btn-cyan btn-sm" onclick="GeamsApp.closeModal();GeamsLiveView.open('${inc.id}')">📡 Live Feed</button>
-        <button class="btn btn-warning btn-sm" onclick="GeamsApp.showToast('warning','Escalated','${inc.id} escalated to national priority');GeamsApp.closeModal()">⬆️ Escalate to HQ</button>
-        <button class="btn btn-primary btn-sm" onclick="GeamsApp.showToast('info','Reassigned','Reassigning dispatch for ${inc.id}');GeamsApp.closeModal()">🔄 Reassign Dispatch</button>
+        <button class="btn btn-warning btn-sm" onclick="GeamsApp.closeModal();HqOps.escalate('${inc.id}')">⬆️ Raise to National Priority</button>
         <button class="btn btn-ghost btn-sm" onclick="GeamsApp.patchAudioFeed();GeamsApp.closeModal()">🎙 Patch Audio</button>
         <button class="btn btn-cyan btn-sm" onclick="GeamsApp.crossStationLink();GeamsApp.closeModal()">🔗 Link to Case</button>
-        <button class="btn btn-ghost btn-sm" onclick="GeamsApp.showToast('info','Notes','Opening notes for ${inc.id}')">🗒 Add Notes</button>
+        <button class="btn btn-ghost btn-sm" onclick="HqOps.notes('${inc.id}')">🗒 Add Notes</button>
         <button class="btn btn-primary btn-sm" onclick="GeamsApp.generateCourtReport();GeamsApp.closeModal()">⚖️ Court Report</button>
-        <button class="btn btn-success btn-sm" onclick="GeamsApp.showToast('success','Resolved','${inc.id} marked resolved');GeamsApp.closeModal()">✅ Resolve</button>
-        <button class="btn btn-danger btn-sm" onclick="GeamsApp.showToast('error','Suppressed','Alert suppressed for ${inc.id}');GeamsApp.closeModal()">🔇 Suppress Alert</button>
       </div>`;
   }
 
@@ -5167,10 +5330,10 @@ const GeamsStations = (() => {
       </div>
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
         <div class="search-bar" style="flex:1"><span class="search-icon">🔍</span>
-          <input type="text" placeholder="Search by ID, name, region..."></div>
+          <input type="text" placeholder="Search by ID, name, region..." oninput="(function(q){q=q.toLowerCase();document.querySelectorAll('#page-stations table tbody tr').forEach(function(r){r.style.display=r.textContent.toLowerCase().includes(q)?'':'none'})})(this.value)"></div>
         <button class="btn btn-cyan btn-sm" onclick="GeamsApp.syncWatchlist()">🔄 Sync Watchlist</button>
         <button class="btn btn-primary btn-sm" onclick="GeamsStations.registerStation()">➕ Create LCR</button>
-        <button class="btn btn-ghost btn-sm" onclick="GeamsApp.showToast('info','Export','Station registry exported')">📤 Export</button>
+        <button class="btn btn-ghost btn-sm" onclick="HqOps.exportStations()">📤 Export CSV</button>
       </div>
 
       ${pending.length ? `
@@ -5231,6 +5394,7 @@ const GeamsStations = (() => {
                   <div style="display:flex;gap:3px">
                     <button class="btn btn-ghost btn-sm" title="Detail" onclick="GeamsApp.openStationDetail('${s.id}')">👁</button>
                     <button class="btn btn-warning btn-sm" title="Issue or reset this control room's login passphrase" onclick="GeamsStations.resetPassphrase('${s.id}')">🔑</button>
+                    <button class="btn btn-ghost btn-sm" title="Commander accounts: each commander signs in with their own username and password" onclick="GeamsStations.commanders('${s.id}')">👤</button>
                     ${s.hqCreated ? `<button class="btn ${s.disabled?'btn-success':'btn-danger'} btn-sm" title="${s.disabled?'Re-enable':'Disable'} this LCR" onclick="GeamsStations.toggleDisabled('${s.id}')">${s.disabled?'▶':'⏸'}</button>` : ''}
                     <button class="btn btn-danger btn-sm" title="Cordon Zone" onclick="GeamsApp.cordonZone('${s.id}')">🔴</button>
                     <button class="btn btn-ghost btn-sm" title="Mobilise Reserves" onclick="GeamsApp.mobiliseReserves('${s.id}')">📣</button>
@@ -5309,7 +5473,7 @@ const GeamsStations = (() => {
     if (q.length < 3) { GeamsApp.showToast('warning','Too short','Type at least 3 letters'); return; }
     box.innerHTML = '<div style="font-size:.7rem;color:var(--text-muted);margin-top:6px">Searching…</div>';
     try {
-      const r = await fetch('https://photon.komoot.io/api/?limit=6&lang=en&bbox=-3.4,4.6,1.3,11.3&q=' + encodeURIComponent(q + ' Ghana'));
+      const r = await fetch(((window.GEAMS_CONFIG||{}).geocodeUrl||'https://photon.komoot.io')+'/api/?limit=6&lang=en&bbox=-3.4,4.6,1.3,11.3&q=' + encodeURIComponent(q + ' Ghana'));
       const j = await r.json(); const fs = (j.features || []).filter(x => x.geometry && x.geometry.coordinates);
       if (!fs.length) { box.innerHTML = '<div style="font-size:.7rem;color:var(--text-muted);margin-top:6px">No match. Try a nearby town or landmark.</div>'; return; }
       window._regHits = fs;
@@ -5383,6 +5547,36 @@ const GeamsStations = (() => {
     try { const pass = await GeamsData.resetLcrPassphrase(id); showCredentials(st, pass, 'New passphrase issued'); }
     catch (e) { GeamsApp.showToast('error','Reset failed', e.message || ''); }
   }
+  const cx = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  async function commanders(id, shown) {
+    const st = GeamsData.stations.find(x => x.id === id); if (!st) return;
+    const r = await HqAuth.api('/api/hq/lcr/commander?stationId=' + encodeURIComponent(id)); const list = r.ok ? r.j.accounts : [];
+    const RANKS = ['Officer in Charge', 'Chief Superintendent', 'Superintendent', 'Deputy Superintendent', 'Chief Inspector', 'Inspector', 'Sergeant', 'Duty Officer'];
+    const active = list.filter(a => !a.disabled).length;
+    GeamsApp.openModal('👤 Commanders — ' + cx(st.name), `
+      ${shown ? '<div style="background:var(--orange-dim);border:1px solid var(--orange-border);border-radius:var(--r-md);padding:10px 12px;font-size:0.76rem;margin-bottom:12px;line-height:1.55"><strong>Copy now, shown once.</strong><br>Username <span class="td-mono" style="user-select:all">' + cx(shown.username) + '</span><br>Password <span class="td-mono" style="user-select:all;font-size:1rem">' + cx(shown.password) + '</span></div>' : ''}
+      <div style="font-size:0.72rem;color:var(--text-muted);line-height:1.55;margin-bottom:10px">${active ? 'This control room now requires a commander username and password at sign-in, on top of its station passphrase. The name on screen and in every record comes from the account, not from typing.' : 'No commander accounts yet, so commanders still type their own name at sign-in and it is recorded as unverified. Creating the first account switches this control room to personal sign-in, and anyone signed in without an account is signed out.'}</div>
+      ${list.map(a => '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:0.76rem;padding:7px 10px;background:var(--bg-deep);border-radius:var(--r-sm);margin-bottom:6px"><span>' + cx(a.name) + ' <span style="color:var(--text-muted)">· ' + cx(a.rank) + ' · ' + cx(a.username) + '</span>' + (a.disabled ? ' <span class="badge badge-resolved" style="font-size:.55rem">DISABLED</span>' : '') + '</span><span style="white-space:nowrap"><button class="btn btn-ghost btn-sm" onclick="GeamsStations.cmdAct(\'' + id + '\',\'' + cx(a.username) + '\',\'reset\')">New password</button> <button class="btn btn-ghost btn-sm" onclick="GeamsStations.cmdAct(\'' + id + '\',\'' + cx(a.username) + '\',\'' + (a.disabled ? 'enable' : 'disable') + '\')">' + (a.disabled ? 'Enable' : 'Disable') + '</button> <button class="btn btn-danger btn-sm" onclick="GeamsStations.cmdAct(\'' + id + '\',\'' + cx(a.username) + '\',\'remove\')">Remove</button></span></div>').join('') || '<div style="font-size:0.74rem;color:var(--text-muted);margin-bottom:8px">No accounts.</div>'}
+      <div style="font-family:var(--font-mono);font-size:.6rem;letter-spacing:1.5px;color:var(--text-muted);margin:12px 0 6px">NEW COMMANDER</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+        <input class="form-input" id="cm-user" placeholder="username (e.g. k.mensah)" autocapitalize="none"><input class="form-input" id="cm-name" placeholder="Full name">
+        <select class="form-select" id="cm-rank">${RANKS.map(x => '<option>' + x + '</option>').join('')}</select><input class="form-input" id="cm-phone" type="tel" placeholder="Phone +233…"></div>
+      <div id="cm-err" style="color:var(--red);font-size:0.72rem;margin-top:6px"></div>`,
+      `<button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal()">Close</button><button class="btn btn-primary btn-sm" onclick="GeamsStations.cmdCreate('${id}')">Create account</button>`);
+  }
+  async function cmdCreate(id) {
+    const g = (x) => document.getElementById(x).value.trim();
+    const r = await HqAuth.api('/api/hq/lcr/commander', { method: 'POST', body: JSON.stringify({ stationId: id, action: 'create', username: g('cm-user'), name: g('cm-name'), rank: document.getElementById('cm-rank').value, phone: g('cm-phone') }) });
+    if (!r.ok) { document.getElementById('cm-err').textContent = r.j.error || 'Could not create the account'; return; }
+    commanders(id, { username: r.j.username, password: r.j.password });
+  }
+  async function cmdAct(id, user, act) {
+    if (act === 'remove' && !confirm('Remove commander account "' + user + '"? They are signed out at once.')) return;
+    if (act === 'reset' && !confirm('Issue a new password for "' + user + '"? The old one stops working and they are signed out.')) return;
+    const r = await HqAuth.api('/api/hq/lcr/commander', { method: 'POST', body: JSON.stringify({ stationId: id, action: act, username: user }) });
+    if (!r.ok) { GeamsApp.showToast('error', 'Not changed', r.j.error || ''); return; }
+    commanders(id, act === 'reset' ? { username: user, password: r.j.password } : null);
+  }
   async function toggleDisabled(id) {
     const st = GeamsData.stations.find(x => x.id === id); if (!st) return;
     const dis = !st.disabled;
@@ -5427,7 +5621,7 @@ const GeamsStations = (() => {
     render();
   }
 
-  return { render, registerStation, submitRegistration, useMyLocation, lookupGhanaPost, searchPlace, pickPlace, splitPasted, copyCredentials, resetPassphrase, toggleDisabled, viewPending, approveStation, rejectStation };
+  return { render, registerStation, submitRegistration, useMyLocation, lookupGhanaPost, searchPlace, pickPlace, splitPasted, copyCredentials, resetPassphrase, commanders, cmdCreate, cmdAct, toggleDisabled, viewPending, approveStation, rejectStation };
 })();
 
 
@@ -5792,7 +5986,7 @@ const GeamsSecurity = (() => {
         <div style="display:flex;gap:8px">
           <button class="btn btn-cyan btn-sm" onclick="GeamsApp.syncWatchlist()">🔄 Sync Watchlist</button>
           <button class="btn btn-ghost btn-sm" onclick="GeamsApp.archivePurge()">🗄 Archive & Purge</button>
-          <button class="btn btn-primary btn-sm" onclick="GeamsApp.showToast('info','Export','Full audit log exported')">📤 Export Audit Log</button>
+          <button class="btn btn-primary btn-sm" onclick="HqOps.exportAudit()">📤 Export Audit Log (CSV)</button>
         </div>
       </div>
       <div class="three-col">
@@ -5826,7 +6020,7 @@ const GeamsSecurity = (() => {
                     <div style="font-size:0.78rem;font-weight:600">${u.name}</div>
                     <div style="font-size:0.62rem;color:var(--text-muted);font-family:var(--font-mono)">${u.role} · ${u.ip} · since ${u.since}</div>
                   </div>
-                  <button class="btn btn-danger btn-sm" onclick="GeamsApp.showToast('warning','Session','Forced logout for ${u.name}')">⊗</button>
+                  <button class="btn btn-danger btn-sm" onclick="HqAuth.signOut()">Sign out</button>
                 </div>`).join('')}
             </div>
           </div>
@@ -5834,12 +6028,13 @@ const GeamsSecurity = (() => {
             <div class="panel-header"><span>🔐</span><span class="panel-title">Security Actions</span></div>
             <div class="panel-body">
               <div style="display:flex;flex-direction:column;gap:8px">
-                <button class="btn btn-danger w-full" onclick="GeamsApp.showToast('info','Not available','Token rotation is not connected to a backend')">🔄 Force Token Rotation (All Stations)</button>
+                <button class="btn btn-danger w-full" onclick="HqOps.rotateTokens()">🔄 Sign Out All Stations &amp; Officers</button>
                 <button class="btn btn-warning w-full" onclick="GeamsApp.transferCommand()">🔁 Transfer Command Authority</button>
-                <button class="btn btn-warning w-full" onclick="GeamsApp.showToast('warning','Lockdown','System lockdown activated — read-only mode')">🔒 Activate System Lockdown</button>
-                <button class="btn btn-ghost w-full" onclick="GeamsApp.showToast('info','Not available','No security scanner is connected to HQ')">🛡 Run Security Scan</button>
+                <button class="btn btn-warning w-full" onclick="HqOps.lockdownDialog()">🔒 System Lockdown (read-only)</button>
+                <button class="btn btn-ghost w-full" onclick="HqOps.securityCheck()">🛡 Security Configuration Check</button>
+                <button class="btn btn-ghost w-full" onclick="HqOps.faceAudit()">🧬 Face &amp; ID checks log</button>
                 <button class="btn btn-ghost w-full" onclick="GeamsApp.archivePurge()">🗄 Archive & Purge Old Cases</button>
-                <button class="btn btn-ghost w-full" onclick="GeamsApp.showToast('info','Not available','No central database is connected to HQ — nothing to back up from here')">💾 Backup Database</button>
+                <button class="btn btn-ghost w-full" onclick="HqOps.backupNow()">💾 Back Up Now</button>
               </div>
             </div>
           </div>
@@ -6142,8 +6337,8 @@ const GeamsSysHealth = (() => {
         <div class="section-line"></div>
         <div style="display:flex;gap:8px">
           <span class="badge badge-resolved">Live status — measured from this session</span>
-          <button class="btn btn-ghost btn-sm" onclick="GeamsApp.showToast('info','Refresh','Health data refreshed')">🔄 Refresh</button>
-          <button class="btn btn-ghost btn-sm" onclick="GeamsApp.showToast('info','Export','Health report exported')">📤 Export</button>
+          <button class="btn btn-ghost btn-sm" onclick="GeamsSysHealth.render()">🔄 Refresh</button>
+          <button class="btn btn-ghost btn-sm" onclick="HqOps.exportHealth()">📤 Export CSV</button>
         </div>
       </div>
 
@@ -6211,12 +6406,12 @@ const GeamsSysHealth = (() => {
             <div class="panel-header"><span>🛠</span><span class="panel-title">Admin Actions</span></div>
             <div class="panel-body">
               <div style="display:flex;flex-direction:column;gap:8px">
-                <button class="btn btn-ghost w-full" onclick="GeamsApp.showToast('info','Not available','No security scanner is connected to HQ')">🛡 Run Full Security Scan</button>
-                <button class="btn btn-ghost w-full" onclick="GeamsApp.showToast('info','Not available','No central database is connected to HQ — nothing to back up from here')">💾 Backup Database Now</button>
+                <button class="btn btn-ghost w-full" onclick="HqOps.securityCheck()">🛡 Security Configuration Check</button>
+                <button class="btn btn-ghost w-full" onclick="HqOps.faceAudit()">🧬 Face &amp; ID checks log</button>
+                <button class="btn btn-ghost w-full" onclick="HqOps.backupNow()">💾 Back Up Now Now</button>
                 <button class="btn btn-ghost w-full" onclick="GeamsApp.syncWatchlist()">🔄 Force Watchlist Sync</button>
                 <button class="btn btn-ghost w-full" onclick="GeamsApp.archivePurge()">🗄 Run Archive Job</button>
-                <button class="btn btn-warning w-full" onclick="GeamsApp.showToast('info','Not available','No push service is connected to HQ')">🔁 Restart Push Service</button>
-                <button class="btn btn-danger w-full" onclick="GeamsApp.showToast('warning','Lockdown','System lockdown activated — read-only mode')">🔒 Emergency System Lockdown</button>
+                <button class="btn btn-danger w-full" onclick="HqOps.lockdownDialog()">🔒 System Lockdown (read-only)</button>
               </div>
             </div>
           </div>

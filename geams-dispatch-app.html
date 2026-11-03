@@ -3,11 +3,13 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover"/>
 <meta name="mobile-web-app-capable" content="yes"/>
 <title>GEAMS Dispatch — Officer App</title>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+<script src="config.js"></script>
+<script src="vendor/leaflet/leaflet.js"></script>
+<script src="vendor/geams-map.js"></script>
 <style>
 /* GEAMS DISPATCH — base.css */
-@import url('https://fonts.googleapis.com/css2?family=Exo+2:wght@300;400;500;600;700;800;900&family=Share+Tech+Mono&display=swap');
+@import url('vendor/fonts/fonts.css');
 :root {
   --bg-void:#020810;--bg-deep:#040c18;--bg-base:#060f1e;--bg-raised:#091525;
   --bg-overlay:#0c1b2e;--bg-hover:#102030;--bg-active:#152840;
@@ -566,7 +568,7 @@ body{background:var(--bg-void);color:var(--text-bright);font-family:var(--font-u
 
     <div class="login-security-bar">
       <div class="login-security-dot"></div>
-      <div class="login-security-txt">AES-256 ENCRYPTED · SECURE CHANNEL ACTIVE</div>
+      <div class="login-security-txt">SIGN-IN IS CHECKED BY THE SERVER</div>
     </div>
 
     <div class="login-field">
@@ -899,6 +901,14 @@ const GeamsSync = (() => {
       const r = await fetch(base + path, Object.assign({ cache: 'no-store', signal: ctl && ctl.signal }, opts || {}));
       online = true;
       if (r.status === 401 && tk && path.indexOf('/api/kv/') === 0) { authCbs.forEach(cb => { try { cb(); } catch (e) {} }); }
+      if (r.status === 503 && tk && /^\/api\/(kv|blob|blobs)\//.test(path) && !(opts && (!opts.method || opts.method === 'GET'))) {
+        // HQ lockdown: say so plainly, so a crew does not think their update was sent
+        try {
+          let b = document.getElementById('lockdown-refused'); if (!b) { b = document.createElement('div'); b.id = 'lockdown-refused'; b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#b3261e;color:#fff;font:600 13px/1.4 system-ui,sans-serif;padding:10px 14px;text-align:center'; document.body.appendChild(b); }
+          b.textContent = '🔒 HQ has paused all changes (lockdown). Your last update was NOT sent. Call your control room.'; b.style.display = 'block';
+          clearTimeout(b._t); b._t = setTimeout(() => { b.style.display = 'none'; }, 20000);
+        } catch (e) {}
+      }
       return r;
     } catch (e) { online = false; throw e; }
     finally { if (t) clearTimeout(t); }
@@ -1057,8 +1067,8 @@ const FaceEngine = (() => {
   // Both the library and the model weights come from the same CDN
   // (jsdelivr) so there is only one third-party host in the loading path —
   // fewer places a firewall/ad-blocker on either end's network can break this.
-  const LIB_URL   = 'https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js';
-  const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model';
+  const LIB_URL   = 'vendor/face/face-api.min.js';
+  const MODEL_URL = 'vendor/face/model';
   const LOAD_TIMEOUT_MS = 20000;
   const MATCH_THRESHOLD = 0.6;
 
@@ -1079,7 +1089,7 @@ const FaceEngine = (() => {
       const s = document.createElement('script');
       s.src = LIB_URL;
       s.onload = () => resolve();
-      s.onerror = () => reject(new Error('Could not load the face recognition library from ' + LIB_URL + ' — the CDN may be blocked on this network.'));
+      s.onerror = () => reject(new Error('Could not load the face recognition library from ' + LIB_URL + ' — the file is missing from the GEAMS server.'));
       document.head.appendChild(s);
     });
   }
@@ -1819,7 +1829,7 @@ const DispatchData=((  )=>{
     roadRoute.pending=true;
     const ctl=new AbortController(); const to=setTimeout(()=>ctl.abort(),7000);
     try{
-      const url=`https://router.project-osrm.org/route/v1/driving/${officer.lng},${officer.lat};${t.lng},${t.lat}?overview=full&geometries=geojson`;
+      const url=`${((window.GEAMS_CONFIG||{}).routeUrl||'https://router.project-osrm.org')}/route/v1/driving/${officer.lng},${officer.lat};${t.lng},${t.lat}?overview=full&geometries=geojson`;
       const r=await fetch(url,{signal:ctl.signal});
       const j=await r.json();
       if(!j.routes||!j.routes[0])throw new Error('no route');
@@ -2079,7 +2089,12 @@ const GeamsOfficerSync = (() => {
   // its own once heartbeats stop for 30 s.)
   window.addEventListener('pagehide', () => { try { goOffDuty(); } catch (e) {} });
 
-  return { goOnDuty, goOffDuty };
+  function setEquipment(rep) {
+    if (!activeCred) return Promise.resolve(false);
+    const cred = activeCred;
+    return GeamsSync.mergeShared(rosterKey(cred), {}, (m) => { m = m || {}; if (!m[cred.officerId]) return m; m[cred.officerId].equipment = rep; return m; });
+  }
+  return { goOnDuty, goOffDuty, setEquipment };
 })();
 /* GEAMS DISPATCH — app.js */
 const DispatchApp = (() => {
@@ -2835,15 +2850,23 @@ const DispatchApp = (() => {
   // the incident's own civilian enrolled. Everything is computed on this
   // device; only the result (match / no match, distance) is logged.
   let _verifyEntry = null;
+  // Face data never reaches this phone. The server compares and answers; every check is recorded there.
+  async function faceApi(path, body) {
+    try {
+      const r = await fetch((GeamsSync.base || '') + path, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (GeamsSync.token || '') }, body: JSON.stringify(body || {}) });
+      let j = {}; try { j = await r.json(); } catch (e) {}
+      return { ok: r.ok, status: r.status, j };
+    } catch (e) { return { ok: false, status: 0, j: { error: 'Could not reach the server' } }; }
+  }
   async function verifyCivilian() {
     const job = DispatchData.currentJob;
     if (!job || job.id === '—' || job._syncSource !== 'civilian-app') {
       showToast('warning','No civilian alert','Open a job raised from the Civilian app first'); return;
     }
-    const registry = await GeamsSync.getShared('registry:faces', {});
-    let entry = job._civilianId && registry ? registry[job._civilianId] : null;
-    if (!entry && job.civilianPhone) entry = Object.values(registry || {}).find(e => e.phone && e.phone === job.civilianPhone);
-    if (!entry || !entry.descriptor) {
+    const chk = await faceApi('/api/face/verify', { incId: job._syncIncId });
+    if (chk.status === 403) { showToast('warning','Not allowed',(chk.j&&chk.j.error)||'Face checks are only for incidents assigned to you'); return; }
+    const entry = chk.ok && chk.j && chk.j.enrolled ? { name: chk.j.name } : null;
+    if (!entry) {
       openSheet('🧬 Verify Civilian', `<div style="font-size:0.8rem;line-height:1.6;color:var(--text-muted)">
         This alert cannot be verified by face. Either it was sent anonymously, or ${job.civilian ? '<b>' + job.civilian + '</b>' : 'the civilian'} has no Face ID enrolled
         (or enrolled it on another backend). Ask for a Ghana Card and use <b>Biometric Scan → Manual ID</b>.</div>`,
@@ -2863,18 +2886,20 @@ const DispatchApp = (() => {
        <button class="btn btn-primary btn-full" id="scan-capture-btn" onclick="DispatchApp.captureVerifyCivilian()" disabled>🧬 Capture &amp; Verify</button>`);
     startScanCamera();
   }
-  function captureVerifyCivilian() {
+  async function captureVerifyCivilian() {
     const job = DispatchData.currentJob;
     if (!_scanLiveDescriptor || !_verifyEntry) { showToast('warning','No Face Detected','Align the face in the frame first'); return; }
-    const d = FaceEngine.distance(Array.from(_scanLiveDescriptor), _verifyEntry.descriptor);
-    const ok = d <= FaceEngine.MATCH_THRESHOLD;
-    const name = _verifyEntry.name || job.civilian || 'the civilian';
+    const desc = Array.from(_scanLiveDescriptor);
+    const r = await faceApi('/api/face/verify', { incId: job._syncIncId, descriptor: desc });
+    if (!r.ok || !r.j || r.j.match === undefined) { showToast('error','Check failed',(r.j&&r.j.error)||'The server could not compare the face'); return; }
+    const ok = !!r.j.match, d = r.j.distance, thr = r.j.threshold;
+    const name = r.j.name || _verifyEntry.name || job.civilian || 'the civilian';
     stopScanCamera();
     const area = document.getElementById('scan-camera-area'); if (area) area.innerHTML = '';
     const result = document.getElementById('scan-result');
     if (result) result.innerHTML = ok
-      ? `<div style="padding:10px 12px;background:var(--primary-dim);border:1px solid var(--primary-border);border-radius:var(--r-md)"><div style="font-weight:700;color:var(--green)">✅ Face matches the account holder</div><div style="margin-top:4px">${name}</div><div style="color:var(--text-muted);font-size:0.68rem;margin-top:4px">Distance ${d.toFixed(3)} (match at ${FaceEngine.MATCH_THRESHOLD} or lower). A guide, not proof of identity.</div></div>`
-      : `<div style="padding:10px 12px;background:var(--bg-raised);border:1px solid var(--red);border-radius:var(--r-md)"><div style="font-weight:700;color:var(--red)">❌ Face does NOT match ${name}</div><div style="color:var(--text-muted);font-size:0.68rem;margin-top:4px">Distance ${d.toFixed(3)} (match needs ${FaceEngine.MATCH_THRESHOLD} or lower). Poor light, angle or a different person can cause this: try again, then confirm with ID.</div></div>`;
+      ? `<div style="padding:10px 12px;background:var(--primary-dim);border:1px solid var(--primary-border);border-radius:var(--r-md)"><div style="font-weight:700;color:var(--green)">✅ Face matches the account holder</div><div style="margin-top:4px">${name}</div><div style="color:var(--text-muted);font-size:0.68rem;margin-top:4px">Distance ${d.toFixed(3)} (match at ${thr} or lower). A guide, not proof of identity.</div></div>`
+      : `<div style="padding:10px 12px;background:var(--bg-raised);border:1px solid var(--red);border-radius:var(--r-md)"><div style="font-weight:700;color:var(--red)">❌ Face does NOT match ${name}</div><div style="color:var(--text-muted);font-size:0.68rem;margin-top:4px">Distance ${d.toFixed(3)} (match needs ${thr} or lower). Poor light, angle or a different person can cause this: try again, then confirm with ID.</div></div>`;
     const text = `Civilian identity check by face: ${ok ? 'MATCH' : 'NO MATCH'} (${name}, distance ${d.toFixed(3)})`;
     DispatchData.activityLog.unshift({ time: DispatchData.fmt(new Date()), lcrId: DispatchData.officer.controlRoomId, text: '<strong>' + text + '</strong>' });
     try { GeamsArchive.log(job._syncIncId, 'off', 'civilian_verified', text); } catch (e) {}
@@ -2888,27 +2913,29 @@ const DispatchApp = (() => {
     const liveDescriptor = Array.from(_scanLiveDescriptor);
     const subject = document.getElementById('scan-subject')?.value || 'Suspect';
     const result = document.getElementById('scan-result');
-    const registry = await GeamsSync.getShared('registry:faces', {});
-    const match = FaceEngine.findBestMatch(liveDescriptor, registry);
+    const job = DispatchData.currentJob;
+    const r = await faceApi('/api/face/search', { incId: job && job._syncIncId, descriptor: liveDescriptor, subject });
+    if (r.status === 403) { if (result) result.innerHTML = `<div style="color:var(--text-muted)">${(r.j&&r.j.error)||'Not allowed'}. Open an incident assigned to you first.</div>`; return; }
+    if (!r.ok) { showToast('error', 'Search failed', (r.j && r.j.error) || 'The server could not search'); return; }
     stopScanCamera();
     const area = document.getElementById('scan-camera-area');
     if (area) area.innerHTML = '';
     const isDeceased = subject === 'Deceased Person';
-    if (match) {
-      const e = match.entry;
+    if (r.j.found) {
+      const e = r.j;
       if (result) result.innerHTML = `
         <div style="padding:10px 12px;background:var(--primary-dim);border:1px solid var(--primary-border);border-radius:var(--r-md)">
           <div style="font-weight:700;color:var(--green)">✅ Possible Match — GEAMS Registered Person</div>
           <div style="margin-top:4px">${e.name} · ${e.ghCard || 'No Ghana Card on file'}</div>
           <div style="color:var(--text-muted);font-size:0.72rem">${e.phone || ''} · Face enrolled ${new Date(e.enrolledAt).toLocaleDateString()}</div>
-          <div style="color:var(--text-muted);font-size:0.68rem;margin-top:4px">Match confidence (lower = closer): ${match.distance.toFixed(3)} / ${FaceEngine.MATCH_THRESHOLD} threshold</div>
+          <div style="color:var(--text-muted);font-size:0.68rem;margin-top:4px">Match confidence (lower = closer): ${e.distance.toFixed(3)} / ${e.threshold} threshold. This search is recorded.</div>
           ${isDeceased ? `<div style="color:var(--text-muted);font-size:0.68rem;margin-top:6px;border-top:1px solid var(--border-dim);padding-top:6px">⚠️ A facial match is an investigative lead, not formal identification — treat this as a starting point for next-of-kin notification/forensic confirmation, not a final ID.</div>` : ''}
         </div>`;
       DispatchData.activityLog.unshift({ time: DispatchData.fmt(new Date()), lcrId: DispatchData.officer.controlRoomId,
         text: `<strong>Face scan</strong> (${subject}) — possible match: ${e.name} (GEAMS registered civilian)` });
       showToast('success', 'Possible Match Found', e.name);
     } else {
-      if (result) result.innerHTML = `<div style="padding:10px 12px;background:var(--bg-raised);border:1px solid var(--border-mid);border-radius:var(--r-md);color:var(--text-muted)">No match found among GEAMS registered persons. This does not check any external police or national database — only people who have enrolled Face ID in the Civilian app.${isDeceased ? ' This does not rule out identity — post-mortem changes can prevent a match even for an enrolled person.' : ''}</div>`;
+      if (result) result.innerHTML = `<div style="padding:10px 12px;background:var(--bg-raised);border:1px solid var(--border-mid);border-radius:var(--r-md);color:var(--text-muted)">No match found among GEAMS registered persons. Only people who enrolled Face ID in the Civilian app can be matched. This search is recorded.</div>`;
       DispatchData.activityLog.unshift({ time: DispatchData.fmt(new Date()), lcrId: DispatchData.officer.controlRoomId,
         text: `<strong>Face scan</strong> (${subject}) — no match among GEAMS registered persons` });
       showToast('info', 'No Match', 'Not found among GEAMS registered persons');
@@ -2921,11 +2948,13 @@ const DispatchApp = (() => {
     const ghCard = (document.getElementById('scan-ghcard')?.value || '').trim();
     const result = document.getElementById('scan-result');
     if (!ghCard) { showToast('warning', 'Enter a Ghana Card number', ''); return; }
-    const registry = await GeamsSync.getShared('registry:faces', {});
-    const hit = Object.values(registry || {}).find(e => (e.ghCard || '').toLowerCase() === ghCard.toLowerCase());
-    if (hit) {
-      if (result) result.innerHTML = `<div style="color:var(--green);font-weight:600">✅ ${hit.name} · ${hit.phone || ''}</div>`;
-      DispatchData.activityLog.unshift({ time: DispatchData.fmt(new Date()), lcrId: DispatchData.officer.controlRoomId, text: `<strong>Manual ID lookup</strong> — match: ${hit.name}` });
+    const job = DispatchData.currentJob;
+    const r = await faceApi('/api/face/lookup', { incId: job && job._syncIncId, ghCard });
+    if (r.status === 403) { if (result) result.innerHTML = `<div style="color:var(--text-muted)">${(r.j&&r.j.error)||'Not allowed'}. Open an incident assigned to you first.</div>`; return; }
+    if (!r.ok) { showToast('error', 'Lookup failed', (r.j && r.j.error) || 'The server could not look it up'); return; }
+    if (r.j.found) {
+      if (result) result.innerHTML = `<div style="color:var(--green);font-weight:600">✅ ${r.j.name} · ${r.j.phone || ''}</div><div style="color:var(--text-muted);font-size:0.68rem;margin-top:4px">This lookup is recorded.</div>`;
+      DispatchData.activityLog.unshift({ time: DispatchData.fmt(new Date()), lcrId: DispatchData.officer.controlRoomId, text: `<strong>Manual ID lookup</strong> — match: ${r.j.name}` });
     } else {
       if (result) result.innerHTML = `<div style="color:var(--text-muted)">No GEAMS record found for that Ghana Card number.</div>`;
       DispatchData.activityLog.unshift({ time: DispatchData.fmt(new Date()), lcrId: DispatchData.officer.controlRoomId, text: `<strong>Manual ID lookup</strong> — no match for ${ghCard}` });
@@ -3647,31 +3676,53 @@ const DispatchApp = (() => {
     clearTimeout(_skBroadcastTimer);
   }
 
-  function saveSketch(){
+  async function saveSketch(){
     const notes=document.getElementById('sketch-notes')?.value||'';
     const draw=window._sketchDrawCanvas;
     DispatchData.sketches=DispatchData.sketches||{};
     const dataUrl=draw?draw.toDataURL('image/png'):null;
-    DispatchData.sketches[DispatchData.currentJob.id]={notes,dataUrl,savedAt:new Date()};
+    const job=DispatchData.currentJob;
+    DispatchData.sketches[job.id]={notes,dataUrl,savedAt:new Date()};
+    let sent=false;
+    if(dataUrl&&job._syncIncId){
+      try{ const blob=await (await fetch(dataUrl)).blob(); const f=new File([blob],'scene-sketch-'+Date.now()+'.png',{type:'image/png'});
+        const r=await GeamsArchive.addFile(job._syncIncId,f,{who:'off',evType:'sketch',notes,officer:DispatchData.officer.name}); sent=!(r&&r.saved===false); }catch(e){}
+    }
     DispatchData.activityLog.unshift({time:DispatchData.fmt(new Date()),lcrId:DispatchData.officer.controlRoomId,
-      text:'<strong>Scene sketch saved &amp; synced to LCR</strong> — satellite layout + tactical annotations attached'+(notes?' · '+notes.substring(0,40):'')});
-    showToast('success','Sketch Synced to LCR','Satellite map + annotations sent to '+DispatchData.officer.controlRoomName,4000);
+      text:'<strong>Scene sketch '+(sent?'uploaded as evidence':'saved on this device only')+'</strong>'+(notes?' · '+notes.substring(0,40):'')});
+    if(sent) showToast('success','Sketch uploaded','Saved as evidence for '+DispatchData.officer.controlRoomName,4000);
+    else showToast('warning','Sketch kept on this device','It could not be uploaded (no active incident or no connection)',6000);
     closeSketch();
   }
 
   function reportEquipment() {
     openSheet('🔋 Equipment Status',`
+      <div style="font-size:0.74rem;color:var(--text-muted);margin-bottom:10px;line-height:1.5">Tick only what you have checked and found working. Unticked items are reported to the control room as a problem.</div>
       <div class="checklist">
-        ${['Vehicle operational','Radio / comms working','Body camera functional','Firearm — adequate rounds','First aid kit complete','Handcuffs available','Baton / protective gear'].map((lbl,i)=>`
-          <div class="check-item ${i!==2?'checked':''}" onclick="this.classList.toggle('checked')">
-            <div class="check-box">${i!==2?'✓':''}</div>
+        ${['Vehicle operational','Radio / comms working','Body camera functional','Firearm — adequate rounds','First aid kit complete','Handcuffs available','Baton / protective gear'].map((lbl)=>`
+          <div class="check-item" onclick="const on=this.classList.toggle('checked');this.querySelector('.check-box').textContent=on?'✓':''">
+            <div class="check-box"></div>
             <div class="check-label">${lbl}</div>
           </div>`).join('')}
       </div>
       <div class="form-group" style="margin-top:12px"><label class="form-label">Issues to Report</label>
-        <textarea class="form-textarea" rows="2" placeholder="Describe any problems..."></textarea></div>`,
+        <textarea class="form-textarea" id="eq-issues" rows="2" placeholder="Describe any problems..."></textarea></div>`,
       `<button class="btn btn-ghost" onclick="DispatchApp.closeSheet()">Cancel</button>
-       <button class="btn btn-primary btn-full" onclick="DispatchApp.showToast('success','Status Reported','Equipment report sent to station');DispatchApp.closeSheet()">📤 Send Report</button>`);
+       <button class="btn btn-primary btn-full" onclick="DispatchApp.sendEquipmentReport()">📤 Send Report</button>`);
+  }
+  async function callStation() {
+    let phone = '';
+    try { const m = await GeamsSync.getShared('registry:lcrCommanders', {}); const c = (m || {})[DispatchData.syncLcrId(DispatchData.officer.controlRoomId)]; phone = c && c.phone ? String(c.phone).replace(/[^+\d]/g, '') : ''; } catch (e) {}
+    if (phone) window.location.href = 'tel:' + phone;
+    else showToast('warning', 'No number on file', 'The commander on duty has not given a phone number. Use the chat or your radio.');
+  }
+  async function sendEquipmentReport() {
+    const items = [...document.querySelectorAll('#sheet-body .check-item, .check-item')].map(el => ({ label: (el.querySelector('.check-label') || {}).textContent || '', ok: el.classList.contains('checked') }));
+    const issues = (document.getElementById('eq-issues') || {}).value || '';
+    if (!items.length) return;
+    const ok = await GeamsOfficerSync.setEquipment({ items, issues: issues.trim().slice(0, 500), at: Date.now() });
+    if (ok) { const bad = items.filter(x => !x.ok).length; showToast(bad ? 'warning' : 'success', 'Report sent', bad ? bad + ' item' + (bad === 1 ? '' : 's') + ' reported as a problem' : 'All items reported working'); closeSheet(); }
+    else showToast('error', 'Not sent', 'You are not signed in on duty, or the server could not be reached');
   }
 
   function transferCase() {
@@ -4145,7 +4196,7 @@ const DispatchApp = (() => {
     closeScanSheet,sendOfficerAlert,captureAndMatchFace,runManualIdLookup,runPlateCheck,runPlate,logPlate,
     checkPriorCalls,interceptVehicle,confirmVictimStatus,setVictimStatus,
     toggleBodyCam,uploadEvidence,confirmUpload,evTypeChanged,evShoot,evFilePicked,viewEvidence,captureWitnessStatement,toggleAudioRec,saveWitness,
-    makeArrestRecord,confirmArrest,sketchScene,saveSketch,closeSketch,toggleSketchFullscreen,reportEquipment,
+    makeArrestRecord,confirmArrest,sketchScene,saveSketch,closeSketch,toggleSketchFullscreen,reportEquipment,sendEquipmentReport,callStation,
     transferCase,confirmTransfer,endShift,confirmEndShift,
     startGPSMovement,stopGPSMovement,startCivilianTracking,stopCivilianTracking,
     startOfficerTracking,stopOfficerTracking,requestEndLCRTracking,confirmEndLCRTracking,isOfficerTracked,
@@ -4730,35 +4781,16 @@ const ScreenComms = (() => {
       <div class="screen-header">
         <div class="screen-title">Communications</div>
         <div style="display:flex;gap:6px">
-          <button class="btn btn-sm btn-ghost" onclick="DispatchApp.showToast('info','Calling','Connecting to ${job.stationContact}...')">📞 Station</button>
-          <button class="btn btn-sm btn-cyan" onclick="DispatchApp.showToast('info','Video','Opening video call...')">📹 Video</button>
+          <button class="btn btn-sm btn-ghost" onclick="DispatchApp.callStation()">📞 Station</button>
         </div>
       </div>
       <div style="margin:12px 16px 0;padding:10px 14px;background:var(--bg-raised);border:1px solid var(--border-base);border-radius:var(--r-lg);display:flex;align-items:center;gap:10px">
         <div style="width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green);flex-shrink:0;animation:blink 2s infinite"></div>
         <div style="flex:1">
           <div style="font-size:0.78rem;font-weight:600">${job.id} — ${job.type}</div>
-          <div style="font-family:var(--font-mono);font-size:0.6rem;color:var(--text-muted)">AES-256 · Encrypted · ${job.stationId||''}</div>
+          <div style="font-family:var(--font-mono);font-size:0.6rem;color:var(--text-muted)">Shared with the control room · ${job.stationId||''}</div>
         </div>
         <span class="badge badge-resolved">LIVE</span>
-      </div>
-      <div style="margin:10px 16px 0;border-radius:var(--r-lg);overflow:hidden;border:1px solid var(--border-base);background:var(--bg-deep)">
-        <div style="display:grid;grid-template-columns:1fr 1fr;height:110px">
-          <div style="display:flex;align-items:center;justify-content:center;flex-direction:column;gap:5px;border-right:1px solid var(--border-dim)">
-            <div style="font-size:1.4rem">📱</div>
-            <div style="font-size:0.65rem;color:var(--text-muted)">Civilian Camera</div>
-            <span class="badge badge-resolved" style="font-size:0.55rem">LIVE</span>
-          </div>
-          <div style="display:flex;align-items:center;justify-content:center;flex-direction:column;gap:5px">
-            <div style="font-size:1.4rem">🏠</div>
-            <div style="font-size:0.65rem;color:var(--text-muted)">Control Room</div>
-            <span class="badge badge-resolved" style="font-size:0.55rem">CONNECTED</span>
-          </div>
-        </div>
-        <div style="display:flex;justify-content:center;gap:10px;padding:10px;border-top:1px solid var(--border-dim)">
-          ${[['🎙','Mute mic'],['📹','Toggle cam'],['⏺','Record'],['📵','End call']].map(([i,t],idx)=>`
-            <div style="width:36px;height:36px;border-radius:50%;background:${idx===3?'var(--red-dim)':'var(--bg-active)'};border:1px solid ${idx===3?'var(--red-border)':'var(--border-mid)'};display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:0.9rem" onclick="DispatchApp.showToast('info','${t}','${t} toggled')" title="${t}">${i}</div>`).join('')}
-        </div>
       </div>
       <div style="margin:10px 16px 0" class="card">
         <div class="card-header"><span>💬</span><span class="card-title">Live Chat — ${job.id}</span></div>
@@ -4778,7 +4810,7 @@ const ScreenComms = (() => {
       </div>
       <div style="margin:10px 16px 0;display:grid;grid-template-columns:1fr 1fr;gap:8px">
         <button class="btn btn-ghost btn-full btn-sm" onclick="${job.civilianPhone?`window.location.href='tel:${job.civilianPhone}'`:`DispatchApp.showToast('warning','No number','No phone number was provided for this civilian')`}">📞 Call Civilian</button>
-        <button class="btn btn-ghost btn-full btn-sm" onclick="DispatchApp.showToast('info','Use radio / phone','No station phone number is on file — use the chat above or your radio')">📞 Call Station</button>
+        <button class="btn btn-ghost btn-full btn-sm" onclick="DispatchApp.callStation()">📞 Call Station</button>
         <button class="btn btn-ghost btn-full btn-sm" onclick="DispatchApp.sendOfficerAlert('emergency','Emergency channel requested')">🆘 Alert Control Room</button>
         <button class="btn btn-ghost btn-full btn-sm" onclick="DispatchApp.captureWitnessStatement()">🎤 Record Statement</button>
       </div>`;
