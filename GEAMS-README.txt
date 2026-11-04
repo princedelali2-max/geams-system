@@ -275,23 +275,3 @@ Dispatch app
   Equipment report starts with every item unticked, and the report reaches the station through the roster. Sketch uploads as an
   evidence PNG. Call Station uses the commander's phone number. Removed: fake video call panel and the encryption claim.
 Tests: t_sweep.js (41 browser/server checks), t_sweep2.js (8), t_sweep3.js (4). They need the full set of files in one folder.
-
-
-=== PRIVACY: WHO CAN SEE WHAT (added before pilot) ===
-- Each civilian phone keeps a random secret. The server turns it into a device mark inside the sign-in token. An alert is tagged with that mark, so only the phone that raised it (and staff) can read or change it. Chat, evidence, archive and live-call data for that alert follow the same rule. Another civilian cannot list, read or alter them.
-- Alerts raised before this upgrade have no mark: their civilians will no longer see them. A civilian who signs in on a different phone will not see alerts raised from the old one.
-- "Join a nearby incident" is now done by the server and returns only a trimmed view (no names or phone numbers of other reporters).
-- Face data and the civilian directory are server-only for civilians. Phones cannot read registry:faces, registry:civilians or the officer roster. Control rooms and HQ can read the civilian directory (name, phone, Ghana Card).
-- Face checks happen on the server. Officers send a live face reading, and get back match / no match, distance and name. They never receive the stored face. Allowed only on an incident assigned to that officer (control room: its own incidents; HQ: any). Limited to 40 checks per 10 minutes. Every check (verify, search, Ghana Card lookup) is logged: GET /api/face/audit (HQ).
-- Limits: a face match is a guide, not proof. Enrolment is not tied to the Ghana Card database. Until phone verification (SMS) is switched on, civilian identities are self-declared.
-- Tests: t_privacy.js (57 server checks), t_privacy_ui.js (13 browser checks), plus t_sweep, t_sweep2, t_sweep3.
-
-=== ADDED AFTER THE PRIVACY FIX ===
-- Staff fence: officers, fire and ambulance crews can read or write evidence, chat and live-call data only for incidents of their own control room. Another station's incident is refused (403). An id the server does not know yet is allowed for writing only, so queued uploads still arrive.
-- Lockdown: when HQ lockdown refuses a change, the dispatch, fire and ambulance apps now show a red banner: "Your last update was NOT sent. Call your control room."
-- HQ: new "Face & ID checks log" button (next to Security Configuration Check) lists every face search, face verification and Ghana Card lookup, newest first.
-- Tests: t_final.js (19 checks: staff fence, lockdown banner on the three crew apps, sketch upload as evidence, HQ face log).
-- Tests added later: t_regress.js (85 checks: tokens, permission matrix, evidence seals and tamper detection, commander accounts, analytics, exports, crew sign-up), t_mutualaid.js (32 checks: fire and ambulance mutual aid across two devices on the real server), t_storage_real.js (15 checks: database, backup, restore).
-
-- Control rooms can now write only their own station's incident, intel and service maps (found by t_regress.js). Reading other stations' archives still works.
-- If HQ disables the ONLY commander account of a control room, that room falls back to passphrase-only sign-in unless GEAMS_REQUIRE_COMMANDER_ACCOUNTS=1 is set. Set it for the pilot.

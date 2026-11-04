@@ -1,0 +1,6 @@
+Third-party files served by GEAMS itself so the apps need no outside host to load:
+  leaflet/      Leaflet 1.9.4 (BSD-2-Clause), https://leafletjs.com
+  face/         face-api.js 0.22.2 (MIT) and three model files from @vladmandic/face-api (MIT)
+  fonts/        Exo 2 and Share Tech Mono (SIL Open Font License 1.1), via @fontsource
+Map pictures (tiles), place search and road routing are still online services unless you set GEAMS_TILE_URL,
+GEAMS_ROUTE_URL and GEAMS_GEOCODE_URL to your own servers.

@@ -1,0 +1,25 @@
+GEAMS: DEPLOY IN ONE GO
+
+1. Unzip this file. You get ONE folder, "geams". Everything inside belongs together:
+     geams/geams-server.js        the server (run this)
+     geams/geams-persist.js       storage and backup (your own file, unchanged)
+     geams/geams-sw.js            offline/push helper (must sit next to the HTML files)
+     geams/geams-*.html           the six apps: civilian, dispatch, fire, ambulance, station, hq
+     geams/vendor/                maps, fonts, face models (the whole folder is needed)
+     geams/GEAMS-README.txt, GEAMS-DEPLOY-CHECKLIST.txt
+     geams/tests/                 optional test scripts (not needed on the server)
+
+2. Replace your old files with these. Upload the WHOLE "geams" folder contents, keeping the structure.
+   Do not flatten it: vendor/ must stay a folder next to the HTML files.
+   Keep your own data files (geams-data.json, geams-blobs/, geams-hq-users.json, geams-secret.key, geams-backups/) and your environment settings: do not delete them.
+
+3. Restart the server:   node geams-server.js
+   (set your environment variables first: see GEAMS-DEPLOY-CHECKLIST.txt)
+
+4. Check, replacing yourserver with your address:
+     https://yourserver/vendor/leaflet/leaflet.css      shows CSS text
+     https://yourserver/vendor/geams-map.js             shows JavaScript text
+     https://yourserver/api/health                      shows {"ok":true,...}
+   Then open each app and reload it TWICE (this refreshes phones' saved copy of the app).
+
+5. Maps still grey or without zoom buttons: GEAMS-DEPLOY-CHECKLIST.txt section E.
