@@ -2,14 +2,15 @@
  * 1) Lets the Civilian app open with no signal: keeps a copy of the app and the files it loads, trying the network first (4 s).
  *    It never caches /api/ calls.
  * 2) Receives push messages from the GEAMS server so HQ alerts reach phones even when the app is closed. */
-const CACHE = 'geams-shell-v3';
+const CACHE = 'geams-shell-v4';
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(CACHE).then(c => c.add('/geams-civilian-app.html').catch(() => {})).then(() => self.skipWaiting())); });
 self.addEventListener('activate', (e) => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
 self.addEventListener('fetch', (e) => {
   const r = e.request, u = new URL(r.url);
   if (r.method !== 'GET' || u.pathname.startsWith('/api/') || !/^https?:$/.test(u.protocol)) return;
   e.respondWith((async () => {
-    const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 4000);
+    // the app's own files fall back to the saved copy after 4 s; map pictures from other servers get 25 s (slow mobile data was cutting them off, leaving grey maps)
+    const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), u.origin === self.location.origin ? 4000 : 25000);
     try {
       const res = await fetch(r, { signal: ctl.signal }); clearTimeout(t);
       if (res && (res.ok || res.type === 'opaque')) { const cp = res.clone(); caches.open(CACHE).then(c => c.put(r, cp)).catch(() => {}); }

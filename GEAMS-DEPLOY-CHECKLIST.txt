@@ -32,3 +32,14 @@ D. FIRST RUN
  4. Practise recovery once on a spare copy:  node geams-persist.js restore <backup file>  (server stopped)
  5. Try Lockdown and Rotate Tokens once, so nobody meets them for the first time in an emergency.
  6. Keep: your passphrases, GEAMS_BACKUP_PASSPHRASE and the database login somewhere safe and separate from the server.
+
+E. MAPS (if maps look grey or missing)
+ 1. Deploy the whole "vendor" folder next to the HTML files (vendor/leaflet, vendor/geams-map.js, vendor/face, vendor/fonts). Without vendor/leaflet there is no map at all.
+ 2. Map pictures come from ArcGIS (server.arcgisonline.com) and the road map from OpenStreetMap. The phone or computer needs internet access to them. When they cannot load, a note says so: "Map pictures cannot be loaded right now". Pins, positions and routes still work.
+ 3. To avoid depending on outside servers, set GEAMS_TILE_URL (and GEAMS_TILE_ATTRIBUTION), GEAMS_ROUTE_URL, GEAMS_GEOCODE_URL to your own services. The apps read them from /config.js.
+ 4. Serve over https. After updating geams-sw.js, reload the app twice so phones pick up the new service worker.
+ 5. HQ's national map starts as the stylised map. Tap "Satellite" to see the real map.
+ 6. Quick test for a grey map: on the same device, open
+    https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/7/63/63
+    A small satellite picture means the device can reach the map servers. An error or blank page means the network (firewall, data plan, DNS) blocks them: use GEAMS_TILE_URL with your own tile server.
+ 7. The map now tries plain OpenStreetMap automatically when the satellite pictures cannot load, and shows a note when neither loads within 12 seconds.

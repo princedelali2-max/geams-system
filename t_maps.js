@@ -1,0 +1,10 @@
+const {chromium}=require('playwright');const fs=require('fs');const png=fs.readFileSync('/tmp/tile.png');
+(async()=>{const br=await chromium.launch();const U='http://localhost:8088/';
+const test=async(name,handler,wait)=>{const c=await br.newContext({viewport:{width:1200,height:800}});await c.route(/arcgisonline|openstreetmap/,handler);const p=await c.newPage();await p.goto(U+'geams-hq-dashboard__1_.html');await p.waitForTimeout(1200);
+ await p.evaluate(()=>{window.__m=L.map(document.body.appendChild(Object.assign(document.createElement('div'),{id:'tm',style:'position:fixed;left:0;top:0;width:500px;height:400px;z-index:99999'})),{center:[7.9,-1],zoom:7});L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19}).addTo(window.__m)});
+ await p.waitForTimeout(wait);console.log(name,JSON.stringify(await p.evaluate(()=>({loaded:document.querySelectorAll('#tm .leaflet-tile-loaded').length,note:!!document.querySelector('#tm .geams-tile-note')}))));await c.close()};
+await test('arcgis blocked, OSM ok -> falls back',r=>/arcgis/.test(r.request().url())?r.abort():r.fulfill({status:200,contentType:'image/png',body:png}),4000);
+await test('both blocked -> note',r=>r.abort(),4000);
+await test('both hang -> note after 12s',r=>{},14000);
+await test('arcgis ok -> normal',r=>r.fulfill({status:200,contentType:'image/png',body:png}),3000);
+await br.close()})();
