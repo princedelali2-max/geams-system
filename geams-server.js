@@ -847,7 +847,7 @@ const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://x');
   const p = u.pathname;
   if (p === '/config.js') {   // settings the apps read at load; point these at your own servers to remove outside dependencies
-    const c = {}; for (const [k, e] of [['tileUrl', 'GEAMS_TILE_URL'], ['tileAttribution', 'GEAMS_TILE_ATTRIBUTION'], ['routeUrl', 'GEAMS_ROUTE_URL'], ['geocodeUrl', 'GEAMS_GEOCODE_URL']]) if (process.env[e]) c[k] = process.env[e].replace(k.endsWith('Url') && k !== 'tileUrl' ? /\/+$/ : /$^/, '');
+    const c = {}; for (const [k, e] of [['tileUrl', 'GEAMS_TILE_URL'], ['tileAttribution', 'GEAMS_TILE_ATTRIBUTION'], ['tileMaxNativeZoom', 'GEAMS_TILE_MAX_NATIVE_ZOOM'], ['routeUrl', 'GEAMS_ROUTE_URL'], ['geocodeUrl', 'GEAMS_GEOCODE_URL']]) if (process.env[e]) c[k] = process.env[e].replace(k.endsWith('Url') && k !== 'tileUrl' ? /\/+$/ : /$^/, '');
     res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-cache' });
     return res.end('window.GEAMS_CONFIG=' + JSON.stringify(c) + ';');
   }

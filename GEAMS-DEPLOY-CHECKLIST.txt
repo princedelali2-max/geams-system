@@ -43,3 +43,4 @@ E. MAPS (if maps look grey or missing)
     https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/7/63/63
     A small satellite picture means the device can reach the map servers. An error or blank page means the network (firewall, data plan, DNS) blocks them: use GEAMS_TILE_URL with your own tile server.
  7. The map now tries plain OpenStreetMap automatically when the satellite pictures cannot load, and shows a note when neither loads within 12 seconds.
+ 8. Grey map although the test link above shows a picture: Esri's satellite pictures stop at a fixed detail level, lower in many parts of Ghana, and past it the server sends plain grey tiles. The maps now stop at detail level 16 and stretch that picture instead. If it is still grey, set GEAMS_TILE_MAX_NATIVE_ZOOM=15 (or 14) on the server and reload. Zooming out with the minus button should show imagery again.

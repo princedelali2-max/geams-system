@@ -13,6 +13,9 @@
   }
   L.tileLayer = function (url, opts) {
     if (cfg.tileUrl && /arcgisonline\.com|tile\.openstreetmap\.org/.test(url)) { url = cfg.tileUrl; opts = Object.assign({}, opts, cfg.tileAttribution ? { attribution: cfg.tileAttribution } : {}); }
+    // Esri satellite pictures stop at a fixed detail level that is lower in many parts of Ghana; past it the server sends grey "map data not yet available" tiles.
+    // Stop asking for detail beyond that level and stretch the last real picture instead (set tileMaxNativeZoom in config.js to change it).
+    if (/World_Imagery/.test(url) && !cfg.tileUrl) opts = Object.assign({}, opts, { maxNativeZoom: Math.min(opts && opts.maxZoom || 19, cfg.tileMaxNativeZoom || 16) });
     var layer = orig.call(L, url, opts), bad = 0, good = 0;
     layer.on('tileload', function () { good++; if (good === 1 && layer._map && layer._map.__geamsTileNote) { layer._map.__geamsTileNote.remove(); layer._map.__geamsTileNote = null; } });
     var imagery = /World_Imagery/.test(url) && !cfg.tileUrl, fell = false;
