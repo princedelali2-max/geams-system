@@ -1100,7 +1100,7 @@ body.dfs-active { overflow:hidden; }
 
     <div class="form-group">
       <label class="form-label">Station ID</label>
-      <input class="form-input" id="login-station-id" placeholder="e.g. GH-GA-ACC-001-B9C1" autocomplete="off" onchange="StationAuth.prefillCommander()">
+      <input class="form-input" id="login-station-id" placeholder="Station ID issued by HQ" autocomplete="off" onchange="StationAuth.prefillCommander()">
     </div>
     <div class="form-group">
       <label class="form-label">Passphrase</label>
@@ -2561,6 +2561,7 @@ const StationAuth = (() => {
     if (window.GEAMS_CONFIG && window.GEAMS_CONFIG.demoStations === false) {   // real deployment: built-in demo stations are not live (never a neighbour, a target or a login choice)
       const live = new Set(Object.values(map).filter(r => r && r.id).map(r => r.id));
       STATION_DIRECTORY.forEach(x => { if (!live.has(x.id)) x.disabled = true; });
+      try { initLoginScreen(); } catch (e) {}   // the login list was drawn before the registry arrived: redraw it
     }
     recomputeJurisdictions();
     if (session && session.station && session.station.disabled) {
@@ -2627,7 +2628,10 @@ const StationAuth = (() => {
 
   function initLoginScreen() {
     const list = document.getElementById('login-demo-list');
-    if (list) {
+    const box = list && list.closest('details');
+    // A real deployment never lists station IDs on the public login screen; only the demo set does.
+    if (box) box.style.display = (window.GEAMS_CONFIG && window.GEAMS_CONFIG.demoStations === false) ? 'none' : '';
+    if (list && !(window.GEAMS_CONFIG && window.GEAMS_CONFIG.demoStations === false)) {
       list.innerHTML = STATION_DIRECTORY.filter(s => !s.disabled).map(s => `
         <div class="login-demo-row" onclick="StationAuth.fillDemo('${s.id}')">
           <span>${s.id}</span><span>${String(s.name).replace(/[<>&]/g,'')}</span>
