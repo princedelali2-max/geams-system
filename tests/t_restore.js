@@ -1,0 +1,36 @@
+// Restore drill: back up a running server, restore into a fresh folder, start a NEW server from it, check nothing was lost.
+const fs=require('fs'),{spawn,spawnSync}=require('child_process');const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+let pass=0,fail=0;const ok=(n,c,x)=>{c?pass++:fail++;console.log((c?'PASS ':'FAIL ')+n+(c?'':'  '+String(typeof x==='string'?x:JSON.stringify(x)).slice(0,300)))};
+const H='GH-VR-HOH-001-P3Q7',K='lcr:'+H+':incidents',PW='Test-Owner-Pass-1',PASSPH='drill-backup-passphrase-xyz';
+const R='/tmp/grest';fs.rmSync(R,{recursive:true,force:true});fs.mkdirSync(R+'/A',{recursive:true});fs.mkdirSync(R+'/B',{recursive:true});
+const envFor=(d,port)=>({...process.env,PORT:String(port),GEAMS_DATA:R+'/'+d+'/d.json',GEAMS_HQ_USERS:R+'/'+d+'/u.json',GEAMS_BLOBS:R+'/'+d+'/blobs',GEAMS_BACKUP_DIR:R+'/A/backups',GEAMS_BACKUP_PASSPHRASE:PASSPH,GEAMS_HQ_ADMIN_PASSWORD:PW,GEAMS_SEED_DEFAULT_STATIONS:'1',GEAMS_BACKUP_HOURS:'0',GEAMS_ESCALATE_SECS:'0'});
+const start=async(d,port)=>{const s=spawn('node',['geams-server.js'],{env:envFor(d,port),stdio:'ignore'});for(let i=0;i<40;i++){await sleep(250);try{const r=await fetch('http://localhost:'+port+'/api/health');if(r.ok)return s}catch(e){}}return s};
+const J=async(B,m,p,t,b)=>{const r=await fetch(B+p,{method:m,headers:{'Content-Type':'application/json',...(t?{Authorization:'Bearer '+t}:{})},body:b?JSON.stringify(b):undefined});let j={};try{j=await r.json()}catch(e){}return{s:r.status,j}};
+(async()=>{
+ const A='http://localhost:8220',Bu='http://localhost:8221';
+ const sa=await start('A',8220);
+ const hq=(await J(A,'POST','/api/hq/login',null,{username:'hqadmin',password:PW})).j.token;ok('server A is up and HQ can log in',!!hq);
+ const lcr=(await J(A,'POST','/api/lcr/login',null,{stationId:H,passphrase:'hohoe2024'})).j.token;
+ const now=Date.now();const rec=(id)=>({id,type:'medical',priority:'high',status:'new',location:'Market '+id,lat:7.15,lng:0.47,civilianName:'X',createdAt:new Date(now).toISOString(),source:'walk-in'});
+ let r=await J(A,'PUT','/api/kv/'+encodeURIComponent(K),lcr,{value:{R1:rec('R1'),R2:rec('R2'),R3:rec('R3')}});ok('3 alerts written on A',r.s===200,r);
+ r=await J(A,'POST','/api/backup/run',hq);ok('HQ owner takes a backup',r.s===200&&r.j.backup&&r.j.backup.encrypted,r);const name=r.j.backup&&r.j.backup.name;
+ await sleep(500);sa.kill('SIGKILL');await sleep(800);
+ const cli=(args,env)=>spawnSync('node',['geams-persist.js',...args],{env:{...envFor('B',8221),...env},encoding:'utf8'});
+ const file=R+'/A/backups/'+name;
+ let v=cli(['verify',file]);ok('verify says the backup is good',v.status===0&&/ok|valid|true/i.test(v.stdout+v.stderr),v.stdout+v.stderr);
+ v=cli(['verify',file],{GEAMS_BACKUP_PASSPHRASE:'wrong-passphrase'});ok('verify with the wrong passphrase fails, not "ok"',v.status!==0||/fail|wrong|cannot|error/i.test(v.stdout+v.stderr),v.stdout+v.stderr);
+ const bad=R+'/bad.tar.gz.enc';const buf=fs.readFileSync(file);buf[Math.floor(buf.length/2)]^=0xff;fs.writeFileSync(bad,buf);
+ v=cli(['verify',bad]);ok('a damaged backup is detected',v.status!==0||/fail|damaged|corrupt|cannot|error/i.test(v.stdout+v.stderr),v.stdout+v.stderr);
+ let rs=cli(['restore',bad]);ok('restoring a damaged backup is refused and leaves the folder empty',rs.status!==0&&!fs.existsSync(R+'/B/d.json'),rs.stdout+rs.stderr);
+ rs=cli(['restore',file]);ok('restore into a fresh folder succeeds',rs.status===0&&/restored/i.test(rs.stdout),rs.stdout+rs.stderr);
+ rs=cli(['restore',file]);ok('restoring over existing data is refused without --force',rs.status!==0&&/force/i.test(rs.stdout+rs.stderr),rs.stdout+rs.stderr);
+ const sb=await start('B',8221);
+ const hq2=(await J(Bu,'POST','/api/hq/login',null,{username:'hqadmin',password:PW})).j.token;ok('server B: HQ logs in with the same password',!!hq2);
+ ok('server B: the old HQ session is still valid (signing key restored)',(await J(Bu,'GET','/api/backup/list',hq)).s===200);
+ const lcr2=(await J(Bu,'POST','/api/lcr/login',null,{stationId:H,passphrase:'hohoe2024'})).j.token;
+ const got=(await J(Bu,'GET','/api/kv/'+encodeURIComponent(K),lcr2)).j.value||{};
+ ok('server B: all 3 alerts are back, unchanged',['R1','R2','R3'].every(k=>got[k]&&got[k].location==='Market '+k),Object.keys(got));
+ r=await J(Bu,'PUT','/api/kv/'+encodeURIComponent(K),lcr2,{value:{...got,R4:rec('R4')}});ok('server B accepts new writes',r.s===200,r);
+ sb.kill('SIGKILL');
+ console.log(fail?'FAILED '+fail:'passed all '+pass);process.exit(fail?1:0);
+})().catch(e=>{console.log('ERR',e);process.exit(2)});

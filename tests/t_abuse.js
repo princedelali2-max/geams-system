@@ -1,0 +1,38 @@
+const fs=require('fs'),{spawn}=require('child_process');const sleep=ms=>new Promise(r=>setTimeout(r,ms));let pass=0,fail=0;
+const ck=(n,c,x)=>{c?pass++:(fail++,console.log('  FAIL',n,x===undefined?'':JSON.stringify(x).slice(0,300)))};
+const B='http://localhost:8068';const J=async(m,p,t,b)=>{const r=await fetch(B+p,{method:m,headers:{'Content-Type':'application/json',...(t?{Authorization:'Bearer '+t}:{})},body:b?JSON.stringify(b):undefined});let j={};try{j=await r.json()}catch(e){}return{s:r.status,j}};
+(async()=>{const R='/tmp/gabuse';fs.rmSync(R,{recursive:true,force:true});fs.mkdirSync(R,{recursive:true});
+ const srv=spawn('node',['geams-server.js'],{env:{...process.env,PORT:'8068',GEAMS_DATA:R+'/d.json',GEAMS_HQ_USERS:R+'/u.json',GEAMS_HQ_ADMIN_PASSWORD:'Test-Owner-Pass-1',GEAMS_SEED_DEFAULT_STATIONS:'1',GEAMS_BACKUP_HOURS:'0'}});await sleep(2500);
+ const hq=(await J('POST','/api/hq/login',null,{username:'hqadmin',password:'Test-Owner-Pass-1'})).j.token,H='GH-VR-HOH-001-P3Q7',K='/api/kv/'+encodeURIComponent('lcr:'+H+':incidents');
+ await J('PUT','/api/kv/'+encodeURIComponent('registry:stations'),hq,{value:{[H]:{id:H,name:'Hohoe',region:'V',town:'x',lat:7.15,lng:0.47,jurisdictionRadiusM:3000}}});
+ const lcr=(await J('POST','/api/lcr/login',null,{stationId:H,passphrase:'hohoe2024'})).j.token;
+ const P=(await J('POST','/api/civilian/session',null,{secret:'prank'+'x'.repeat(20)})).j.token;const Q=(await J('POST','/api/civilian/session',null,{secret:'honest'+'x'.repeat(20)})).j.token;
+ const mk=(id,cid,x)=>({id,type:'medical',priority:'high',status:'new',location:'x',lat:7.15,lng:0.47,civilianId:cid,civilianName:'N'+cid,civilianPhone:'0200'+cid.slice(-4),createdAt:new Date().toISOString(),source:'civilian-app',...x});
+ for(const i of [1,2,3])await J('PUT',K,P,{value:{['P'+i]:mk('P'+i,'CIV-6001')}});
+ await J('PUT',K,Q,{value:{Q1:mk('Q1','CIV-6002')}});await J('PUT',K,Q,{value:{Q2:mk('Q2','CIV-6002')}});
+ let m=(await J('GET',K,lcr)).j.value;
+ m.P1.flagged={reason:'Suspected prank',by:'x'};m.P2.status='resolved';m.P2.resolvedAt=Date.now();m.P2.resolutionType='Unfounded — false alarm';
+ m.P3.status='resolved';m.P3.resolvedAt=Date.now();m.P3.resolutionType='Cancelled by civilian (false alarm)';m.Q1.status='resolved';m.Q1.resolvedAt=Date.now();m.Q1.resolutionType='Treated at scene';
+ ck('control room records outcomes',(await J('PUT',K,lcr,{value:m})).s===200);
+ let a=(await J('GET','/api/abuse',hq)).j;
+ const rowP=a.rows.find(x=>x.civilianId==='CIV-6001');ck('prankster counted (flag + unfounded, not self-cancel)',rowP&&rowP.falseAlarms===2&&rowP.total===3,a.rows);
+ ck('honest user not listed',!a.rows.some(x=>x.civilianId==='CIV-6002'));
+ ck('control room cannot read abuse list',(await J('GET','/api/abuse',lcr)).s===403);ck('civilian cannot',(await J('GET','/api/abuse',P)).s===403);
+ ck('civilian cannot block others',(await J('POST','/api/abuse/set',Q,{civilianId:'CIV-6001',level:'block',reason:'x'})).s===403);
+ ck('reason required',(await J('POST','/api/abuse/set',hq,{civilianId:'CIV-6001',level:'flag'})).s===400);
+ ck('bad id refused',(await J('POST','/api/abuse/set',hq,{civilianId:'../x',level:'flag',reason:'r'})).s===400);
+ // flag: alert still arrives but is marked
+ let r=await J('POST','/api/abuse/set',hq,{civilianId:'CIV-6001',level:'flag',reason:'3 pranks'});ck('flag set',r.s===200&&r.j.phones>=1,r);
+ r=await J('PUT',K,P,{value:{P4:mk('P4','CIV-6001',{notes:'help'})}});ck('flagged sender can still send',r.s===200,r);
+ m=(await J('GET',K,lcr)).j.value;ck('control room sees the warning',/SENDER FLAGGED/.test(m.P4.notes)&&/help/.test(m.P4.notes)&&m.P4.abuseFlag,m.P4);
+ const mine=(await J('GET',K,P)).j.value;ck('the sender is not shown the flag',!mine.P4.abuseFlag,mine.P4);
+ ck('honest user unaffected',(await J('PUT',K,Q,{value:{Q3:mk('Q3','CIV-6002')}})).s===200&&!(await J('GET',K,lcr)).j.value.Q3.abuseFlag);
+ // block: refused, told to call 112, even with a different civilian id on the same phone
+ await J('POST','/api/abuse/set',hq,{civilianId:'CIV-6001',level:'block',reason:'repeated'});
+ r=await J('PUT',K,P,{value:{P5:mk('P5','CIV-6001')}});ck('blocked sender refused with 112 message',r.s>=400&&/112/.test(JSON.stringify(r.j)),r);
+ r=await J('PUT',K,P,{value:{P6:mk('P6','CIV-6999')}});ck('same phone with another id is refused too',r.s>=400,r);
+ ck('block recorded in staff log',(await J('GET','/api/stafflog?action=abuse',hq)).j.items.length===2);
+ ck('raw blocks key private',(await J('GET','/api/kv/'+encodeURIComponent('registry:blocks'),hq)).s===403);
+ await J('POST','/api/abuse/set',hq,{civilianId:'CIV-6001',level:'none'});
+ ck('cleared sender can send again',(await J('PUT',K,P,{value:{P7:mk('P7','CIV-6001')}})).s===200);
+ srv.kill();console.log(`\nabuse: ${pass} passed, ${fail} failed`);process.exit(fail?1:0)})().catch(e=>{console.log('ERR',e.stack);process.exit(2)});

@@ -1174,6 +1174,8 @@ body.dfs-active { overflow:hidden; }
       <div class="nav-item" onclick="StationApp.registerComplainant()"><span class="nav-icon">🧑</span><span class="nav-label">Walk-In Register</span></div>
       <div class="nav-item" onclick="StationApp.checkHospitalCapacity()"><span class="nav-icon">🏥</span><span class="nav-label">Hospital Capacity</span></div>
       <div class="nav-item" onclick="StationApp.shiftHandover()"><span class="nav-icon">🔄</span><span class="nav-label">Shift Handover</span></div>
+      <div class="nav-item" onclick="StationApp.crewRoster()"><span class="nav-icon">👥</span><span class="nav-label">Crew Roster</span></div>
+      <div class="nav-item" onclick="GeamsBulk.open('crew')"><span class="nav-icon">📋</span><span class="nav-label">Add Crew in Bulk</span></div>
       <div class="nav-item" onclick="StationApp.logIntelligence()"><span class="nav-icon">🧠</span><span class="nav-label">Log Intelligence</span></div>
       <div class="nav-item" onclick="StationApp.testConnection()"><span class="nav-icon">🔌</span><span class="nav-label">Test Connection</span></div>
 
@@ -1186,7 +1188,7 @@ body.dfs-active { overflow:hidden; }
         <div class="sys-info-row"><span>STATION</span><span id="si-station-short" style="color:var(--primary);font-size:0.55rem">—</span></div>
         <div class="sys-info-row"><span>HQ STATUS</span><span>CONNECTED</span></div>
         <div class="sys-info-row"><span>OFFICERS</span><span id="si-officers">—</span></div>
-        <div class="sys-info-row warn"><span>SHIFT</span><span style="color:var(--gold)">DAY 06–18</span></div>
+        <div class="sys-info-row warn"><span>SHIFT</span><span id="si-shift" style="color:var(--gold)">—</span></div>
       </div>
     </div>
   </aside>
@@ -1200,11 +1202,11 @@ body.dfs-active { overflow:hidden; }
     <div class="topbar-spacer"></div>
     <div style="display:flex;gap:8px;align-items:center">
       <div class="status-pill online"><div class="dot"></div>HQ CONNECTED</div>
-      <div class="status-pill alert"><div class="dot blink"></div><span id="topbar-critical">2</span> CRITICAL</div>
+      <div class="status-pill alert"><div class="dot blink"></div><span id="topbar-critical">0</span> CRITICAL</div>
     </div>
     <div class="topbar-station-id" id="topbar-station-id">GH-GA-ACC-001-B9C1</div>
     <div class="topbar-clock" id="station-clock">--:--:-- UTC</div>
-    <div class="topbar-alert-btn" onclick="StationApp.navigate('incidents')">🔔<div class="alert-badge" id="alert-badge">2</div></div>
+    <div class="topbar-alert-btn" onclick="StationApp.navigate('incidents')">🔔<div class="alert-badge" id="alert-badge" style="display:none">0</div></div>
     <div class="topbar-user">
       <div class="user-avatar" id="topbar-user-avatar">—</div>
       <div>
@@ -2048,7 +2050,7 @@ const GeamsReplay = (() => {
         <div class="gr-card"><h4>Chat</h4><div class="gr-chat" id="gr-chat" style="max-height:260px;overflow:auto"></div></div>
         <div class="gr-card"><h4>Summary</h4><div style="font-size:12px;line-height:1.7">
           Status: <b>${esc((r.status || 'unknown').toUpperCase())}</b>${r.civilianCancelled ? ' (civilian cancelled)' : ''}<br>
-          Civilian: ${esc(r.civilianName || '—')} ${esc(r.civilianPhone || '')}${r.civilianPhone ? (r.source==='sms' ? ' <span style="font-size:0.65rem">· via text message</span>' : '') + (r.civilianVerified ? ' <span style="color:var(--green,#22c55e);font-size:0.65rem">✓ phone verified</span>' : ' <span style="color:var(--text-muted);font-size:0.65rem">(unverified)</span>') : ''}<br>
+          Civilian: ${esc(r.civilianName || '—')} ${esc(r.civilianPhone || '')}${r.civilianPhone ? (r.source==='sms' ? ' <span style="font-size:0.65rem">· via text message</span>' : r.source==='e112' ? ' <span style="font-size:0.65rem">· forwarded by 112</span>' : '') + (r.civilianVerified ? ' <span style="color:var(--green,#22c55e);font-size:0.65rem">✓ phone verified</span>' : ' <span style="color:var(--text-muted);font-size:0.65rem">(unverified)</span>') : ''}<br>
           Officer: ${esc(r.officerName || '—')} ${esc(r.officerBadge || '')}<br>
           Location: ${esc(r.location || '—')}<br>
           GPS points: ${track.civ.length} civilian · ${track.off.length} officer</div></div>
@@ -2221,14 +2223,14 @@ const GeamsStationSync = (() => {
     currentLcrId = lcrId;
     watchStops.push(GeamsSync.watch('lcr:' + lcrId + ':incidents', {}, (map) => {
       Object.values(map).forEach(rec => {
-        if (rec.source !== 'civilian-app' && rec.source !== 'sms' && rec.source !== 'walk-in') return;   // 'sms' = a text message the server turned into an incident; handled like an app alert
+        if (rec.source !== 'civilian-app' && rec.source !== 'sms' && rec.source !== 'e112' && rec.source !== 'walk-in') return;   // 'sms' = a text message the server turned into an incident; handled like an app alert
         let inc = StationData.incidents.find(i => i.id === rec.id);
         if (!inc) {
           inc = {
             id: rec.id, type: rec.type, priority: rec.priority || 'critical',
             status: 'active',
             location: rec.location, lat: rec.lat, lng: rec.lng,
-            assignedLcrId: lcrId, time: 'just now', minsAgo: 0,
+            assignedLcrId: lcrId, time: 'just now', minsAgo: 0, createdAtMs: Date.parse(rec.createdAt) || +rec.createdAt || Date.now(), civilianId: rec.civilianId, drill: !!rec.drill,
             civilian: rec.civilianName, civilianPhone: rec.civilianPhone,
             civilianLat: rec.civilianLat, civilianLng: rec.civilianLng,
             civilianTracking: rec.trackLocation !== false, officerAssigned: null,
@@ -2239,6 +2241,7 @@ const GeamsStationSync = (() => {
             `Live incident received from Civilian App — ${rec.civilianName} — ${rec.type}`, 'System');
           GeamsArchive.log(inc.id, 'lcr', 'received', 'Received at ' + StationData.station.name);
           StationData.emit('new_incident', inc);
+          try { const d = StationApp.possibleDuplicates().filter(p => p.a.id === inc.id || p.b.id === inc.id); if (d.length) { const o = d[0].a.id === inc.id ? d[0].b : d[0].a; showToast('warning', 'Possible duplicate', inc.id + ' is ' + d[0].m + ' m and ' + d[0].mins + ' min from ' + o.id + '. Check the Incidents page.', 12000); } } catch (e) {}
         } else if (rec.status === 'cancelled' && inc.status !== 'resolved' && !inc.officerAssigned && !rec.officerName) {
           // Cancelled before any officer was assigned: nothing is in the field,
           // so it can be closed straight away.
@@ -2384,6 +2387,8 @@ const GeamsStationSync = (() => {
     watchStops.push(GeamsSync.watch('lcr:' + lcrId + ':officers', {}, (map) => {
       lastRosterMap = map || {}; lastRosterSig = ''; applyRoster();
     }, 3000));
+    { const nt = setInterval(() => { try { StationApp.neighbourNotices(); } catch (e) {} }, 15000); watchStops.push(() => clearInterval(nt)); try { StationApp.neighbourNotices(); } catch (e) {} }
+    watchStops.push(GeamsSync.watch('lcr:' + lcrId + ':handovers', {}, (map) => { try { StationApp.handoversChanged(map); } catch (e) {} }, 6000));
     // Heartbeat expiry: an officer whose app closed stops changing the roster
     // record, so re-evaluate every 5 s to drop them once they go quiet.
     const rosterExpiry = setInterval(applyRoster, 5000);
@@ -2553,6 +2558,10 @@ const StationAuth = (() => {
       if (e.dynamic) { e.name = r.name; e.address = r.address || e.address; e.jurisdictionRadiusM = r.jurisdictionRadiusM || 3000; if (!e.locationVerified) { e.lat = r.lat; e.lng = r.lng; } }
       e.disabled = !!r.disabled;
     });
+    if (window.GEAMS_CONFIG && window.GEAMS_CONFIG.demoStations === false) {   // real deployment: built-in demo stations are not live (never a neighbour, a target or a login choice)
+      const live = new Set(Object.values(map).filter(r => r && r.id).map(r => r.id));
+      STATION_DIRECTORY.forEach(x => { if (!live.has(x.id)) x.disabled = true; });
+    }
     recomputeJurisdictions();
     if (session && session.station && session.station.disabled) {
       alert('HQ has disabled this control room. You have been signed out.');
@@ -3013,16 +3022,16 @@ const StationData = (() => {
     const loc = IncidentRouter.localLocationLabel(s);
     return {
       id:              'INC-'+(++incCounter),
-      type:            rnd(incTypes),
-      priority:        rnd(priorities),
-      status:          rnd(statuses),
+      type:            'Unspecified',      // never invented: every real caller supplies these
+      priority:        'medium',
+      status:          'new',
       location:        loc,
       lat:             pos.lat,
       lng:             pos.lng,
       assignedLcrId:   s.id,    // the LCR that owns this incident
-      time:            timeAgo(rndInt(1,240)),
-      minsAgo:         rndInt(1,240),
-      civilian:        rnd(civilianNames),
+      time:            'Just now',
+      minsAgo:         0,
+      civilian:        'Unknown',
       officerAssigned: null,    // never auto-assign — dispatcher must manually assign
       notes:           '',
       evidenceCount:   0,
@@ -3336,7 +3345,7 @@ const StationApp = (() => {
       case 'incidents':  StationIncidents.render();  break;
       case 'dispatch':   StationDispatch.render();   break;
       case 'comms':      StationComms.render();      break;
-      case 'officers':   StationOfficers.render(); CrewApprovals.draw(); CrewApprovals.poll(); break;
+      case 'officers':   StationOfficers.render(); CrewApprovals.draw(); CrewApprovals.poll(); CrewApprovals.loadCrews(); break;
       case 'evidence':   StationEvidence.render(); StationEvidence.loadSeals(); break;
       case 'backup':     StationBackup.render();     break;
       case 'replay':     StationReplayPage.render(); break;
@@ -3398,6 +3407,7 @@ const StationApp = (() => {
     s('kpi-critical',   k.critical);
     s('kpi-dispatched', k.dispatched);
     s('kpi-officers',   k.available + '/' + k.officers);
+    s('topbar-critical', k.critical);
     // update alert badge
     const badge = document.getElementById('alert-badge');
     if (badge) {
@@ -4056,6 +4066,19 @@ const StationApp = (() => {
     closeModal(); showToast('warning','Caller flagged',inc.id+' stays active and carries the flag');
     if(currentPage==='incidents') StationIncidents.render();
   }
+  /* Two open, real alerts close in place and time are probably one event. This only suggests; a person decides to merge. */
+  function possibleDuplicates() {
+    const rad = (x) => x * Math.PI / 180, dist = (a, b) => { const R = 6371000, dLat = rad(b.lat - a.lat), dLng = rad(b.lng - a.lng), h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2; return 2 * R * Math.asin(Math.sqrt(h)); };
+    const at = (i) => i.createdAtMs || (Date.now() - (i.minsAgo || 0) * 60000);
+    const l = StationData.incidents.filter(i => i.status !== 'resolved' && !i.drill && typeof i.lat === 'number' && typeof i.lng === 'number' && !i.mergedInto), out = [];
+    for (let x = 0; x < l.length; x++) for (let y = x + 1; y < l.length; y++) {
+      const a = l[x], b = l[y]; if (a.civilianId && a.civilianId === b.civilianId) continue;
+      const m = Math.round(dist(a, b)), mins = Math.round(Math.abs(at(a) - at(b)) / 60000);
+      if (m <= 300 && mins <= 20) out.push({ a, b, m, mins });
+    }
+    return out;
+  }
+  function mergeSuggested(keepId, dupId) { mergeIncidents(keepId); const sel = document.getElementById('mg-dup'); if (sel) sel.value = dupId; }
   function mergeIncidents(incId) {
     openModal('🔁 Merge Duplicate Incidents', `
       <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:14px;line-height:1.6">
@@ -4182,18 +4205,103 @@ const StationApp = (() => {
       <div class="form-group"><label class="form-label">Handover Notes</label>
         <textarea class="form-textarea" id="ho-notes" placeholder="Key incidents, persons of interest, ongoing operations..."></textarea></div>`,
       `<button class="btn btn-ghost btn-sm" onclick="StationApp.closeModal()">Cancel</button>
+       <button class="btn btn-ghost btn-sm" onclick="StationApp.showHandovers()">📜 Past handovers</button>
        <button class="btn btn-primary" onclick="StationApp.completeHandover()">🔄 Complete Handover</button>`);
+  }
+  /* Another control room has an alert nobody has taken and we are one of its nearest neighbours. Informational only: nothing has been moved to us. */
+  async function neighbourNotices() {
+    const t = (typeof GeamsSync !== 'undefined' && GeamsSync.token) || ''; if (!t) return;
+    let r; try { const q = await fetch(GeamsSync.base + '/api/escalations/mine', { headers: { Authorization: 'Bearer ' + t }, cache: 'no-store' }); if (!q.ok) return; r = await q.json(); } catch (e) { return; }
+    let b = document.getElementById('nb-banner'); const items = r.items || [];
+    if (!items.length) { if (b) b.remove(); return; }
+    if (!b) { b = document.createElement('div'); b.id = 'nb-banner'; b.setAttribute('role', 'alert'); b.style.cssText = 'position:fixed;top:64px;left:50%;transform:translateX(-50%);z-index:9400;max-width:520px;background:#8a4b00;color:#fff;border-radius:10px;padding:10px 14px;font:600 13px system-ui,sans-serif;box-shadow:0 2px 12px rgba(0,0,0,.5)'; document.body.appendChild(b); }
+    b.innerHTML = items.map(i => '<div style="margin:2px 0">⚠ ' + hx(i.fromStation) + ' (' + i.km + ' km) has a ' + hx(i.priority) + ' ' + hx(i.type) + ' alert nobody has taken for ' + Math.round(i.waitedSecs / 60 * 10) / 10 + ' min. ' + (i.fromPhone ? '<a style="color:#fff;text-decoration:underline" href="tel:' + hx(i.fromPhone) + '">Phone ' + hx(i.fromPhone) + '</a>' : 'No phone on file.') + '</div>').join('') + '<div style="font-weight:400;font-size:11.5px;margin-top:4px">Nothing has been moved to you. Phone them, or HQ may ask you to help.</div>';
   }
   async function completeHandover() {
     const name = (document.getElementById('ho-name')?.value || '').trim();
     if (name.length < 3 || !/\s/.test(name)) { showToast('error','Name required','Enter the incoming commander\'s full name'); return; }
     const out = StationData.station.commanderName, st = StationData.station;
-    const rec = await StationAuth.setCommander(st.id, { name, rank: document.getElementById('ho-rank').value, phone: document.getElementById('ho-phone').value });
-    st.commanderName = rec.name; st.commanderRank = rec.rank; st.shift = document.getElementById('ho-shift').value;
-    const notes = (document.getElementById('ho-notes')?.value || '').trim();
-    StationData.logActivity('SHIFT', 'HANDOVER', `Command handed from ${out} to ${rec.name} (${rec.rank}) · ${st.shift}${notes ? ' · Notes: ' + notes : ''}`, out);
-    refreshIdentity(); closeModal();
-    showToast('success','Handover recorded', rec.name + ' is now commander on duty. Partner control rooms can see this.');
+    const notes = (document.getElementById('ho-notes')?.value || '').trim(), rank = document.getElementById('ho-rank').value, shift = document.getElementById('ho-shift').value;
+    const k = StationData.getKPIs(), open = StationData.incidents.filter(i => i.status !== 'resolved' && !i.drill).slice(0, 60).map(i => ({ ref: i.id, type: i.type, status: i.status }));
+    const hid = 'HO-' + Date.now().toString(36).toUpperCase().slice(-8) + Math.random().toString(36).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 3).padEnd(3, 'X');
+    const entry = { id: hid, from: out || 'Commander', to: name, rank, shift, notes, open, snapshot: { active: k.active, dispatched: k.dispatched, resolved: k.resolved, officers: k.officers } };
+    const btn = document.querySelector('#modal-footer .btn-primary, .modal-footer .btn-primary'); if (btn) btn.disabled = true;
+    const saved = await GeamsSync.mergeShared('lcr:' + st.id + ':handovers', {}, (m) => { m = m || {}; m[hid] = entry; return m; });
+    if (btn) btn.disabled = false;
+    if (saved === false) { showToast('error','Handover not saved','There is no signal or the server refused it. Command has NOT changed. Try again.'); return; }
+    window.__geamsHandoverFiledHere = hid;
+    const rec = await StationAuth.setCommander(st.id, { name, rank, phone: document.getElementById('ho-phone').value });
+    st.commanderName = rec.name; st.commanderRank = rec.rank; st.shift = shift;
+    StationData.logActivity('SHIFT', 'HANDOVER', `Command handed from ${out} to ${rec.name} (${rec.rank}) · ${st.shift} · record ${hid}`, out);
+    refreshIdentity(); closeModal(); hideHandoverBanner();
+    showToast('success','Handover recorded', rec.name + ' is now commander on duty. The notes are saved for the incoming commander to read and confirm.');
+  }
+  const hx = (x) => String(x == null ? '' : x).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  function handoverCard(h, withRead) {
+    return '<div style="border:1px solid var(--border-mid);border-radius:8px;padding:10px 12px;margin-top:8px;font-size:0.76rem;line-height:1.5">'
+      + '<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><b>' + hx(h.from) + ' → ' + hx(h.to) + '</b><span style="color:var(--text-muted)">' + hx(new Date(h.at).toLocaleString('en-GB')) + '</span></div>'
+      + '<div style="color:var(--text-muted)">' + hx(h.rank || '') + ' · ' + hx(h.shift || '') + ' · ' + (h.snapshot ? h.snapshot.active + ' active, ' + h.snapshot.dispatched + ' dispatched, ' + h.snapshot.resolved + ' resolved, ' + h.snapshot.officers + ' officers' : '') + '</div>'
+      + (h.notes ? '<div style="margin-top:6px;white-space:pre-wrap">' + hx(h.notes) + '</div>' : '<div style="margin-top:6px;color:var(--text-muted)">No notes written.</div>')
+      + (h.open && h.open.length ? '<div style="margin-top:6px;color:var(--text-muted)">Still open then: ' + h.open.map(o => hx(o.ref) + ' (' + hx(o.type) + ', ' + hx(o.status) + ')').join(', ') + '</div>' : '')
+      + '<div style="margin-top:6px">' + (h.ackAt ? '<span style="color:var(--green)">✓ Read ' + hx(new Date(h.ackAt).toLocaleString('en-GB')) + ' by ' + hx(h.ackBy) + '</span>' : (withRead ? '<button class="btn btn-primary btn-sm" onclick="StationApp.ackHandover(\'' + hx(h.id) + '\')">✓ I have read this handover</button>' : '<span style="color:var(--gold)">Not yet marked as read</span>')) + '</div></div>';
+  }
+  async function showHandovers() {
+    const m = await GeamsSync.getShared('lcr:' + StationData.station.id + ':handovers', {}), list = Object.values(m || {}).sort((a, b) => b.at - a.at);
+    openModal('🔄 Handover notes', '<div style="font-size:0.74rem;color:var(--text-muted);line-height:1.5">Notes cannot be edited once filed. Only your control room and HQ can read them.</div>' + (list.length ? list.slice(0, 20).map(h => handoverCard(h, !h.ackAt)).join('') : '<div style="margin-top:10px;font-size:0.8rem">No handovers have been filed yet.</div>'), '<button class="btn btn-ghost btn-sm" onclick="StationApp.closeModal()">Close</button>');
+  }
+  async function ackHandover(id) {
+    const ok = await GeamsSync.mergeShared('lcr:' + StationData.station.id + ':handovers', {}, (m) => { m = m || {}; if (m[id] && !m[id].ackAt) m[id].ackAt = Date.now(); return m; });
+    if (ok === false) { showToast('error', 'Not saved', 'Could not mark it as read. Check your connection and try again.'); return; }
+    hideHandoverBanner(); showToast('success', 'Marked as read', 'The outgoing commander can see that you read it.'); showHandovers();
+  }
+  function hideHandoverBanner() { const b = document.getElementById('ho-banner'); if (b) b.remove(); }
+  function handoversChanged(map) {
+    const list = Object.values(map || {}).sort((a, b) => b.at - a.at), h = list[0];
+    if (h && h.shift && StationData.station.shift !== h.shift) { StationData.station.shift = h.shift; refreshIdentity(); }
+    if (!h || h.ackAt || window.__geamsHandoverFiledHere === h.id || Date.now() - h.at > 3 * 86400000) { hideHandoverBanner(); return; }
+    if (document.getElementById('ho-banner')) return;
+    const b = document.createElement('div'); b.id = 'ho-banner'; b.setAttribute('role', 'status');
+    b.style.cssText = 'position:fixed;top:64px;right:16px;z-index:9500;max-width:360px;background:#0b3d91;color:#fff;border-radius:10px;padding:10px 12px;font:600 13px system-ui,sans-serif;box-shadow:0 2px 12px rgba(0,0,0,.5);display:flex;gap:10px;align-items:center';
+    b.innerHTML = '<span style="flex:1">Handover notes from ' + hx(h.from) + ' are waiting.</span><button style="background:#fff;color:#0b3d91;border:0;border-radius:6px;padding:6px 10px;font-weight:700" onclick="StationApp.showHandovers()">Read</button>';
+    document.body.appendChild(b);
+  }
+
+  /* Crew roster: who is on which shift and whether they can take a job. Officers also show "signed in now" from their live heartbeat. */
+  const RSH = { day: 'Day (06–18)', night: 'Night (18–06)', off: 'Not on shift' }, RAV = { available: 'Available', break: 'On break', unavailable: 'Unavailable' };
+  const RKIND = { officer: '👮 Officer', fire: '🚒 Fire', ambulance: '🚑 Ambulance' };
+  async function crewRoster() {
+    const sid = StationData.station.id;
+    const [map, off, ro, rf, ra] = await Promise.all([GeamsSync.getShared('lcr:' + sid + ':roster', {}), GeamsSync.getShared('lcr:' + sid + ':officers', {}), GeamsSync.getShared('registry:officers', []), GeamsSync.getShared('registry:fire', []), GeamsSync.getShared('registry:ambulance', [])]);
+    const R = map || {}, live = {}; Object.values(off || {}).forEach(o => { if (o && o.badge && o.status === 'on-duty' && Date.now() - (o.lastSeen || 0) < 30000) live['officer:' + o.badge] = true; });
+    const reg = []; [['officer', ro], ['fire', rf], ['ambulance', ra]].forEach(([k, l]) => (Array.isArray(l) ? l : []).forEach(c => { if (c && c.badge && c.lcrId === sid && !R[k + ':' + c.badge]) reg.push({ id: k + ':' + c.badge, kind: k, badge: c.badge, name: c.name }); }));
+    const rows = Object.values(R).sort((a, b) => (a.kind + a.name).localeCompare(b.kind + b.name));
+    const sel = (id, f, opts, cur) => '<select class="form-select" style="padding:3px 6px;font-size:0.72rem" onchange="StationApp.rosterSet(\'' + hx(id) + '\',\'' + f + '\',this.value)">' + Object.keys(opts).map(o => '<option value="' + o + '"' + (o === cur ? ' selected' : '') + '>' + hx(opts[o]) + '</option>').join('') + '</select>';
+    const cnt = (sh) => rows.filter(r => r.shift === sh && r.avail === 'available').length;
+    openModal('👥 Crew roster',
+      '<div style="font-size:0.74rem;color:var(--text-muted);line-height:1.5;margin-bottom:8px">You set each person\'s shift. Crew can change their own availability from their app. <b>Available</b> here is what they declared, not a live location or guarantee. Officers who are signed in right now are marked ● live.</div>'
+      + '<div style="font-size:0.78rem;margin-bottom:8px">Declared available: <b>' + cnt('day') + '</b> on day shift · <b>' + cnt('night') + '</b> on night shift · ' + rows.length + ' on the roster</div>'
+      + (rows.length ? '<div style="overflow:auto"><table style="width:100%;font-size:0.74rem;border-collapse:collapse"><tr style="text-align:left;color:var(--text-muted)"><th>Name</th><th>Type</th><th>Shift</th><th>Availability</th><th>Note</th><th></th></tr>'
+        + rows.map(r => '<tr style="border-top:1px solid var(--border-mid)"><td>' + hx(r.name) + (live[r.id] ? ' <span style="color:var(--green)">● live</span>' : '') + '<div style="color:var(--text-muted);font-size:0.65rem">' + hx(r.badge) + '</div></td><td>' + hx(RKIND[r.kind] || r.kind) + '</td><td>' + sel(r.id, 'shift', RSH, r.shift) + '</td><td>' + sel(r.id, 'avail', RAV, r.avail) + '</td><td style="max-width:140px;overflow:hidden;text-overflow:ellipsis">' + hx(r.note || '') + '</td><td><button class="btn btn-ghost btn-sm" aria-label="Remove ' + hx(r.name) + ' from roster" onclick="StationApp.rosterRemove(\'' + hx(r.id) + '\')">✕</button></td></tr>').join('') + '</table></div>'
+        : '<div style="font-size:0.8rem">Nobody is on the roster yet. Add the crew who have signed up to this station.</div>')
+      + '<div style="margin-top:12px;border-top:1px solid var(--border-mid);padding-top:10px"><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:4px">Add a registered crew member</div>'
+      + (reg.length ? '<div style="display:flex;gap:6px"><select class="form-select" id="ro-add" style="flex:1">' + reg.map(c => '<option value="' + hx(c.id) + '">' + hx(RKIND[c.kind]) + ' — ' + hx(c.name) + ' (' + hx(c.badge) + ')</option>').join('') + '</select><button class="btn btn-primary btn-sm" onclick="StationApp.rosterAdd()">Add</button></div>' : '<div style="font-size:0.74rem">Everyone registered to this station is already on the roster, or nobody has registered yet.</div>') + '</div>',
+      '<button class="btn btn-ghost btn-sm" onclick="StationApp.closeModal()">Close</button>');
+    window.__rosterReg = reg;
+  }
+  async function rosterSet(id, field, val) {
+    const ok = await GeamsSync.mergeShared('lcr:' + StationData.station.id + ':roster', {}, (m) => { m = m || {}; if (m[id]) m[id][field] = val; return m; });
+    showToast(ok === false ? 'error' : 'success', ok === false ? 'Not saved' : 'Roster updated', ok === false ? 'No signal or refused. Nothing changed.' : '');
+    crewRoster();
+  }
+  async function rosterAdd() {
+    const id = document.getElementById('ro-add')?.value, c = (window.__rosterReg || []).find(x => x.id === id); if (!c) return;
+    const ok = await GeamsSync.mergeShared('lcr:' + StationData.station.id + ':roster', {}, (m) => { m = m || {}; m[id] = { id, kind: c.kind, badge: c.badge, name: c.name, shift: 'day', avail: 'available', note: '' }; return m; });
+    if (ok === false) showToast('error', 'Not saved', 'No signal or refused. Nothing changed.'); crewRoster();
+  }
+  async function rosterRemove(id) {
+    if (!confirm('Remove this person from the roster? Their account stays; they just stop appearing here.')) return;
+    const ok = await GeamsSync.mergeShared('lcr:' + StationData.station.id + ':roster', {}, (m) => { m = m || {}; delete m[id]; return m; });
+    if (ok === false) showToast('error', 'Not saved', 'No signal or refused. Nothing changed.'); crewRoster();
   }
   function refreshIdentity() { applyIdentityToChrome(); }
 
@@ -4263,6 +4371,22 @@ const StationApp = (() => {
         <select class="form-select" id="wi-off">${StationData.officers.map(o=>`<option>${esc(o.name)}</option>`).join('')||'<option>Duty officer</option>'}</select></div>`,
       `<button class="btn btn-ghost btn-sm" onclick="StationApp.closeModal()">Cancel</button>
        <button class="btn btn-primary" onclick="StationApp.submitWalkIn()">📋 Register & Create Case</button>`);
+  }
+  function startDrill() {
+    openModal('🎯 Start a drill', `<div style="font-size:0.78rem;line-height:1.5;color:var(--text-muted);margin-bottom:10px">A drill creates a clearly marked <b>[DRILL]</b> incident at this station so crews can practise. Drills are left out of response-time analytics and exports, and nobody outside GEAMS is contacted. Tell your crews it is a drill first.</div>
+      <div class="form-group"><label class="form-label">Scenario</label><select class="form-select" id="dr-type"><option>Medical emergency</option><option>Road accident</option><option>Fire</option><option>Robbery in progress</option><option>Missing person</option></select></div>
+      <div class="form-group"><label class="form-label">Where (shown to crews)</label><input class="form-input" id="dr-loc" placeholder="e.g. Market junction"></div>`,
+      `<button class="btn btn-ghost btn-sm" onclick="StationApp.closeModal()">Cancel</button><button class="btn btn-primary" onclick="StationApp.submitDrill()">🎯 Start drill</button>`);
+  }
+  function submitDrill() {
+    const st = StationData.station, id = 'INC-D' + Date.now().toString(36).toUpperCase(), loc = '[DRILL] ' + (val('dr-loc') || 'Training exercise'), type = val('dr-type');
+    const rec = { id, type, priority: 'high', status: 'active', location: loc, lat: st.lat, lng: st.lng, civilianName: 'DRILL', notes: 'DRILL: this is a training exercise, not a real emergency', source: 'walk-in', receivedBy: 'Drill', createdAt: Date.now(), drill: true };
+    const inc = StationData.makeInc(Object.assign({}, rec, { civilian: 'DRILL', time: 'Just now', minsAgo: 0, evidenceCount: 0, civilianTracking: false }));
+    StationData.incidents.unshift(inc);
+    shareInc(id, rec);
+    StationData.logActivity(id, 'RECEIVED', 'DRILL started: ' + type, st.commanderName);
+    StationData.emit('new_incident', inc);
+    closeModal(); showToast('success', 'Drill started', id + ' is marked [DRILL] for every crew', 7000);
   }
   function submitWalkIn() {
     const name=val('wi-name'), desc=val('wi-desc');
@@ -4457,6 +4581,7 @@ const StationApp = (() => {
     if (sidebarShort) sidebarShort.textContent = shortId;
     const avatar = document.getElementById('topbar-user-avatar');
     if (avatar) avatar.textContent = initials;
+    const shiftEl = document.getElementById('si-shift'); if (shiftEl) shiftEl.textContent = (s.shift || '').replace(/\s*Shift\s*/i, ' ').replace(/[()]/g, '').toUpperCase().trim() || '—';
     const userName = document.getElementById('topbar-user-name');
     if (userName) userName.textContent = s.commanderName || 'Commander';
   }
@@ -4465,17 +4590,17 @@ const StationApp = (() => {
     navigate, showToast, openModal, closeModal, updateKPIs,
     /* incident */   acceptIncident, confirmAccept, markResolved, confirmResolve,
                      escalateToHQ, confirmEscalate, addIncidentNotes,
-                     mergeIncidents, flagSuspiciousCaller,
+                     mergeIncidents, possibleDuplicates, mergeSuggested, flagSuspiciousCaller,
     /* dispatch */   assignDispatch, confirmDispatch, reassignDispatch, forwardToService,
                      requestBackup, dispatchMedicalFire, expandMedicalFireSearch,
                      confirmDispatchMedicalFire,
     /* comms */      callBackCivilian, requestScenePhoto,
     /* station */    checkHospitalCapacity, loadJurisdictionHospitals,
-                     searchOtherJurisdictionHospitals, shiftHandover, completeHandover, refreshIdentity,
+                     searchOtherJurisdictionHospitals, shiftHandover, completeHandover, refreshIdentity, showHandovers, ackHandover, handoversChanged, neighbourNotices, crewRoster, rosterSet, rosterAdd, rosterRemove,
                      stationLockdown, confirmLockdown, logIntelligence,
                      registerComplainant, printDocket, findAndPrintDocket,
                      renderDocketSearchResults, testConnection,
-                     generateStationReport, esc, confirmReassign, confirmBackupRequest, confirmScenePhoto, confirmFlag, confirmMerge, saveNotes, submitIntel, submitWalkIn, doPrintDocket, runReport, liftLockdown, printHTML, downloadText, callOfficer, exportAuditLog, downloadStationData,
+                     generateStationReport, esc, confirmReassign, confirmBackupRequest, confirmScenePhoto, confirmFlag, confirmMerge, saveNotes, submitIntel, submitWalkIn, startDrill, submitDrill, doPrintDocket, runReport, liftLockdown, printHTML, downloadText, callOfficer, exportAuditLog, downloadStationData,
     boot, confirmLogout
   };
 })();
@@ -4802,32 +4927,10 @@ const StationPlaceSearch = (() => {
     return h >>> 0;
   }
 
-  /** ER status/beds/trauma capacity is NOT available from any free public
-   *  API — it's simulated here (deterministically, per facility name) on
-   *  top of the real hospital name/location returned by queryFacility. A
-   *  production deployment would replace this with each hospital's live
-   *  bed-management system or a national capacity feed. */
-  function simulatedCapacity(name) {
-    const h = seededHash(name);
-    const busy = (h % 100) < 30;
-    const beds = busy ? 0 : 1 + (h % 8);
-    const trauma = beds === 0 ? `Wait: ${10 + (h % 3) * 10}min` : 'Available';
-    return { er: busy ? 'Busy' : 'Open', beds: `${beds} free`, trauma };
-  }
-
-  /** Same idea for fire stations: units-available is simulated on top of
-   *  a real, jurisdiction-correct station name/location. */
-  function simulatedFireStatus(name) {
-    const h = seededHash(name);
-    const unitsAvailable = 1 + (h % 4);
-    const onCall = (h % 5 === 0);
-    return { unitsAvailable, status: onCall ? 'All units on call' : `${unitsAvailable} unit${unitsAvailable>1?'s':''} available` };
-  }
-
   return {
     query, iconFor, distanceLabel, subtitleFor, attach, select, expandSearch,
     setJurisdictionOnly, buildPlaceInfoHTML, clearPlaceInfo, escapeHtml, getSelected,
-    queryFacility, simulatedCapacity, simulatedFireStatus,
+    queryFacility,
   };
 })();
 
@@ -5814,6 +5917,7 @@ const StationIncidents = (() => {
         <div class="section-line"></div>
         <div class="section-count">${StationData.incidents.length} total</div>
       </div>
+      ${(() => { const esc = (x) => String(x == null ? '' : x).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); let d = []; try { d = StationApp.possibleDuplicates(); } catch (e) {} return d.length ? '<div id="dup-banner" style="border:1px solid #f59e0b;background:rgba(245,158,11,.1);border-radius:8px;padding:8px 12px;margin-bottom:10px;font-size:0.78rem"><b>⚠ Possible duplicates</b> (open, within 300 m and 20 min of each other, different callers)' + d.slice(0, 5).map(p => '<div style="margin-top:4px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span>' + esc(p.a.id) + ' (' + esc(p.a.type) + ') and ' + esc(p.b.id) + ' (' + esc(p.b.type) + '): ' + p.m + ' m, ' + p.mins + ' min apart</span><button class="btn btn-ghost btn-sm" onclick="StationApp.mergeSuggested(\'' + esc(p.a.id) + '\',\'' + esc(p.b.id) + '\')">🔁 Review &amp; merge</button></div>').join('') + '</div>' : ''; })()}
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
         <div class="tabs">
           ${['all','critical','active','dispatched','resolved'].map(f=>`
@@ -5824,6 +5928,7 @@ const StationIncidents = (() => {
           <input type="text" placeholder="Search type, location, officer, civilian name/phone..." oninput="StationIncidents.search(this.value)">
         </div>
         <button class="btn btn-success btn-sm" onclick="StationApp.registerComplainant()">🧑 Walk-In</button>
+        <button class="btn btn-ghost btn-sm" onclick="StationApp.startDrill()">🎯 Drill</button>
         <button class="btn btn-primary btn-sm" onclick="StationApp.generateStationReport()">📊 Report</button>
       </div>
       <div class="panel" style="flex:1">
@@ -6523,7 +6628,7 @@ const DispatchTracker = (() => {
         </table>
        </div>`,
       `<button class="btn btn-ghost btn-sm" onclick="StationApp.closeModal()">Close</button>
-       <button class="btn btn-primary btn-sm" onclick="StationApp.exportActivityLog('${incId}')">📤 Download CSV</button>`);
+       <button class="btn btn-primary btn-sm" onclick="DispatchTracker.exportActivityLog('${incId}')">📤 Download CSV</button>`);
   }
 
   return {
@@ -7247,7 +7352,35 @@ const CrewApprovals = (() => {
     catch (e) { StationApp.showToast('error', 'Could not update', e.message, 6000); }
     poll();
   }
-  return { start, poll, draw, decide };
+  // ── Every crew account at this station, with a password reset for each ──
+  let crews = [];
+  async function loadCrews() {
+    const sid = StationData.station.id; const out = [];
+    for (const [kind, key] of [['officer', 'registry:officers'], ['fire', 'registry:fire'], ['ambulance', 'registry:ambulance']]) {
+      try { const l = await GeamsSync.getShared(key, []); (Array.isArray(l) ? l : []).forEach(c => { if (c && c.lcrId === sid) out.push({ kind, badge: c.badge, name: c.name, rank: c.rank, phone: c.phone }); }); } catch (e) {}
+    }
+    crews = out; drawCrews();
+  }
+  function drawCrews() {
+    const el = document.getElementById('crew-accounts'); if (!el) return;
+    if (!crews.length) { el.innerHTML = ''; return; }
+    el.innerHTML = '<div class="panel" style="margin-bottom:12px"><div class="panel-header"><span>🔑</span><span class="panel-title">Crew accounts at this station (' + crews.length + ')</span></div><div class="panel-body no-pad"><table class="data-table"><thead><tr><th>Type</th><th>Name</th><th>Badge</th><th>Phone</th><th>Password</th></tr></thead><tbody>'
+      + crews.map(c => '<tr><td>' + esc(KIND[c.kind] || c.kind) + '</td><td style="font-weight:600">' + esc(c.name) + '</td><td class="td-mono" style="color:var(--primary)">' + esc(c.badge) + '</td><td class="td-muted">' + esc(c.phone || '') + '</td><td><button class="btn btn-ghost btn-sm" onclick="CrewApprovals.confirmReset(\'' + esc(c.kind) + '\',\'' + esc(c.badge) + '\')">🔑 Reset password</button></td></tr>').join('')
+      + '</tbody></table></div></div>';
+  }
+  function confirmReset(kind, badge) {
+    const c = crews.find(x => x.kind === kind && x.badge === badge); if (!c) return;
+    StationApp.openModal('🔑 Reset password — ' + c.name, '<div style="font-size:0.8rem;line-height:1.6">This signs <b>' + esc(c.name) + '</b> out everywhere and gives them a temporary password. They must choose their own the next time they sign in.<br><br>Only do this after you have confirmed who is asking, in person or by a phone call you place yourself.</div>',
+      '<button class="btn btn-ghost" onclick="StationApp.closeModal()">Cancel</button><button class="btn btn-danger" onclick="CrewApprovals.doReset(\'' + esc(kind) + '\',\'' + esc(badge) + '\')">Reset now</button>');
+  }
+  async function doReset(kind, badge) {
+    try {
+      const j = await api('/api/lcr/unit/reset', { kind, badge });
+      StationApp.openModal('🔑 Temporary password for ' + j.name, '<div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:8px">Give this to ' + esc(j.name) + ' now. It is shown only once.</div><div style="font-family:var(--font-mono);font-size:1.6rem;font-weight:800;letter-spacing:3px;text-align:center;padding:14px;border:1px dashed var(--border-mid);border-radius:8px;user-select:all">' + esc(j.password) + '</div><div style="font-size:0.7rem;color:var(--text-muted);margin-top:8px">They enter it at sign-in and are asked to choose a new password straight away.</div>',
+        '<button class="btn btn-primary" onclick="StationApp.closeModal()">Done</button>');
+    } catch (e) { StationApp.showToast('error', 'Could not reset', e.message, 6000); }
+  }
+  return { start, poll, draw, decide, loadCrews, drawCrews, confirmReset, doReset };
 })();
 
 const StationOfficers = (() => {
@@ -7268,6 +7401,7 @@ const StationOfficers = (() => {
         </div>
       </div>
       <div id="crew-approvals"></div>
+      <div id="crew-accounts"></div>
       <div class="kpi-row">
         <div class="kpi-card green"><div class="kpi-label">Available</div><div class="kpi-value">${avail}</div><div class="kpi-sub">Ready for dispatch</div></div>
         <div class="kpi-card orange"><div class="kpi-label">Dispatched</div><div class="kpi-value">${disp}</div><div class="kpi-sub">On active duty</div></div>

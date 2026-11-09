@@ -1,0 +1,26 @@
+const { chromium } = require('playwright');const fs=require('fs'),{spawn}=require('child_process');const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+let pass=0,fail=0;const ok=(n,c,x)=>{c?pass++:fail++;console.log((c?'PASS ':'FAIL ')+n+(c?'':'  '+(x||'')))};
+const H='GH-VR-HOH-001-P3Q7';
+(async()=>{
+ const ROOT='/tmp/gsw3';fs.rmSync(ROOT,{recursive:true,force:true});fs.mkdirSync(ROOT,{recursive:true});
+ const srv=spawn('node',['geams-server.js'],{env:{...process.env,PORT:'8095',GEAMS_DATA:ROOT+'/d.json',GEAMS_HQ_USERS:ROOT+'/u.json',GEAMS_HQ_ADMIN_PASSWORD:'Test-Owner-Pass-1',GEAMS_SEED_DEFAULT_STATIONS:'1',GEAMS_BACKUP_HOURS:'0'}});await sleep(2000);
+ const B='http://localhost:8095';const tk=(await (await fetch(B+'/api/hq/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'hqadmin',password:'Test-Owner-Pass-1'})})).json()).token;
+ await fetch(B+'/api/kv/'+encodeURIComponent('registry:stations'),{method:'PUT',headers:{'Content-Type':'application/json',Authorization:'Bearer '+tk},body:JSON.stringify({value:{[H]:{id:H,name:'Hohoe Control',region:'Volta',town:'Hohoe',lat:7.15,lng:0.47,jurisdictionRadiusM:3000}}})});
+ const br=await chromium.launch();const c=await br.newContext({geolocation:{latitude:7.158,longitude:0.48},permissions:['geolocation']});await c.route(/cdnjs|unpkg|jsdelivr|tile|arcgis|openstreetmap|fonts|osrm/,r=>r.abort());
+ const C=await c.newPage();C.on('pageerror',e=>{if(!/L is not defined|reading '(addTo|on|setView|remove|classList|invalidateSize|getContainer)'/.test(e.message))console.log('PAGEERR',e.message)});
+ await C.goto(B+'/geams-civilian-app.html');await sleep(1500);
+ await C.evaluate(()=>{CivilianData.user.id='CIV1';CivilianData.user.name='Test Civ';CivilianData.user.phone='0200000000';CivilianData.user.address='Hohoe';CivilianData.user.gpsLat=7.158;CivilianData.user.gpsLng=0.48;});
+ await C.evaluate(()=>CivilianApp.submitAnonymousTip());await sleep(300);
+ ok('tip sheet no longer claims untraceable',!/cryptographically|cannot be traced/.test(await C.evaluate(()=>document.body.innerHTML)));
+ await C.evaluate(()=>{document.getElementById('tip-location').value='Market';document.getElementById('tip-details').value='Saw suspicious activity'});
+ const [fc]=await Promise.all([C.waitForEvent('filechooser'),C.evaluate(()=>document.getElementById('tip-photo-box').click())]);
+ await fc.setFiles({name:'tip.jpg',mimeType:'image/jpeg',buffer:Buffer.from('/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==','base64')});await sleep(400);
+ ok('photo box shows the chosen file',/tip\.jpg/.test(await C.evaluate(()=>document.getElementById('tip-photo-box').innerText)));
+ await C.evaluate(()=>CivilianApp.submitTip());await sleep(4500);
+ const m=await (await fetch(B+'/api/kv/'+encodeURIComponent('lcr:'+H+':incidents'),{headers:{Authorization:'Bearer '+tk}})).json();
+ const id=Object.keys(m.value||{})[0];
+ ok('tip filed as Anonymous',id&&m.value[id].civilianName==='Anonymous'&&m.value[id].civilianPhone==null,JSON.stringify(m.value||{}).slice(0,200));
+ const mm=await (await fetch(B+'/api/kv/'+encodeURIComponent('archive:'+id+':media'),{headers:{Authorization:'Bearer '+tk}})).json();
+ ok('tip photo attached as evidence',Array.isArray(mm.value)&&mm.value.length===1,JSON.stringify(mm).slice(0,200));
+ await br.close();srv.kill();console.log(`\n${pass} passed, ${fail} failed`);process.exit(fail?1:0);
+})().catch(e=>{console.log('ERR',e.message);process.exit(2)});

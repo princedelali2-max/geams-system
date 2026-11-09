@@ -275,3 +275,35 @@ Dispatch app
   Equipment report starts with every item unticked, and the report reaches the station through the roster. Sketch uploads as an
   evidence PNG. Call Station uses the commander's phone number. Removed: fake video call panel and the encryption claim.
 Tests: t_sweep.js (41 browser/server checks), t_sweep2.js (8), t_sweep3.js (4). They need the full set of files in one folder.
+
+
+=== PASSWORDS AND ACCOUNT RECOVERY ===
+Crew passwords (officers, fire, ambulance)
+- A crew member can change their own password: dispatch app (Profile screen, "Change Password"), fire and ambulance apps (key button at the top). They need the current password and a new one of at least 8 characters. Their other devices are signed out; the one they are on stays signed in.
+- Forgotten password: the control room opens Officers, finds the person under "Crew accounts at this station" and presses "Reset password". The server signs them out everywhere and shows a temporary password once. Give it to them in person or by a phone call you place yourself. At next sign-in they must choose their own password before they can continue. HQ can do the same through the same endpoint (POST /api/lcr/unit/reset).
+- A reset also clears a lock-out from too many wrong attempts. Control rooms can only reset their own station's crews. Every reset is written to the server log.
+- The fake "IT Support" phone number and email on the dispatch sign-in screen were removed. It now says to call the control room.
+
+Civilian account recovery (lost or new phone)
+- Profile > "Recovery Code (for a new phone)" makes a code (XXXXX-XXXXX-XXXXX). It is shown once; the server keeps only a scrambled copy. People are also offered one a few seconds after creating an account. Making a new code replaces the old one.
+- On a new phone: sign-in or sign-up screen > "New phone? Restore my account". Enter the account number (CIV-12345), the code and a new 4-digit PIN. The profile, Face ID and past alerts move to that phone. The old phone stops seeing them. A fresh code is issued, and the used one stops working.
+- Guessing is limited: 5 wrong codes lock that account for an hour, and 20 tries per address per hour. Wrong account and wrong code give the same message.
+- If SMS verification is on (GEAMS_REQUIRE_VERIFIED_CIVILIANS=1), a phone verified with the same number may also restore (server supports it; the app screen for that path is not built yet and is untested).
+- Limits: anyone holding the account number and code can take the account over, so people must keep it private. A person who never made a code and lost the phone cannot recover through this route; they need to register again (a control room can see the old record).
+- Tests: t_recovery.js (42 server checks), t_recovery_ui.js (45 browser checks).
+
+PRIVACY NOTICE, CONSENT AND RETENTION
+- Signup requires accepting the privacy notice (Profile > Privacy notice & my consents shows it again). Existing users see it once.
+- Face ID is optional with its own tickbox; the server stores the consent time and notice version with the face record. Withdrawing deletes the face record.
+- HQ owner > Data retention: preview, legal hold, back up then apply. Open incidents and held incidents are never touched.
+- Load and soak test: t_load.js. Pilot documents: docs/.
+
+FEEDBACK / DRILLS / OFFLINE QUEUE / LANGUAGES
+- Feedback: all apps, read by HQ. Drills: station "Drill" button. Offline queue: crew apps. Language: civilian app (Profile > Language, and a button on the sign-in screen).
+
+PILOT SUPPORT: app errors and version banner, staff action log, duplicate alert warning, false-alarm flag/block (all in HQ or the control room), restore by phone number.
+
+NEW IN THIS VERSION: display settings and screen-reader names (all apps), shift handover notes saved on the server, crew roster with self-set availability, staff-app language picker (few words translated), guided tour in every app, make-lang.js to turn filled translation sheets into language files. See GEAMS-DEPLOY-CHECKLIST.txt section K.
+
+PILOT READINESS: unanswered-alert warnings to HQ and neighbours, pilot strip and HQ pause switch, honest "sent / not sent" in the civilian app, server save-failure and damaged-file handling, deployment kit (deploy/), bulk crew and control-room setup with printable login sheets, HQ pilot report. See GEAMS-DEPLOY-CHECKLIST.txt section L.
+

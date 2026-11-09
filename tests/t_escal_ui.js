@@ -1,0 +1,35 @@
+const { chromium } = require('playwright');const fs=require('fs'),{spawn}=require('child_process');const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+let pass=0,fail=0;const ok=(n,c,x)=>{c?pass++:fail++;console.log((c?'PASS ':'FAIL ')+n+(c?'':'  '+String(typeof x==='string'?x:JSON.stringify(x)).slice(0,300)))};
+const B='http://localhost:8112',A='GH-VR-HOH-001-P3Q7',Bn='GH-VR-HO-001-J4K7';
+const J=async(m,p,t,b)=>{const r=await fetch(B+p,{method:m,headers:{'Content-Type':'application/json',...(t?{Authorization:'Bearer '+t}:{})},body:b?JSON.stringify(b):undefined});let j={};try{j=await r.json()}catch(e){}return{s:r.status,j}};
+(async()=>{const R='/tmp/gescalui';fs.rmSync(R,{recursive:true,force:true});fs.mkdirSync(R,{recursive:true});
+ const srv=spawn('node',['geams-server.js'],{env:{...process.env,PORT:'8112',GEAMS_DATA:R+'/d.json',GEAMS_HQ_USERS:R+'/u.json',GEAMS_HQ_ADMIN_PASSWORD:'Test-Owner-Pass-1',GEAMS_BACKUP_HOURS:'0',GEAMS_SEED_DEFAULT_STATIONS:'1',GEAMS_ESCALATE_SECS:'4',GEAMS_ESCALATE_OFFLINE_SECS:'4',GEAMS_ESCALATE_TICK_MS:'500'}});await sleep(2500);
+ const hq=(await J('POST','/api/hq/login',null,{username:'hqadmin',password:'Test-Owner-Pass-1'})).j.token;
+ await J('PUT','/api/kv/'+encodeURIComponent('registry:stations'),hq,{value:{[A]:{id:A,name:'Hohoe Control',region:'V',town:'Hohoe',lat:7.15,lng:0.47,phone:'0322000001',jurisdictionRadiusM:3000},[Bn]:{id:Bn,name:'Ho Control',region:'V',town:'Ho',lat:6.61,lng:0.47,phone:'0322000002',jurisdictionRadiusM:3000}}});
+ const br=await chromium.launch();const mk=async()=>{const c=await br.newContext({viewport:{width:1366,height:850}});await c.route(/cdnjs|unpkg|jsdelivr|tile|arcgis|openstreetmap|fonts/,r=>r.abort());const P=await c.newPage();P.errs=[];P.on('pageerror',e=>P.errs.push(e.message));P.on('dialog',d=>d.accept('Phoned Ho'));return P};
+ const H=await mk();await H.goto(B+'/geams-hq-dashboard__1_.html');await sleep(2500);await H.fill('#hq-user','hqadmin');await H.fill('#hq-pass','Test-Owner-Pass-1');await H.click('#hq-login-btn');await sleep(4500);
+ ok('HQ has the Unanswered alerts button',await H.evaluate(()=>/Unanswered alerts/.test(document.body.innerHTML)));
+ ok('no warning banner when nothing is waiting',!(await H.evaluate(()=>!!document.getElementById('hq-esc-banner'))));
+ const S=await mk();await S.goto(B+'/geams-station-dashboard__1_.html');await sleep(2500);await S.fill('#login-station-id',Bn);await S.fill('#login-passphrase','ho2024');await S.fill('#login-cmd-name','Ho Commander');await S.evaluate(()=>StationAuth.attemptLogin());await sleep(6000);
+ // Hohoe station never has a screen open; HQ writes an alert there
+ const tA=(await J('POST','/api/lcr/login',null,{stationId:A,passphrase:'hohoe2024'})).j.token;
+ const w=await J('PUT','/api/kv/'+encodeURIComponent('lcr:'+A+':incidents'),hq,{value:{E7:{id:'E7',type:'Fire',priority:'critical',status:'new',location:'Secret Street 5',lat:7.15,lng:0.47,civilianName:'Private Person',civilianPhone:'0201234567',createdAt:new Date().toISOString(),source:'walk-in'}}});
+ ok('(set-up) alert stored',w.s===200,w);
+ await sleep(16000);
+ const bt=await H.evaluate(()=>document.getElementById('hq-esc-banner')&&document.getElementById('hq-esc-banner').innerText);
+ ok('HQ banner appears for the waiting alert',/1 alert nobody has taken/.test(bt||''),bt);
+ await H.evaluate(()=>HqOps.escalations());await sleep(1500);
+ let t=await H.evaluate(()=>document.getElementById('modal-body').innerText),h=await H.evaluate(()=>document.getElementById('modal-body').innerHTML);
+ ok('HQ list names the station, alert, and the nearest neighbour with a call link',/Hohoe Control/.test(t)&&/Fire/.test(t)&&/Ho Control/.test(t)&&/href="tel:0322000002"/.test(h),t.slice(0,400));
+ ok('no caller details on the HQ list',!/Secret|Private|0201234567/.test(t+h));
+ await H.evaluate(()=>{[...document.querySelectorAll('#modal-body button')].find(b=>/handling/i.test(b.textContent)).click()});await sleep(1800);
+ t=await H.evaluate(()=>document.getElementById('modal-body').innerText);ok('"I am handling this" is recorded and shown with the note',/is handling it: Phoned Ho/.test(t),t.slice(0,300));
+ const nb=await S.evaluate(()=>document.getElementById('nb-banner')&&document.getElementById('nb-banner').innerText);
+ ok('the neighbouring station sees a banner with the other station\'s phone',/Hohoe Control/.test(nb||'')&&/0322000001/.test(nb)&&/Nothing has been moved to you/.test(nb),nb);
+ ok('the neighbour banner has no caller details',!/Secret|Private|0201234567/.test(nb||''));
+ // taken
+ let cur=(await J('GET','/api/kv/'+encodeURIComponent('lcr:'+A+':incidents'),hq)).j.value;cur.E7.status='active';cur.E7.officerStatus='assigned';cur.E7.officerName='X';cur.E7.officerBadge='B';await J('PUT','/api/kv/'+encodeURIComponent('lcr:'+A+':incidents'),hq,{value:cur});
+ await sleep(16000);
+ ok('banners go away once the alert is taken',!(await H.evaluate(()=>!!document.getElementById('hq-esc-banner')))&&!(await S.evaluate(()=>!!document.getElementById('nb-banner'))));
+ ok('no script errors',H.errs.length===0&&S.errs.length===0,[H.errs,S.errs]);
+ await br.close();srv.kill();console.log('\n'+pass+' passed, '+fail+' failed');process.exit(fail?1:0)})().catch(e=>{console.log('ERR',e.stack);process.exit(2)});

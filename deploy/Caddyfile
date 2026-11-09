@@ -1,0 +1,15 @@
+# Caddy gets and renews the HTTPS certificate by itself. Replace the name with yours;
+# its DNS record must already point at this server, and ports 80 and 443 must be open.
+geams.example.org {
+	encode gzip
+	reverse_proxy 127.0.0.1:8080 {
+		flush_interval -1          # keeps live updates flowing
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+	}
+	request_body {
+		max_size 25MB
+	}
+}

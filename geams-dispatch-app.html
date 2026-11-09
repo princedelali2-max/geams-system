@@ -594,7 +594,7 @@ body{background:var(--bg-void);color:var(--text-bright);font-family:var(--font-u
     </div>
     <div class="login-meta">
       <span class="login-meta-link" onclick="DispatchApp.forgotPassword()">Forgot password?</span>
-      <span class="login-meta-link" onclick="DispatchApp.contactSupport()">IT Support</span>
+      <span class="login-meta-link" onclick="DispatchApp.contactSupport()">Need help?</span>
     </div>
     <div class="login-meta" style="margin-top:4px">
       <span class="login-meta-link" style="font-weight:700" onclick="DispatchApp.showSignupForm()">👮 New officer? Register for duty</span>
@@ -999,6 +999,7 @@ const GeamsSync = (() => {
     }
     return false;
   }
+  let lastFail = null;
   async function mergeShared(key, fallback, patchFn) {
     await ready;
     if (mode === 'offline') return false;
@@ -1009,16 +1010,62 @@ const GeamsSync = (() => {
           const j = await srvGet(key);
           const next = patchFn(j.found ? j.value : fallback);
           const r = await http('/api/kv/' + encodeURIComponent(key), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: next, ifVersion: j.v }) });
-          if (r.ok) return true;
-          if (r.status !== 409) return false;
+          if (r.ok) { lastFail = null; return true; }
+          if (r.status !== 409) { lastFail = (r.status === 503 || r.status === 429 || r.status >= 500) ? 'busy' : 'refused'; return false; }
           await new Promise(res => setTimeout(res, 10 + Math.random() * 60 * (i + 1)));
-        } catch (e) { return false; }
+        } catch (e) { lastFail = 'network'; return false; }
       }
-      return false;
+      lastFail = 'busy'; return false;
     }
     try { const cur = await getShared(key, fallback); const next = patchFn(cur); await setShared(key, next); return true; }
     catch (e) { return false; }
   }
+
+  /* ── Outbox: updates made with no signal are kept on this phone and sent when the connection returns ── */
+  const OUTQ = 'geams_outq', outCbs = new Set();
+  let outBusy = false, outDropped = 0;
+  function outLoad() { try { const a = JSON.parse(localStorage.getItem(OUTQ) || '[]'); return Array.isArray(a) ? a : []; } catch (e) { return []; } }
+  function outSave(a) { try { localStorage.setItem(OUTQ, JSON.stringify(a.slice(-200))); } catch (e) {} outCbs.forEach(cb => { try { cb(a.length); } catch (e) {} }); outPill(a.length); }
+  function outPill(n) {
+    try {
+      let el = document.getElementById('geams-outbox');
+      if (!n) { if (el) el.style.display = 'none'; return; }
+      if (!el) { el = document.createElement('div'); el.id = 'geams-outbox'; el.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:74px;z-index:99998;background:#7a4b00;color:#fff;border:1px solid #fbbf24;border-radius:20px;padding:6px 14px;font:600 12px system-ui,sans-serif;box-shadow:0 2px 10px rgba(0,0,0,.5)'; document.body.appendChild(el); }
+      el.style.display = 'block'; el.textContent = '⏳ ' + n + ' update' + (n === 1 ? '' : 's') + ' saved on this phone. Sending when the signal returns.';
+    } catch (e) {}
+  }
+  const applyOp = (op) => (m) => {
+    if (op.kind === 'append') { const arr = Array.isArray(m) ? m : []; arr.push(op.entry); return arr.length > 4000 ? arr.slice(-4000) : arr; }
+    m = m || {}; if (!m[op.id]) return m; Object.keys(op.patch).forEach(k => { if (op.patch[k] !== undefined) m[op.id][k] = op.patch[k]; }); return m;
+  };
+  async function outFlush() {
+    if (outBusy) return; outBusy = true;
+    try {
+      let q = outLoad();
+      while (q.length) {
+        const op = q[0], ok = await mergeShared(op.key, op.kind === 'append' ? [] : {}, applyOp(op));
+        if (ok) { q.shift(); outSave(q); continue; }
+        if (lastFail === 'refused') { q.shift(); outDropped++; outSave(q); try { if (typeof showToast === 'function') showToast('warning', 'An update was refused', 'The server did not accept a saved update (the job may have changed). Check with your control room.', 7000); } catch (e) {} continue; }
+        break;   // no signal, locked down or busy: keep everything and try again later
+      }
+    } finally { outBusy = false; }
+  }
+  // Apply now; if the phone cannot reach the server, keep it and resend later. Returns true if sent now.
+  async function patchQueued(key, id, patch) {
+    const ok = await mergeShared(key, {}, applyOp({ kind: 'patch', id, patch }));
+    if (ok) { if (outLoad().length) outFlush(); return true; }
+    if (lastFail === 'refused') return false;
+    const q = outLoad(), last = q[q.length - 1];
+    if (last && last.kind === 'patch' && last.key === key && last.id === id) last.patch = Object.assign({}, last.patch, patch); else q.push({ kind: 'patch', key, id, patch, at: Date.now() });
+    outSave(q); return false;
+  }
+  async function appendQueued(key, entry) {
+    const ok = await mergeShared(key, [], applyOp({ kind: 'append', entry }));
+    if (ok) return true; if (lastFail === 'refused') return false;
+    const q = outLoad(); q.push({ kind: 'append', key, entry, at: Date.now() }); outSave(q); return false;
+  }
+  const outboxCount = () => outLoad().length;
+  try { window.addEventListener('online', () => setTimeout(outFlush, 500)); setInterval(() => { if (outLoad().length) outFlush(); }, 10000); setTimeout(() => outPill(outLoad().length), 1500); } catch (e) {}
   function watch(key, fallback, cb, intervalMs) {
     let stopped = false, last = null;
     const check = async () => {
@@ -1048,7 +1095,7 @@ const GeamsSync = (() => {
     try { if (url) localStorage.setItem('geams_backend', url.replace(/\/+$/, '')); else localStorage.removeItem('geams_backend'); } catch (e) {}
     location.reload();
   }
-  return { available, getShared, setShared, mergeShared, watch, ready, onStatus, setBackend, deviceId, setToken, onAuthLost, get token(){ return authToken(); },
+  return { patchQueued, appendQueued, outFlush, outboxCount, available, getShared, setShared, mergeShared, watch, ready, onStatus, setBackend, deviceId, setToken, onAuthLost, get token(){ return authToken(); },
            get mode(){ return mode; }, get base(){ return base; }, get online(){ return online; }, get devices(){ return status.devices; }, get deviceApps(){ return status.byApp; } };
 })();
 
@@ -1655,6 +1702,12 @@ const DispatchData=((  )=>{
       if(!LCR_REGISTRY[r.id]) LCR_REGISTRY[r.id]={id:r.id,name:r.name+' LCR',station:r.name,stationId:r.id,lat:r.lat,lng:r.lng,region:r.region,radiusM:r.jurisdictionRadiusM||3000,bounds:[0,0,0,0],dynamic:true};
       else if(LCR_REGISTRY[r.id].dynamic){ const l=LCR_REGISTRY[r.id]; l.name=r.name+' LCR'; l.station=r.name; l.radiusM=r.jurisdictionRadiusM||3000; }
     });
+    if(window.GEAMS_CONFIG&&window.GEAMS_CONFIG.demoStations===false){   // real deployment: the built-in demo control rooms are not live
+      const live=new Set(Object.values(map).filter(r=>r&&r.id&&!r.disabled).map(r=>r.id));
+      Object.keys(LCR_REGISTRY).forEach(id=>{ if(!live.has(id)) delete LCR_REGISTRY[id]; });
+      const sel=document.getElementById('su-lcr');
+      if(sel) sel.innerHTML='<option value="">— Select your assigned control room —</option>'+Object.values(LCR_REGISTRY).map(l=>'<option value="'+l.id+'">'+(l.station||l.name)+' — '+l.id+'</option>').join('');
+    }
     recomputeJurisdictions();
   }
   if(typeof GeamsSync!=='undefined'){
@@ -1954,7 +2007,7 @@ const GeamsDispatchSync = (() => {
     const key = 'lcr:' + DispatchData.syncLcrId(DispatchData.officer.controlRoomId) + ':incidents';
     watchStop = GeamsSync.watch(key, {}, (map) => {
       Object.values(map).forEach(rec => {
-        if (rec.source !== 'civilian-app' && rec.source !== 'sms') return;   // 'sms' = a text message the server turned into an incident; handled like an app alert
+        if (rec.source !== 'civilian-app' && rec.source !== 'sms' && rec.source !== 'e112') return;   // 'sms' = a text message the server turned into an incident; handled like an app alert
         if (rec.officerStatus !== 'assigned') return;                 // not (yet) assigned to anyone
         if (rec.officerName !== DispatchData.officer.name) return;    // assigned to a different officer
         if (injected.has(rec.id)) return;                             // already surfaced
@@ -1984,12 +2037,7 @@ const GeamsDispatchSync = (() => {
 
   function pushUpdate(incId, patch) {
     const key = 'lcr:' + DispatchData.syncLcrId(DispatchData.officer.controlRoomId) + ':incidents';
-    GeamsSync.mergeShared(key, {}, (m) => {
-      m = m || {};
-      if (!m[incId]) return m;
-      Object.keys(patch).forEach(k=>{ if(patch[k]!==undefined) m[incId][k]=patch[k]; });
-      return m;
-    });
+    GeamsSync.patchQueued(key, incId, patch);
     // permanent record for replay (position trail + status changes)
     try{
       if(patch.officerLat!=null) GeamsArchive.track(incId,'off',patch.officerLat,patch.officerLng,{eta:patch.officerETA,dist:patch.officerDistM});
@@ -2007,7 +2055,7 @@ const GeamsDispatchSync = (() => {
   }
 
   function pushChat(incId, entry) {
-    GeamsSync.mergeShared('chat:' + incId, [], (arr) => { arr = arr || []; arr.push(entry); return arr; });
+    GeamsSync.appendQueued('chat:' + incId, entry);
   }
   function watchChat(incId, cb) {
     return GeamsSync.watch('chat:' + incId, [], cb, 2000);
@@ -3998,6 +4046,7 @@ const DispatchApp = (() => {
     let j = {}; try { j = await r.json(); } catch (e) {}
     if (!r.ok) throw new Error(j.error || 'The server refused the request');
     if (j.token) GeamsSync.setToken(j.token);
+    window.__geamsMustChange = !!j.mustChange;
     return j.cred || (j.pending ? { pending: true, message: j.message } : undefined);
   }
   function allCredentials() { return MOCK_CREDENTIALS.concat(REGISTERED_CREDENTIALS); }
@@ -4099,7 +4148,7 @@ const DispatchApp = (() => {
 
     // Lockout after too many failed attempts
     if(loginAttempts>=MAX_ATTEMPTS){
-      if(genErr){genErr.textContent='Account locked after '+MAX_ATTEMPTS+' failed attempts. Contact IT Support.';genErr.style.display='block';}
+      if(genErr){genErr.textContent='Account locked after '+MAX_ATTEMPTS+' failed attempts. Ask your control room.';genErr.style.display='block';}
       if(btn){btn.disabled=true;btn.textContent='🔒 Account Locked';}
       return;
     }
@@ -4115,7 +4164,7 @@ const DispatchApp = (() => {
         if(genErr){
           genErr.textContent = remaining>0
             ? (why && !/Invalid name or password/.test(why) ? why : `Invalid name or password. ${remaining} attempt${remaining!==1?'s':''} remaining.`)
-            : 'Account locked. Contact IT Support.';
+            : 'Account locked. Ask your control room.';
           genErr.style.display='block';
         }
         document.getElementById('login-name')?.classList.add('error');
@@ -4127,6 +4176,7 @@ const DispatchApp = (() => {
       // Success — jurisdiction comes from the officer's own registered
       // profile, not a manual selection, so it can't be spoofed/mismatched.
       loginAttempts = 0;
+      if (window.__geamsMustChange) { await CrewPw.open({ forced: true, current: pass }); }
       DispatchData.setActiveOfficer(cred);
       GeamsDispatchSync.start();
       GeamsOfficerSync.goOnDuty(cred);
@@ -4156,10 +4206,10 @@ const DispatchApp = (() => {
   }
 
   function forgotPassword(){
-    showToast('info','Password Reset','Contact your station supervisor or IT Support to reset your credentials',6000);
+    showToast('info','Forgot your password?','Ask your control room to reset it. They will give you a temporary password, and you choose your own when you sign in.',9000);
   }
   function contactSupport(){
-    showToast('info','IT Support','Call: 0800-GEAMS-IT · Email: dispatch-support@moi.gov.gh',7000);
+    showToast('info','Need help?','Call your control room. They can reset your password and approve your account.',8000);
   }
 
   function boot(){
@@ -4837,7 +4887,8 @@ const ScreenComms = (() => {
   function canned(){
     const r=['En route — ETA approximately 5 minutes.','On scene now — assessing situation.','Suspect in custody — requesting transport.','Scene secure — awaiting forensics.','Request backup — scene escalating.','All clear — closing case.'];
     const input=document.getElementById('chat-input');
-    if(input)input.value=DispatchData.rnd(r);
+    // Cycles through the quick replies in order (never random). Nothing is sent until the officer presses Send, so they only send what is true.
+    window.__cannedI=((window.__cannedI||0)+1)%r.length; if(input)input.value=r[window.__cannedI];
   }
   return{render,send,canned};
 })();
@@ -4950,6 +5001,9 @@ const ScreenProfile = (() => {
       <div style="margin:10px 16px 0;display:grid;grid-template-columns:1fr 1fr;gap:8px">
         <button class="btn btn-ghost btn-full btn-sm" onclick="DispatchApp.reportEquipment()">🔋 Equipment</button>
         <button class="btn btn-ghost btn-full btn-sm" onclick="DispatchApp.transferCase()">🔄 Transfer Case</button>
+        <button class="btn btn-ghost btn-full btn-sm" onclick="CrewPw.open({})">🔑 Change Password</button>
+        <button class="btn btn-ghost btn-full btn-sm" onclick="GeamsRoster.open()">🕑 My availability</button>
+        <button class="btn btn-ghost btn-full btn-sm" onclick="Feedback.open('officer',false)">💬 Send feedback</button>
       </div>
       <div style="margin:10px 16px 0">
         <button class="btn btn-danger btn-full" onclick="DispatchApp.endShift()">🌙 End Shift / Go Off-Duty</button>
@@ -5130,4 +5184,89 @@ const PublicAlerts = (() => {
 })();
 </script>
 <script>PublicAlerts.start({ audience: 'officers', stationId: () => window.__geamsLcrId || null });</script>
+<script>
+/* Crew password dialog: change your own password, and a forced change after a control room reset. */
+const CrewPw = (() => {
+  let done = null;
+  function close() { const o = document.getElementById('crewpw-overlay'); if (o) o.remove(); if (done) { const d = done; done = null; d(true); } }
+  function open(opts) {
+    opts = opts || {};
+    return new Promise((resolve) => {
+      done = resolve;
+      const old = document.getElementById('crewpw-overlay'); if (old) old.remove();
+      const o = document.createElement('div'); o.id = 'crewpw-overlay';
+      o.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,.78);display:flex;align-items:center;justify-content:center;padding:16px';
+      const inp = 'width:100%;box-sizing:border-box;padding:11px 12px;margin-top:6px;border-radius:8px;border:1px solid #3a4a5c;background:#0b1118;color:#fff;font-size:15px';
+      o.innerHTML = '<div style="width:100%;max-width:380px;background:#101a24;border:1px solid #2c3d4f;border-radius:14px;padding:18px;color:#e6eef6;font-family:system-ui,sans-serif">'
+        + '<div style="font-size:17px;font-weight:700">🔑 ' + (opts.forced ? 'Choose your own password' : 'Change password') + '</div>'
+        + '<div style="font-size:13px;color:#9db0c3;margin:6px 0 10px;line-height:1.45">' + (opts.forced ? 'Your control room gave you a temporary password. Choose a new one that only you know before you continue.' : 'You will stay signed in on this device; other devices will be signed out.') + '</div>'
+        + (opts.current ? '' : '<label style="font-size:12px;color:#9db0c3">Current password<input id="crewpw-cur" type="password" autocomplete="current-password" style="' + inp + '"></label>')
+        + '<label style="font-size:12px;color:#9db0c3;display:block;margin-top:8px">New password (at least 8 characters)<input id="crewpw-new" type="password" autocomplete="new-password" style="' + inp + '"></label>'
+        + '<label style="font-size:12px;color:#9db0c3;display:block;margin-top:8px">Repeat new password<input id="crewpw-new2" type="password" autocomplete="new-password" style="' + inp + '"></label>'
+        + '<div id="crewpw-err" style="color:#ff8a80;font-size:13px;min-height:18px;margin-top:8px"></div>'
+        + '<div style="display:flex;gap:8px;margin-top:6px">' + (opts.forced ? '' : '<button id="crewpw-cancel" style="flex:1;padding:11px;border-radius:8px;border:1px solid #3a4a5c;background:transparent;color:#e6eef6;font-size:14px">Cancel</button>')
+        + '<button id="crewpw-save" style="flex:2;padding:11px;border-radius:8px;border:0;background:#1f9d6a;color:#fff;font-weight:700;font-size:14px">Save password</button></div></div>';
+      document.body.appendChild(o);
+      const err = (t) => { const e = document.getElementById('crewpw-err'); if (e) e.textContent = t || ''; };
+      const cancel = document.getElementById('crewpw-cancel'); if (cancel) cancel.onclick = () => { done = null; o.remove(); resolve(false); };
+      document.getElementById('crewpw-save').onclick = async () => {
+        const cur = opts.current || (document.getElementById('crewpw-cur') || {}).value || '', n1 = document.getElementById('crewpw-new').value, n2 = document.getElementById('crewpw-new2').value;
+        if (!cur) return err('Enter your current password');
+        if (n1.length < 8) return err('The new password needs at least 8 characters');
+        if (n1 !== n2) return err('The two new passwords do not match');
+        if (n1 === cur) return err('Choose a password different from the current one');
+        const b = document.getElementById('crewpw-save'); b.disabled = true; b.textContent = 'Saving…';
+        try {
+          const r = await fetch((GeamsSync.base || '') + '/api/unit/password', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (GeamsSync.token || '') }, body: JSON.stringify({ current: cur, password: n1 }) });
+          let j = {}; try { j = await r.json(); } catch (e) {}
+          if (!r.ok) { err(j.error || 'The server refused the change'); b.disabled = false; b.textContent = 'Save password'; return; }
+          if (j.token) GeamsSync.setToken(j.token);
+          window.__geamsMustChange = false;
+          try { if (typeof showToast === 'function') showToast('success', 'Password changed', 'Use the new password next time you sign in', 4000); } catch (e) {}
+          close();
+        } catch (e) { err('Could not reach the server. Check your connection.'); b.disabled = false; b.textContent = 'Save password'; }
+      };
+      setTimeout(() => { const f = document.getElementById(opts.current ? 'crewpw-new' : 'crewpw-cur'); if (f) f.focus(); }, 50);
+    });
+  }
+  return { open };
+})();
+</script>
+
+<script>
+/* Feedback: a small form any signed-in person can use. Goes to HQ only. */
+const Feedback = (() => {
+  const e2 = (x) => String(x == null ? '' : x).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  function open(app, isCivilian) {
+    const old = document.getElementById('fb-overlay'); if (old) old.remove();
+    const o = document.createElement('div'); o.id = 'fb-overlay';
+    o.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,.78);display:flex;align-items:center;justify-content:center;padding:16px';
+    const inp = 'width:100%;box-sizing:border-box;padding:10px 12px;margin-top:6px;border-radius:8px;border:1px solid #3a4a5c;background:#0b1118;color:#fff;font-size:15px;font-family:inherit';
+    o.innerHTML = '<div style="width:100%;max-width:400px;background:#101a24;border:1px solid #2c3d4f;border-radius:14px;padding:18px;color:#e6eef6;font-family:system-ui,sans-serif">'
+      + '<div style="font-size:17px;font-weight:700">💬 Send feedback</div>'
+      + '<div style="font-size:13px;color:#9db0c3;margin:6px 0 10px;line-height:1.45">Tell the GEAMS team what is wrong, what could be better, or what works. Do <b>not</b> use this for an emergency: call 112.</div>'
+      + '<select id="fb-kind" style="' + inp + '"><option value="problem">Something is wrong</option><option value="idea">An idea</option><option value="praise">Something works well</option></select>'
+      + '<textarea id="fb-text" rows="5" maxlength="1000" placeholder="What happened? What were you doing?" style="' + inp + '"></textarea>'
+      + (isCivilian ? '<label style="display:flex;gap:8px;font-size:12.5px;color:#9db0c3;margin-top:8px;align-items:flex-start"><input type="checkbox" id="fb-ok" style="margin-top:2px"><span>You may contact me about this. Your feedback is anonymous unless you tick this.</span></label><input id="fb-contact" placeholder="Phone number (only if ticked)" style="' + inp + '">' : '<div style="font-size:12px;color:#9db0c3;margin-top:8px">Staff feedback shows your sign-in name to HQ.</div>')
+      + '<div id="fb-err" style="color:#ff8a80;font-size:13px;min-height:18px;margin-top:6px"></div>'
+      + '<div style="display:flex;gap:8px"><button id="fb-cancel" style="flex:1;padding:11px;border-radius:8px;border:1px solid #3a4a5c;background:transparent;color:#cfd9e3">Cancel</button><button id="fb-send" style="flex:2;padding:11px;border-radius:8px;border:0;background:#1f9d6a;color:#fff;font-weight:700">Send</button></div></div>';
+    document.body.appendChild(o);
+    const err = (t) => { document.getElementById('fb-err').textContent = t || ''; };
+    document.getElementById('fb-cancel').onclick = () => o.remove();
+    document.getElementById('fb-send').onclick = async () => {
+      const text = document.getElementById('fb-text').value.trim(); if (text.length < 5) return err('Please write a few words');
+      const btn = document.getElementById('fb-send'); btn.disabled = true; btn.textContent = 'Sending…';
+      try {
+        const body = { kind: document.getElementById('fb-kind').value, text, app: app + ' ' + (window.GEAMS_BUILD || ''), contactOk: isCivilian ? document.getElementById('fb-ok').checked : false, contact: isCivilian ? document.getElementById('fb-contact').value : '' };
+        const r = await fetch((GeamsSync.base || '') + '/api/feedback', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (GeamsSync.token || '') }, body: JSON.stringify(body) });
+        let j = {}; try { j = await r.json(); } catch (e) {}
+        if (!r.ok) { err(j.error || 'Not sent'); btn.disabled = false; btn.textContent = 'Send'; return; }
+        o.innerHTML = '<div style="background:#101a24;border:1px solid #2c3d4f;border-radius:14px;padding:22px;color:#e6eef6;font-family:system-ui,sans-serif;max-width:340px;text-align:center"><div style="font-size:30px">✅</div><div style="font-weight:700;margin:6px 0">Thank you, sent to HQ</div><div style="font-size:12.5px;color:#9db0c3">Reference ' + e2(j.id) + '</div><button id="fb-done" style="margin-top:12px;padding:10px 24px;border-radius:8px;border:0;background:#1f9d6a;color:#fff;font-weight:700">Close</button></div>';
+        document.getElementById('fb-done').onclick = () => o.remove();
+      } catch (e) { err('Could not reach the server. Try again when you have a connection.'); btn.disabled = false; btn.textContent = 'Send'; }
+    };
+  }
+  return { open };
+})();
+</script>
 </body></html>

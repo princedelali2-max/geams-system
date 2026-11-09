@@ -7,6 +7,7 @@ GEAMS: DEPLOY IN ONE GO
      geams/geams-*.html           the six apps: civilian, dispatch, fire, ambulance, station, hq
      geams/vendor/                maps, fonts, face models (the whole folder is needed)
      geams/GEAMS-README.txt, GEAMS-DEPLOY-CHECKLIST.txt
+     geams/deploy/                server install kit (Caddy/nginx, systemd, env template, install.sh, DEPLOY.md)
      geams/tests/                 optional test scripts (not needed on the server)
 
 2. Replace your old files with these. Upload the WHOLE "geams" folder contents, keeping the structure.
@@ -23,3 +24,13 @@ GEAMS: DEPLOY IN ONE GO
    Then open each app and reload it TWICE (this refreshes phones' saved copy of the app).
 
 5. Maps still grey or without zoom buttons: GEAMS-DEPLOY-CHECKLIST.txt section E.
+
+NEW IN THIS VERSION: privacy notice and optional face consent, data retention (HQ > Data retention), load test (tests/t_load.js), and printable pilot documents in docs/ (pilot-runbook.html, quick-start-cards.html). See section G of GEAMS-DEPLOY-CHECKLIST.txt for new settings.
+
+ALSO NEW: feedback buttons, drills, crew offline queue, security self-review pack (docs/security-review.html, tests/t_security.js), language switch (Twi and Hausa drafts: have native speakers check docs/translation-sheet.csv). See section H of GEAMS-DEPLOY-CHECKLIST.txt.
+
+PILOT-SUPPORT ADDITIONS: app error reports and update banner, staff action log, duplicate-alert warning, false-alarm flag/block, restore by phone number. See section I of GEAMS-DEPLOY-CHECKLIST.txt. IMPORTANT: copy the vendor/ folder too (it now includes geams-diag.js and language files).
+
+ALSO: Content-Security-Policy on all app pages (see section J of the checklist) and checksums for bundled libraries (vendor/CHECKSUMS.txt, tests/t_vendor.js).
+
+PILOT READINESS ROUND: unanswered-alert warnings, pilot banner + pause switch, honest sent/not-sent, crash-safe saving, deployment kit (deploy/DEPLOY.md), bulk setup, HQ pilot report. See section L of GEAMS-DEPLOY-CHECKLIST.txt. NEW SETTINGS: GEAMS_BIND, GEAMS_TRUST_PROXY, GEAMS_PILOT_LABEL, GEAMS_ESCALATE_*, GEAMS_CSP_EVAL.

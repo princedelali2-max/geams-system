@@ -1722,7 +1722,7 @@ option { background: var(--bg-deep); }
 <script>
 /* ============================================================
    GEAMS HQ — data.js
-   Simulated live data engine: stations, incidents, officers
+   Live data store: stations, incidents, officers (real data only; nothing is simulated)
    ============================================================ */
 
 /* ============================================================
@@ -1987,6 +1987,8 @@ const HqAuth = (() => {
     const bad = (t) => '<div style="color:var(--red);margin-top:4px">' + t + '</div>';
     let h = '<div style="font-family:var(--font-mono);font-size:.6rem;letter-spacing:1.5px;color:var(--text-muted);margin-bottom:6px">STORAGE AND BACKUPS</div><div style="font-size:.74rem;line-height:1.55;padding:8px 10px;background:var(--bg-deep);border-radius:var(--r-sm)">';
     h += s.databaseConfigured ? 'Database: <b>' + esc(s.kind) + '</b> · ' + (s.databaseOk ? '<span style="color:var(--green)">connected</span>' : '<span style="color:var(--red)">NOT reachable</span>') + ' · ' + s.records + ' records · ' + (s.pending ? s.pending + ' waiting to be saved' : 'everything saved') + (s.lastDatabaseWrite ? ' · last save ' + ago(s.lastDatabaseWrite) : '') : 'Database: <b>none</b>';
+    if (s.diskSave && s.diskSave.ok === false) h += bad('The server <b>cannot save to disk</b> since ' + esc(s.diskSave.since || '?') + ': ' + esc(s.diskSave.lastError || '') + '. Recent changes are only in memory.');
+    if (s.diskSave && s.diskSave.startupNote) h += bad(esc(s.diskSave.startupNote));
     if (s.note) h += bad(esc(s.note));
     if (s.lastError) h += bad('Last database error: ' + esc(s.lastError));
     h += '<div style="margin-top:6px">Backups: ' + (b.everyHours ? 'automatic every ' + b.everyHours + ' h, keeping ' + b.keep : 'automatic backups are off') + ' · ' + (b.encrypted ? 'encrypted' : 'not encrypted (signing keys are left out)') + ' · ' + (b.offsite ? 'copied off the server' : 'kept on this server only') + '</div>';
@@ -2012,9 +2014,12 @@ const HqAuth = (() => {
     if (!r.ok) { GeamsApp.showToast('error', 'Download failed', ''); return; }
     const blob = await r.blob(), a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
   }
-  async function storageWarn() {
+  async function storageWarn(onlyFail) {
     if (!me || me.role !== 'admin') return; const r = await api('/api/storage/status'); if (!r.ok) return; const s = r.j;
-    if (s.databaseConfigured && s.databaseOk === false) GeamsApp.showToast('error', 'Database not reachable', 'New data is held on the server and will be saved when the database returns', 12000);
+    if (onlyFail && !(s.diskSave && s.diskSave.ok === false)) return;
+    if (s.diskSave && s.diskSave.ok === false) GeamsApp.showToast('error', 'SERVER CANNOT SAVE', 'Recent changes are not on disk (' + (s.diskSave.lastError || 'unknown error') + '). Free disk space or restart the server now.', 20000);
+    else if (s.diskSave && s.diskSave.startupNote) GeamsApp.showToast('error', 'Data file was damaged at start', s.diskSave.startupNote, 20000);
+    else if (s.databaseConfigured && s.databaseOk === false) GeamsApp.showToast('error', 'Database not reachable', 'New data is held on the server and will be saved when the database returns', 12000);
     else if (!s.databaseConfigured) GeamsApp.showToast('warn', 'No database configured', 'Data lives on this server\'s disk only. Open your account menu for details.', 9000);
     else if (s.backups.overdue) GeamsApp.showToast('warn', 'Backup overdue', 'The latest backup is older than expected', 9000);
   }
@@ -2028,6 +2033,7 @@ const HqAuth = (() => {
     await api('/api/hq/users', { method: 'POST', body: JSON.stringify({ username: name, remove: true }) }); loadOperators();
   }
   document.addEventListener('visibilitychange', () => {});
+  setInterval(() => { try { storageWarn(true); } catch (e) {} }, 60000);
   return { gate, submit, sessionExpired, signOut, openMenu, addOperator, removeOperator, runBackup, downloadBackup, storageWarn, api, user: () => (me ? me.user : 'HQ'), token };
 })();
 GeamsSync.onAuthLost(() => { try { HqAuth.sessionExpired(); } catch (e) {} });
@@ -2365,7 +2371,7 @@ const GeamsReplay = (() => {
         <div class="gr-card"><h4>Chat</h4><div class="gr-chat" id="gr-chat" style="max-height:260px;overflow:auto"></div></div>
         <div class="gr-card"><h4>Summary</h4><div style="font-size:12px;line-height:1.7">
           Status: <b>${esc((r.status || 'unknown').toUpperCase())}</b>${r.civilianCancelled ? ' (civilian cancelled)' : ''}<br>
-          Civilian: ${esc(r.civilianName || '—')} ${esc(r.civilianPhone || '')}${r.civilianPhone ? (r.source==='sms' ? ' <span style="font-size:0.65rem">· via text message</span>' : '') + (r.civilianVerified ? ' <span style="color:var(--green,#22c55e);font-size:0.65rem">✓ phone verified</span>' : ' <span style="color:var(--text-muted);font-size:0.65rem">(unverified)</span>') : ''}<br>
+          Civilian: ${esc(r.civilianName || '—')} ${esc(r.civilianPhone || '')}${r.civilianPhone ? (r.source==='sms' ? ' <span style="font-size:0.65rem">· via text message</span>' : r.source==='e112' ? ' <span style="font-size:0.65rem">· forwarded by 112</span>' : '') + (r.civilianVerified ? ' <span style="color:var(--green,#22c55e);font-size:0.65rem">✓ phone verified</span>' : ' <span style="color:var(--text-muted);font-size:0.65rem">(unverified)</span>') : ''}<br>
           Officer: ${esc(r.officerName || '—')} ${esc(r.officerBadge || '')}<br>
           Location: ${esc(r.location || '—')}<br>
           GPS points: ${track.civ.length} civilian · ${track.off.length} officer</div></div>
@@ -2650,7 +2656,7 @@ const GeamsData = (() => {
       GeamsSync.watch('lcr:' + st.id + ':incidents', {}, (map) => {
         let open = 0;
         Object.values(map).forEach(rec => {
-          if (rec.source !== 'civilian-app' && rec.source !== 'sms' && rec.source !== 'walk-in') return;   // 'sms' = a text message the server turned into an incident; 'walk-in' = registered at the station desk
+          if (rec.source !== 'civilian-app' && rec.source !== 'sms' && rec.source !== 'e112' && rec.source !== 'walk-in') return;   // 'sms' = a text message the server turned into an incident; 'walk-in' = registered at the station desk
           const closed = rec.status === 'resolved' || rec.status === 'cancelled';
           if (!closed) open++;
           let inc = incidents.find(i => i.id === rec.id);
@@ -2740,6 +2746,10 @@ const GeamsData = (() => {
       if (!st.locationVerified) { st.lat = r.lat; st.lng = r.lng; }
       if (_feedStarted) watchStation(st);
     });
+    if (window.GEAMS_CONFIG && window.GEAMS_CONFIG.demoStations === false) {   // real deployment: built-in demo stations are not real stations
+      const live = new Set(Object.values(map).filter(r => r && r.id).map(r => r.id));
+      for (let i = stations.length - 1; i >= 0; i--) if (!live.has(stations[i].id)) stations.splice(i, 1);
+    }
   }
   GeamsSync.getShared('registry:stations', {}).then(mergeDynamicStations);
   GeamsSync.watch('registry:stations', {}, (m) => { mergeDynamicStations(m); emit('station_registry_changed', m); }, 4000);
@@ -2850,11 +2860,13 @@ const GeamsData = (() => {
     const checksum = generateChecksum();
     const newId = `GH-${regionCode}-${distCode}-${stationNum}-${checksum}`;
 
-    // place near the region's centroid with a small jitter so multiple
-    // stations in the same region don't render on top of one another
+    // Use the real position from the registration when it has one. Otherwise use the region centre, flagged as ESTIMATED:
+    // no invented offset. (Alert routing relies on this position, so set the real one in the station's settings.)
+    const gm = String(p.gps || '').match(/(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)/);
     const centroid = REGION_CENTROIDS[p.region] || [7.9, -1.0];
-    const gpsLat = centroid[0] + (Math.random() - 0.5) * 0.3;
-    const gpsLon = centroid[1] + (Math.random() - 0.5) * 0.3;
+    const gpsLat = isFinite(p.lat) ? +p.lat : gm ? +gm[1] : centroid[0];
+    const gpsLon = isFinite(p.lng) ? +p.lng : gm ? +gm[2] : centroid[1];
+    const positionEstimated = !(isFinite(p.lat) || gm);
 
     const station = {
       id: newId, name: p.name, region: p.region, town: p.town,
@@ -2864,7 +2876,7 @@ const GeamsData = (() => {
       // there handles an incident, not just on the schematic overview map.
       lat: gpsLat, lng: gpsLon,
       status:'offline', officers:0, onDuty:0, incidents:0, avgResponse:0, uptime:0,
-      gpsLat, gpsLon, newlyIntegrated: true,
+      gpsLat, gpsLon, positionEstimated, newlyIntegrated: true,
     };
     stations.push(station);
     pendingStations.splice(idx, 1);
@@ -3608,7 +3620,7 @@ ${want.files ? `<h2>Attached files (${(B.media||[]).length})</h2><table><tr><th>
       // Civilian's live-location fixes. Falls back to the demo feed if
       // opened standalone (no sync detected).
       GeamsData.clearDemoIncidents();
-      GeamsData.startLiveIncidentFeed(); try { HqOps.watchLockdown(); } catch (e) {}
+      GeamsData.startLiveIncidentFeed(); try { HqOps.watchLockdown(); } catch (e) {} try { HqOps.watchEscalations(); } catch (e) {} try { HqOps.watchPilot(); } catch (e) {}
       bindLiveUpdates();
       updateKPIs();
     }, 3200);
@@ -4402,14 +4414,14 @@ const GeamsLiveView = (() => {
     return [5.6037, -0.1870];
   }
 
-  /* ── Generate realistic route waypoints between two points ── */
+  /* ── Straight-line path between two points (NOT a road route) ── */
   function buildRoute(from, to) {
     const steps = 12;
     const pts   = [];
     for (let i = 0; i <= steps; i++) {
       const t    = i / steps;
-      const lat  = from[0] + (to[0] - from[0]) * t + (Math.random() - 0.5) * 0.004 * Math.sin(t * Math.PI);
-      const lng  = from[1] + (to[1] - from[1]) * t + (Math.random() - 0.5) * 0.004 * Math.sin(t * Math.PI);
+      const lat  = from[0] + (to[0] - from[0]) * t;   // straight line, not a road route: no invented wiggle
+      const lng  = from[1] + (to[1] - from[1]) * t;
       pts.push([lat, lng]);
     }
     pts[0]          = from;   // exact start
@@ -4559,11 +4571,8 @@ const GeamsLiveView = (() => {
       ? getTownCoords(station.town + ', ' + station.region)
       : [incCoords[0] + 0.015, incCoords[1] + 0.015];
 
-    // small offset so they don't overlap
-    const officerStart  = [
-      stationCoords[0] + (Math.random() - 0.5) * 0.008,
-      stationCoords[1] + (Math.random() - 0.5) * 0.008,
-    ];
+    // The officer's real reported position if there is one, otherwise the station itself: no invented offset.
+    const officerStart  = (inc && isFinite(inc.officerLat) && isFinite(inc.officerLng) && inc.officerLat !== null) ? [+inc.officerLat, +inc.officerLng] : stationCoords;
 
     // build route
     routeCoords = buildRoute(officerStart, incCoords);
@@ -4815,17 +4824,6 @@ const GeamsLiveView = (() => {
             </div>
           </div>` : ''}
 
-          <!-- Audio bars -->
-          <div style="background:var(--bg-deep);border:1px solid var(--border-base);border-radius:var(--r-md);padding:10px">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-              <span style="font-family:var(--font-mono);font-size:0.58rem;letter-spacing:1.5px;color:var(--text-muted)">LIVE AUDIO</span>
-              <span style="display:flex;align-items:center;gap:4px;font-size:0.58rem;color:var(--green);font-family:var(--font-mono)"><div style="width:5px;height:5px;border-radius:50%;background:var(--green);animation:blink 1s infinite"></div>REC</span>
-            </div>
-            <div id="lv-audio-bars" style="display:flex;align-items:flex-end;gap:2px;height:26px">
-              ${Array.from({length:16},()=>`<div class="lv-bar" style="width:3px;height:${4+Math.random()*20}px;background:var(--cyan);border-radius:1px;opacity:0.65;transition:height 0.25s,opacity 0.25s"></div>`).join('')}
-            </div>
-            <div style="font-size:0.58rem;color:var(--text-ghost);margin-top:5px;font-family:var(--font-mono)">CH: ${incId} · AES-256</div>
-          </div>
 
           <!-- Timeline -->
           <div style="background:var(--bg-deep);border:1px solid var(--border-base);border-radius:var(--r-md);padding:10px;flex:1;overflow-y:auto">
@@ -5184,11 +5182,167 @@ const HqOps = (() => {
     body.innerHTML = '<div style="font-size:0.68rem;color:var(--text-muted);margin-bottom:8px;line-height:1.5">Every face or ID check an officer or control room made. Newest first. Stored faces are never shown here.</div>'
       + (rows.length ? rows.map(e => `<div style="padding:7px 0;border-bottom:1px solid var(--border-dim);font-size:0.76rem"><div style="display:flex;justify-content:space-between;gap:10px"><b>${esc(label[e.what] || e.what)}</b><span style="color:var(--text-muted)">${esc(new Date(e.at).toLocaleString())}</span></div><div style="color:var(--text-muted)">${esc(e.by || '')}${e.badge ? ' · ' + esc(e.badge) : ''} · incident ${esc(e.inc || '—')}${e.subject ? ' · ' + esc(e.subject) : ''}</div><div>${e.what === 'verify' ? (e.match ? '✅ match' : '❌ no match') + ' · ' + esc(e.who || '') + ' · distance ' + esc(e.distance) : e.found ? '✅ found ' + esc(e.who || '') + (e.distance != null ? ' · distance ' + esc(e.distance) : '') : '— nobody found'}</div></div>`).join('') : '<div style="color:var(--text-muted)">No checks recorded yet.</div>');
   }
+  /* Pause civilian alerts: for when the pilot is not working and an alert would not be read. Civilians are told straight away to call 112. */
+  let pilotState = null;
+  function watchPilot() {
+    GeamsSync.watch('hq:pilot', null, (v) => { pilotState = v && v.paused ? v : null; pilotBanner(); }, 3000);
+  }
+  function pilotBanner() {
+    let b = document.getElementById('hq-pilot-banner');
+    if (!pilotState) { if (b) b.remove(); return; }
+    if (!b) { b = document.createElement('div'); b.id = 'hq-pilot-banner'; b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9100;background:#b45309;color:#fff;text-align:center;font:700 12px var(--font-mono,monospace);padding:4px 8px'; document.body.appendChild(b); }
+    b.textContent = '⏸ CIVILIAN ALERTS ARE PAUSED since ' + new Date(pilotState.since).toLocaleString('en-GB') + ' by ' + pilotState.by + '. Civilians are being told to call 112.';
+  }
+  function pilotDialog() {
+    const on = !!pilotState;
+    GeamsApp.openModal(on ? '▶ Resume civilian alerts' : '⏸ Pause civilian alerts', `
+      <div style="font-size:0.8rem;line-height:1.6;color:var(--text-muted);margin-bottom:12px">${on
+        ? 'Alerts have been paused since ' + esc(new Date(pilotState.since).toLocaleString('en-GB')) + '. Resuming lets civilians send alerts to control rooms again.'
+        : 'Use this only if control rooms cannot respond (for example a power or network failure). The server will refuse every NEW civilian alert, and the civilian app will tell people straight away to call 112 instead. Alerts already sent are not touched, and control rooms, officers and HQ keep working.'}</div>
+      ${on ? '' : '<input class="form-input" id="pz-msg" maxlength="200" placeholder="Message people will see (112 is added for you)">'}`,
+      `<button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal()">Cancel</button><button class="btn ${on ? 'btn-success' : 'btn-danger'} btn-sm" onclick="HqOps.setPilot(${!on})">${on ? 'Resume alerts' : 'Pause alerts'}</button>`);
+  }
+  async function setPilot(pause) {
+    const message = pause ? (document.getElementById('pz-msg') || {}).value || '' : '';
+    if (pause && !confirm('Pause ALL civilian alerts now? People will be told to call 112.')) return;
+    const r = await HqAuth.api('/api/hq/pilot', { method: 'POST', body: JSON.stringify({ paused: pause, message }) });
+    toast(r.ok ? 'success' : 'error', r.ok ? (pause ? 'Civilian alerts paused' : 'Civilian alerts resumed') : 'Not changed', r.ok ? '' : ((r.j && r.j.error) || ''), 5000);
+    if (r.ok) { GeamsApp.closeModal(); }
+  }
+  /* Unanswered alerts: warns HQ, shows who to phone. It never moves or sends anything itself. */
+  let escTimer = null, escOpen = [];
+  function watchEscalations() {
+    if (escTimer) return; const tick = async () => { const r = await HqAuth.api('/api/escalations'); if (r.ok) { escOpen = r.j.open || []; escBanner(); } };
+    tick(); escTimer = setInterval(tick, 10000);
+  }
+  function escBanner() {
+    let b = document.getElementById('hq-esc-banner');
+    if (!escOpen.length) { if (b) b.remove(); return; }
+    if (!b) { b = document.createElement('div'); b.id = 'hq-esc-banner'; b.setAttribute('role', 'alert'); b.style.cssText = 'position:fixed;top:24px;left:50%;transform:translateX(-50%);z-index:8990;background:#b42318;color:#fff;border-radius:8px;padding:8px 14px;font:700 13px system-ui,sans-serif;box-shadow:0 2px 12px rgba(0,0,0,.5);display:flex;gap:12px;align-items:center'; document.body.appendChild(b); }
+    const off = escOpen.filter(e => e.reason === 'station_offline').length;
+    b.innerHTML = '<span>⚠ ' + escOpen.length + ' alert' + (escOpen.length > 1 ? 's' : '') + ' nobody has taken' + (off ? ' (' + off + ' at a control room with no screen open)' : '') + '</span><button style="background:#fff;color:#b42318;border:0;border-radius:6px;padding:5px 10px;font-weight:700" onclick="HqOps.escalations()">Open</button>';
+  }
+  const mins = (s) => s >= 90 ? Math.round(s / 60) + ' min' : s + ' s';
+  async function pilotReport(days) {
+    days = days || 30; let el = document.getElementById('pilot-report'); if (el) el.remove();
+    el = document.createElement('div'); el.id = 'pilot-report'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', 'Pilot report');
+    el.style.cssText = 'position:fixed;inset:0;z-index:2147483400;background:rgba(0,0,0,.75);overflow:auto;padding:16px;font-family:system-ui,sans-serif';
+    el.innerHTML = '<style>@media print{body>*:not(#pilot-report){display:none!important}#pilot-report{position:static!important;background:#fff!important;padding:0!important}#pilot-report .nop{display:none!important}#pilot-report .pr{background:#fff!important;color:#000!important;border:0!important}}</style><div class="pr" style="background:#111827;color:#e5e7eb;border:1px solid #374151;border-radius:12px;max-width:820px;margin:0 auto;padding:18px;font-size:.85rem;line-height:1.55">Loading…</div>';
+    document.body.appendChild(el); const box = el.querySelector('.pr');
+    const r = await HqAuth.api('/api/hq/pilot-report?days=' + days);
+    if (!r.ok) { box.innerHTML = '<div style="color:#fca5a5">' + esc((r.j && r.j.error) || 'Could not load the report') + '</div><button class="btn btn-ghost btn-sm" onclick="document.getElementById(\'pilot-report\').remove()">Close</button>'; return; }
+    const d = r.j, sp = d.speed.national, fmtS = (x) => x == null ? 'not measured' : x < 90 ? Math.round(x) + ' s' : (x / 60).toFixed(1) + ' min';
+    const kv = (o) => Object.keys(o).length ? '<table style="border-collapse:collapse;font-size:.8rem">' + Object.entries(o).sort((a, b) => b[1] - a[1]).map(([k, v]) => '<tr><td style="padding:1px 14px 1px 0">' + esc(k) + '</td><td><b>' + esc(v) + '</b></td></tr>').join('') + '</table>' : '<i>none</i>';
+    const h = (t) => '<h3 style="margin:16px 0 4px;font-size:1rem">' + t + '</h3>', maxH = Math.max(1, ...d.alerts.byHourUTC);
+    box.innerHTML = '<div class="nop" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px"><select id="pr-days" style="background:#1f2937;color:#fff;border:1px solid #4b5563;border-radius:6px;padding:5px"><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option></select><button class="btn btn-primary btn-sm" id="pr-print">🖨 Print / save as PDF</button><button class="btn btn-ghost btn-sm" id="pr-json">Download data (JSON)</button><button class="btn btn-ghost btn-sm" id="pr-x">Close</button></div>'
+      + '<h2 style="margin:0">GEAMS pilot report' + (d.label ? ' — ' + esc(d.label) : '') + '</h2><div style="color:#9ca3af">Last ' + d.windowDays + ' days · made ' + esc(new Date(d.generatedAt).toLocaleString()) + ' · anonymised: no names, phone numbers, addresses or free text</div>'
+      + h('Who took part') + '<div>' + d.scope.controlRoomsRegistered + ' control rooms registered · crew accounts: ' + esc(Object.entries(d.scope.crewAccounts).map(([k, v]) => v + ' ' + k).join(', ')) + ' · ' + d.scope.distinctCivilianSenders + ' different civilians sent an alert</div>'
+      + h('Alerts') + '<div><b>' + d.alerts.total + '</b> real alerts (' + d.alerts.fromCivilianApp + ' from the civilian app, ' + d.alerts.otherSources + ' other); ' + d.alerts.drillsExcluded + ' drills left out.</div><div style="display:flex;gap:30px;flex-wrap:wrap;margin-top:6px"><div>By type' + kv(d.alerts.byType) + '</div><div>By priority' + kv(d.alerts.byPriority) + '</div><div>By outcome' + kv(d.alerts.byOutcome) + '</div></div>'
+      + '<div style="margin-top:8px">By hour of day (UTC)</div><div style="display:flex;align-items:flex-end;gap:2px;height:60px">' + d.alerts.byHourUTC.map((n, i) => '<div title="' + i + ':00 — ' + n + '" style="flex:1;background:#3b82f6;height:' + Math.max(2, Math.round(n / maxH * 56)) + 'px"></div>').join('') + '</div><div style="display:flex;justify-content:space-between;font-size:.65rem;color:#9ca3af"><span>00</span><span>06</span><span>12</span><span>18</span><span>23</span></div>'
+      + h('Speed') + '<div>Time for a control room to assign someone: median <b>' + fmtS(sp.medianAssign) + '</b> (slowest 1 in 10: ' + fmtS(sp.p90Assign) + '; measured on ' + sp.measuredAssign + ' alerts).<br>Time until an officer marked arrival: median <b>' + fmtS(sp.medianArrive) + '</b> (slowest 1 in 10: ' + fmtS(sp.p90Arrive) + '; measured on ' + sp.measuredArrive + ' alerts; ' + sp.noArrival + ' had no arrival recorded).</div><div style="color:#9ca3af">Both are timed from when the server received the alert, using server clocks, not phone clocks.</div>'
+      + h('Reliability') + '<div>' + d.reliability.unansweredAlertWarnings + ' alerts waited too long and were flagged to HQ (' + d.reliability.ofWhichStationOffline + ' because the control room had no screen open; ' + d.reliability.stillOpen + ' still open). Civilian alerts paused by HQ: ' + d.reliability.pauseEvents.filter(x => x.action === 'pilot.paused').length + ' time(s). App errors reported: ' + d.reliability.appErrorsReported + '. Abuse actions: ' + d.reliability.abuseActionsInWindow + ' (blocks in force now: ' + d.reliability.abuseBlocksNow + ').</div>'
+      + h('Feedback') + '<div>' + d.feedback.total + ' messages' + (d.feedback.total ? ' — ' + esc(Object.entries(d.feedback.byKind).map(([k, v]) => v + ' ' + k).join(', ')) : '') + '. Read them in HQ; they are not reproduced here.</div>'
+      + h('What this report cannot tell you') + '<ul style="margin:4px 0 0 18px;padding:0">' + d.notMeasured.map(x => '<li>' + esc(x) + '</li>').join('') + '</ul>';
+    box.querySelector('#pr-days').value = String(days); box.querySelector('#pr-days').onchange = (e) => pilotReport(parseInt(e.target.value, 10));
+    box.querySelector('#pr-print').onclick = () => window.print(); box.querySelector('#pr-x').onclick = () => el.remove();
+    box.querySelector('#pr-json').onclick = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(d, null, 1)], { type: 'application/json' })); a.download = 'geams-pilot-report-' + d.generatedAt.slice(0, 10) + '.json'; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500); };
+  }
+  async function escalations() {
+    GeamsApp.openModal('⚠ Unanswered alerts', '<div style="font-size:0.8rem;color:var(--text-muted)">Loading…</div>', '<button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal()">Close</button>');
+    const r = await HqAuth.api('/api/escalations');
+    const body = document.getElementById('modal-body') || document.querySelector('.modal-body'); if (!body) return;
+    if (!r.ok) { body.innerHTML = '<div style="color:var(--red)">' + esc((r.j && r.j.error) || 'Could not load') + '</div>'; return; }
+    escOpen = r.j.open || []; escBanner();
+    const card = (e) => `<div style="padding:10px 0;border-bottom:1px solid var(--border-dim);font-size:0.76rem;line-height:1.55"><div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(e.type)} · ${esc(e.priority)} · ${esc(e.station)}</b><span style="color:var(--red)">waiting ${esc(mins(e.waitedSecs || 0))}</span></div>`
+      + `<div style="color:var(--text-muted)">Alert ${esc(e.ref)} · ${e.reason === 'station_offline' ? 'that control room has no screen open' : 'the control room is online but has not taken it'}</div>`
+      + (e.neighbours && e.neighbours.length ? '<div>Nearest other control rooms: ' + e.neighbours.map(n => esc(n.name) + ' (' + n.km + ' km' + (n.online ? ', online' : ', no screen open') + ')' + (n.phone ? ' <a href="tel:' + esc(n.phone) + '">📞 ' + esc(n.phone) + '</a>' : ' (no phone on file)')).join(' · ') + '</div>' : '<div style="color:var(--text-muted)">No other control room within 80 km has a location on file.</div>')
+      + (e.ackBy ? `<div style="color:var(--green)">✓ ${esc(e.ackBy)} is handling it${e.ackNote ? ': ' + esc(e.ackNote) : ''}</div>` : `<button class="btn btn-primary btn-sm" style="margin-top:4px" onclick="HqOps.escAck('${esc(e.key)}')">I am handling this</button>`) + '</div>';
+    body.innerHTML = '<div style="font-size:0.72rem;line-height:1.5;color:var(--text-muted);margin-bottom:6px">' + esc(r.j.note) + ' A warning appears after ' + esc(mins(r.j.config.secs)) + ' (or ' + esc(mins(r.j.config.offlineSecs)) + ' if the control room has no screen open). Caller details are not shown here.</div>'
+      + (escOpen.length ? escOpen.map(card).join('') : '<div style="padding:10px 0;font-size:0.8rem">No alert is waiting too long right now.</div>')
+      + (r.j.recent.length ? '<div style="margin-top:10px;font-size:0.72rem;color:var(--text-muted)">Recently cleared</div>' + r.j.recent.slice(0, 10).map(e => `<div style="font-size:0.72rem;padding:3px 0">${esc(e.station)} · ${esc(e.type)} · ${esc(e.outcome)} after ${esc(mins(e.waitedSecs || 0))}</div>`).join('') : '');
+  }
+  async function escAck(key) {
+    const note = prompt('Short note (optional), e.g. "Phoned Ho control":') || '';
+    const r = await HqAuth.api('/api/escalations/ack', { method: 'POST', body: JSON.stringify({ key, note }) });
+    toast(r.ok ? 'success' : 'error', r.ok ? 'Recorded' : 'Not saved', r.ok ? 'Others can see you are handling it.' : ((r.j && r.j.error) || ''), 4000); escalations();
+  }
+  async function abuse() {
+    GeamsApp.openModal('🚫 False alarms & abuse', '<div style="font-size:0.8rem;color:var(--text-muted)">Loading…</div>', '<button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal()">Close</button>');
+    const r = await HqAuth.api('/api/abuse');
+    const body = document.getElementById('modal-body') || document.querySelector('.modal-body'); if (!body) return;
+    if (!r.ok) { body.innerHTML = '<div style="color:var(--red)">' + esc((r.j && r.j.error) || 'Could not load') + '</div>'; return; }
+    body.innerHTML = '<div style="font-size:0.72rem;line-height:1.5;color:var(--text-muted);margin-bottom:8px">Last ' + r.j.days + ' days. ' + esc(r.j.note) + '<br><b>Flag</b> = alerts still arrive, marked "verify by phone first". <b>Block</b> = alerts from that person\'s phone are refused and they are told to call 112. A block can cost a life if the person has a real emergency: use it only for repeated, deliberate abuse, and review it.</div>'
+      + (r.j.rows.length ? r.j.rows.map(x => `<div style="padding:8px 0;border-bottom:1px solid var(--border-dim);font-size:0.76rem"><div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(x.civilianId)} · ${esc(x.name || '')}</b><span>${x.falseAlarms} false of ${x.total}</span></div><div style="font-size:0.68rem;color:var(--text-muted)">${esc(x.phone || '')} · last alert ${x.last ? new Date(x.last).toLocaleDateString() : '?'}${x.level ? ' · <b style="color:#f59e0b">' + esc(x.level.toUpperCase()) + '</b>: ' + esc(x.reason || '') : ''}</div><div style="margin-top:4px;display:flex;gap:6px"><button class="btn btn-ghost btn-sm" onclick="HqOps.abuseSet('${esc(x.civilianId)}','flag')">⚠ Flag</button><button class="btn btn-danger btn-sm" onclick="HqOps.abuseSet('${esc(x.civilianId)}','block')">⛔ Block</button>${x.level ? `<button class="btn btn-ghost btn-sm" onclick="HqOps.abuseSet('${esc(x.civilianId)}','none')">Clear</button>` : ''}</div></div>`).join('') : '<div style="color:var(--text-muted)">Nobody has been flagged for false alarms.</div>');
+  }
+  async function abuseSet(id, level) {
+    let reason = '';
+    if (level !== 'none') { reason = prompt('Reason (kept in the log):'); if (!reason) return; if (level === 'block' && !confirm('Block ' + id + '? Their phone will not be able to send alerts. Are you sure?')) return; }
+    const r = await HqAuth.api('/api/abuse/set', { method: 'POST', body: JSON.stringify({ civilianId: id, level, reason }) });
+    toast(r.ok ? 'success' : 'error', r.ok ? 'Saved' : 'Not saved', r.ok ? id + ': ' + (level === 'none' ? 'cleared' : level) : ((r.j && r.j.error) || ''), 5000); abuse();
+  }
+  async function staffLog(q) {
+    q = q || {};
+    GeamsApp.openModal('🧾 Staff action log', '<div style="font-size:0.8rem;color:var(--text-muted)">Loading…</div>', '<button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal()">Close</button>');
+    const qs = new URLSearchParams(Object.fromEntries(Object.entries(q).filter(([, v]) => v))).toString();
+    const r = await HqAuth.api('/api/stafflog' + (qs ? '?' + qs : ''));
+    const body = document.getElementById('modal-body') || document.querySelector('.modal-body'); if (!body) return;
+    if (!r.ok) { body.innerHTML = '<div style="color:var(--red)">' + esc((r.j && r.j.error) || 'Could not load') + '</div>'; return; }
+    body.innerHTML = '<div style="display:flex;gap:6px;margin-bottom:8px"><input class="form-input" id="sl-ref" placeholder="Incident number" value="' + esc(q.ref || '') + '" style="flex:1"><input class="form-input" id="sl-by" placeholder="Person (e.g. lcr:kwame)" value="' + esc(q.by || '') + '" style="flex:1"><button class="btn btn-primary btn-sm" onclick="HqOps.staffLog({ref:document.getElementById(\'sl-ref\').value.trim(),by:document.getElementById(\'sl-by\').value.trim()})">Filter</button></div>'
+      + '<div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:6px">' + r.j.total + ' entries. Names, phone numbers and places are never written to this log.</div>'
+      + (r.j.items.length ? r.j.items.map(x => `<div style="padding:6px 0;border-bottom:1px solid var(--border-dim);font-size:0.74rem"><div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(x.action)}${x.ref ? ' · ' + esc(x.ref) : ''}</b><span style="color:var(--text-muted)">${new Date(x.at).toLocaleString()}</span></div><div>${esc(x.detail)}</div><div style="font-size:0.66rem;color:var(--text-muted)">${esc(x.by)}${x.station ? ' · ' + esc(x.station) : ''}</div></div>`).join('') : '<div style="color:var(--text-muted)">Nothing matches.</div>');
+  }
+  async function appErrors() {
+    GeamsApp.openModal('🐞 App errors', '<div style="font-size:0.8rem;color:var(--text-muted)">Loading…</div>', '<button class="btn btn-ghost btn-sm" onclick="HqOps.appErrorsClear()">Clear list</button><button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal()">Close</button>');
+    const r = await HqAuth.api('/api/clientlog');
+    const body = document.getElementById('modal-body') || document.querySelector('.modal-body'); if (!body) return;
+    if (!r.ok) { body.innerHTML = '<div style="color:var(--red)">' + esc((r.j && r.j.error) || 'Could not load') + '</div>'; return; }
+    body.innerHTML = '<div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:8px">Errors the apps reported on their own, grouped. ' + r.j.total + ' reports kept (latest 500). Your own HQ page version: <b>' + esc(window.GEAMS_BUILD || '?') + '</b></div>'
+      + (r.j.groups.length ? r.j.groups.map(g => `<div style="padding:8px 0;border-bottom:1px solid var(--border-dim);font-size:0.76rem"><div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(g.app)}</b><span>×${g.count}</span></div><div style="margin:3px 0;word-break:break-word">${esc(g.msg)}</div><div style="font-size:0.68rem;color:var(--text-muted)">${esc(g.src)}${g.line ? ':' + g.line : ''} · versions ${esc(g.builds.join(', '))} · ${g.roles.length ? esc(g.roles.join(', ')) : 'not signed in'}${g.offline ? ' · ' + g.offline + ' while offline' : ''} · last ${new Date(g.last).toLocaleString()}</div></div>`).join('') : '<div style="color:var(--text-muted)">No errors reported. Good.</div>');
+  }
+  async function appErrorsClear() { if (!confirm('Clear the list of app errors?')) return; await HqAuth.api('/api/clientlog/clear', { method: 'POST' }); appErrors(); }
+  async function feedback() {
+    GeamsApp.openModal('💬 Feedback from users', '<div style="font-size:0.8rem;color:var(--text-muted)">Loading…</div>', '<button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal()">Close</button>');
+    const r = await HqAuth.api('/api/feedback');
+    const body = document.getElementById('modal-body') || document.querySelector('.modal-body'); if (!body) return;
+    if (!r.ok) { body.innerHTML = '<div style="color:var(--red)">' + esc((r.j && r.j.error) || 'Could not load') + '</div>'; return; }
+    const ic = { problem: '⚠️', idea: '💡', praise: '👍' };
+    body.innerHTML = '<div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:8px">' + r.j.open + ' new of ' + r.j.total + '. Civilian feedback is anonymous unless the person chose to give a contact.</div>'
+      + (r.j.items.length ? r.j.items.map(x => `<div style="padding:8px 0;border-bottom:1px solid var(--border-dim);font-size:0.78rem"><div style="display:flex;justify-content:space-between;gap:8px"><b>${ic[x.kind] || ''} ${esc(x.role)} · ${esc(x.from)}${x.station ? ' · ' + esc(x.station) : ''}</b><span style="color:var(--text-muted)">${new Date(x.at).toLocaleString()}</span></div><div style="margin:4px 0;white-space:pre-wrap">${esc(x.text)}</div><div style="font-size:0.68rem;color:var(--text-muted)">${esc(x.id)} · ${esc(x.app || '')} · ${esc(x.status)} ${x.status !== 'done' ? `<a href="#" onclick="HqOps.feedbackMark('${esc(x.id)}','done');return false">mark done</a>` : ''}</div></div>`).join('') : '<div style="color:var(--text-muted)">Nothing yet.</div>');
+  }
+  async function feedbackMark(id, status) { await HqAuth.api('/api/feedback/status', { method: 'POST', body: JSON.stringify({ id, status }) }); feedback(); }
+  async function retention() {
+    GeamsApp.openModal('🗂 Data retention', '<div style="font-size:0.8rem;color:var(--text-muted)">Loading…</div>', '<button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal()">Close</button>');
+    const r = await HqAuth.api('/api/retention/preview');
+    const body = document.getElementById('modal-body') || document.querySelector('.modal-body'); if (!body) return;
+    if (!r.ok) { body.innerHTML = '<div style="color:var(--red)">' + esc((r.j && r.j.error) || 'Could not load') + '</div>'; return; }
+    const j = r.j, p = j.policy, off = !p.anonDays && !p.purgeDays && !p.faceAuditDays;
+    const due = j.willAnonymise + j.willPurge + j.faceChecksToRemove;
+    body.innerHTML = '<div style="font-size:0.74rem;line-height:1.55;color:var(--text-muted);margin-bottom:10px">Closed incidents can be anonymised (names, phones and exact places removed) and later deleted. Open incidents and anything on legal hold are never touched. The periods are set on the server, not here: <code>GEAMS_ANON_INCIDENT_DAYS</code>, <code>GEAMS_RETAIN_INCIDENT_DAYS</code>, <code>GEAMS_RETAIN_FACEAUDIT_DAYS</code>.</div>'
+      + '<div style="padding:8px 10px;border:1px solid var(--border-dim);border-radius:8px;font-size:0.78rem;margin-bottom:10px"><b>Policy now:</b> ' + (off ? 'keep everything forever (no periods set)' : ('anonymise after ' + (p.anonDays || 'never') + ' days · delete after ' + (p.purgeDays || 'never') + ' days · face-check log kept ' + (p.faceAuditDays || 'forever') + ' days')) + (p.auto ? ' · runs automatically each day' : ' · runs only when you press the button') + '</div>'
+      + '<div style="font-size:0.8rem;line-height:1.8"><b>' + j.willAnonymise + '</b> to anonymise · <b>' + j.willPurge + '</b> to delete · <b>' + j.faceChecksToRemove + '</b> old face-check entries · <b>' + j.onLegalHold + '</b> on legal hold · ' + j.openIncidentsSkipped + ' still open (skipped)</div>'
+      + (j.sample.length ? '<div style="font-size:0.7rem;color:var(--text-muted);margin-top:6px">First ones: ' + j.sample.slice(0, 8).map(x => esc(x.id) + ' (' + x.ageDays + ' d)').join(', ') + '</div>' : '')
+      + '<div style="font-size:0.7rem;color:var(--text-muted);margin-top:10px;line-height:1.5">' + esc(j.note) + '</div>'
+      + '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-danger btn-sm" ' + (due ? '' : 'disabled') + ' onclick="HqOps.retentionRun()">Back up, then apply now</button><button class="btn btn-ghost btn-sm" onclick="HqOps.legalHold()">⚖️ Legal hold on an incident…</button></div>'
+      + (j.log.length ? '<div style="margin-top:12px;font-size:0.72rem"><b>Recent runs</b>' + j.log.map(l => '<div style="padding:4px 0;border-bottom:1px solid var(--border-dim)">' + new Date(l.at).toLocaleString() + ' · ' + esc(l.by) + ' · anonymised ' + l.result.anonymised + ', deleted ' + l.result.purged + ', files ' + l.result.filesWiped + ', face log ' + l.result.faceAuditRemoved + '</div>').join('') + '</div>' : '');
+  }
+  async function retentionRun() {
+    if (!confirm('Take a backup, then anonymise and delete the incidents listed? This cannot be undone except from a backup.')) return;
+    const r = await HqAuth.api('/api/retention/run', { method: 'POST', body: JSON.stringify({ confirm: true }) });
+    if (!r.ok) { toast('error', 'Not run', (r.j && r.j.error) || 'Failed', 8000); return; }
+    toast('success', 'Retention applied', 'Anonymised ' + r.j.result.anonymised + ', deleted ' + r.j.result.purged, 6000); retention();
+  }
+  async function legalHold() {
+    const id = prompt('Incident number to put on legal hold (or release):'); if (!id) return;
+    const on = confirm('OK = put ' + id + ' ON hold (never deleted).\nCancel = RELEASE its hold.');
+    const reason = on ? (prompt('Reason (for the record):') || '') : '';
+    const r = await HqAuth.api('/api/retention/hold', { method: 'POST', body: JSON.stringify({ id: id.trim(), on, reason }) });
+    toast(r.ok ? 'success' : 'error', r.ok ? (on ? 'On legal hold' : 'Hold released') : 'Not changed', r.ok ? id : ((r.j && r.j.error) || ''), 5000); if (r.ok) retention();
+  }
   async function revokeStation(id, name) {
     if (!confirm('Disable ' + name + '? Its control room is signed out and cannot sign in until HQ enables it again.')) return;
     try { await GeamsData.setLcrDisabled(id, true); GeamsApp.closeModal(); toast('error', 'Station disabled', name + ' can no longer sign in', 6000); } catch (e) { toast('error', 'Not changed', e.message || ''); }
   }
-  return { escalate, notes, saveNotes, exportIncidents, exportStations, exportAudit, exportHealth, backupNow, rotateTokens, watchLockdown, lockdownDialog, setLockdown, securityCheck, faceAudit, revokeStation };
+  return { pilotReport, watchPilot, pilotDialog, setPilot, watchEscalations, escalations, escAck, escalate, notes, saveNotes, exportIncidents, exportStations, exportAudit, exportHealth, backupNow, rotateTokens, watchLockdown, lockdownDialog, setLockdown, securityCheck, faceAudit, abuse, abuseSet, staffLog, appErrors, appErrorsClear, feedback, feedbackMark, retention, retentionRun, legalHold, revokeStation };
 })();
 
 const HqOps_e = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -6033,6 +6187,15 @@ const GeamsSecurity = (() => {
                 <button class="btn btn-warning w-full" onclick="HqOps.lockdownDialog()">🔒 System Lockdown (read-only)</button>
                 <button class="btn btn-ghost w-full" onclick="HqOps.securityCheck()">🛡 Security Configuration Check</button>
                 <button class="btn btn-ghost w-full" onclick="HqOps.faceAudit()">🧬 Face &amp; ID checks log</button>
+                <button class="btn btn-ghost w-full" onclick="HqOps.retention()">🗂 Data retention</button>
+                <button class="btn btn-ghost w-full" onclick="HqOps.feedback()">💬 Feedback from users</button>
+                <button class="btn btn-ghost w-full" onclick="HqOps.appErrors()">🐞 App errors</button>
+                <button class="btn btn-ghost w-full" onclick="HqOps.staffLog()">🧾 Staff action log</button>
+                <button class="btn btn-ghost w-full" onclick="HqOps.escalations()">⚠ Unanswered alerts</button>
+                <button class="btn btn-ghost w-full" onclick="HqOps.pilotDialog()">⏸ Pause / resume civilian alerts</button>
+                <button class="btn btn-ghost w-full" onclick="GeamsBulk.open('stations')">📋 Add control rooms in bulk</button>
+                <button class="btn btn-ghost w-full" onclick="HqOps.pilotReport()">📊 Pilot report</button>
+                <button class="btn btn-ghost w-full" onclick="HqOps.abuse()">🚫 False alarms &amp; abuse</button>
                 <button class="btn btn-ghost w-full" onclick="GeamsApp.archivePurge()">🗄 Archive & Purge Old Cases</button>
                 <button class="btn btn-ghost w-full" onclick="HqOps.backupNow()">💾 Back Up Now</button>
               </div>
@@ -6408,6 +6571,15 @@ const GeamsSysHealth = (() => {
               <div style="display:flex;flex-direction:column;gap:8px">
                 <button class="btn btn-ghost w-full" onclick="HqOps.securityCheck()">🛡 Security Configuration Check</button>
                 <button class="btn btn-ghost w-full" onclick="HqOps.faceAudit()">🧬 Face &amp; ID checks log</button>
+                <button class="btn btn-ghost w-full" onclick="HqOps.retention()">🗂 Data retention</button>
+                <button class="btn btn-ghost w-full" onclick="HqOps.feedback()">💬 Feedback from users</button>
+                <button class="btn btn-ghost w-full" onclick="HqOps.appErrors()">🐞 App errors</button>
+                <button class="btn btn-ghost w-full" onclick="HqOps.staffLog()">🧾 Staff action log</button>
+                <button class="btn btn-ghost w-full" onclick="HqOps.escalations()">⚠ Unanswered alerts</button>
+                <button class="btn btn-ghost w-full" onclick="HqOps.pilotDialog()">⏸ Pause / resume civilian alerts</button>
+                <button class="btn btn-ghost w-full" onclick="GeamsBulk.open('stations')">📋 Add control rooms in bulk</button>
+                <button class="btn btn-ghost w-full" onclick="HqOps.pilotReport()">📊 Pilot report</button>
+                <button class="btn btn-ghost w-full" onclick="HqOps.abuse()">🚫 False alarms &amp; abuse</button>
                 <button class="btn btn-ghost w-full" onclick="HqOps.backupNow()">💾 Back Up Now Now</button>
                 <button class="btn btn-ghost w-full" onclick="GeamsApp.syncWatchlist()">🔄 Force Watchlist Sync</button>
                 <button class="btn btn-ghost w-full" onclick="GeamsApp.archivePurge()">🗄 Run Archive Job</button>

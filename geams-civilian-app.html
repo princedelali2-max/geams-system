@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head>
+<!DOCTYPE html><html lang="en" data-a11y-fab="0"><head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover"/>
 <meta name="mobile-web-app-capable" content="yes"/>
@@ -10,6 +10,7 @@
 <script src="config.js"></script>
 <script src="vendor/leaflet/leaflet.js"></script>
 <script src="vendor/geams-map.js"></script>
+<script src="vendor/geams-i18n.js"></script>
 <style>
 /* GEAMS CIVILIAN — base.css */
 @import url('vendor/fonts/fonts.css');
@@ -498,6 +499,8 @@ option{background:var(--bg-deep);}
 
 <!-- PIN LOGIN GATE -->
 <div id="pin-gate" class="hidden">
+  <button onclick="GeamsA11y.open()" aria-label="Text size, contrast and movement" style="position:absolute;top:12px;right:118px;z-index:5;background:transparent;border:1px solid var(--border);color:var(--text-muted);border-radius:16px;padding:5px 10px;font-size:0.72rem" data-no-i18n="1">Aa</button>
+  <button onclick="GeamsI18n.pick()" style="position:absolute;top:12px;right:12px;z-index:5;background:transparent;border:1px solid var(--border);color:var(--text-muted);border-radius:16px;padding:5px 10px;font-size:0.72rem" data-no-i18n="1">🌐 Language</button>
 
   <!-- LOGIN VIEW -->
   <div id="pin-login-view">
@@ -527,6 +530,30 @@ option{background:var(--bg-deep);}
       <button class="pin-key pin-key-ghost" onclick="PinGate.backspace()">⌫</button>
     </div>
     <div class="pin-switch"><a href="#" onclick="PinGate.showSignup();return false;">New here? Create an account</a></div>
+    <div class="pin-switch"><a href="#" onclick="PinGate.showRestore();return false;">New phone? Restore my account</a></div>
+  </div>
+
+  <!-- RESTORE VIEW (new phone) -->
+  <div id="pin-restore-view" class="hidden">
+    <div class="pin-shield">🛟</div>
+    <div class="pin-title">Restore Your Account</div>
+    <div class="pin-sub" style="margin-bottom:6px;max-width:300px;text-align:center">Use your account number and the recovery code you saved. Your profile, Face ID and alerts move to this phone.</div>
+    <div class="pin-signup-form">
+      <input class="form-input" id="rs-id" placeholder="Account number (CIV-12345)" autocapitalize="characters">
+      <input class="form-input" id="rs-code" placeholder="Recovery code (XXXXX-XXXXX-XXXXX)" autocapitalize="characters">
+      <input class="form-input" id="rs-pin" type="password" inputmode="numeric" maxlength="4" placeholder="Choose a 4-digit PIN for this phone">
+      <input class="form-input" id="rs-pin2" type="password" inputmode="numeric" maxlength="4" placeholder="Confirm 4-digit PIN">
+    </div>
+    <div class="pin-error" id="restore-error">&nbsp;</div>
+    <button class="btn btn-primary btn-full" id="rs-btn" style="max-width:280px;margin-top:4px" onclick="PinGate.doRestore()">Restore account →</button>
+    <div class="pin-switch" style="margin-top:6px"><a href="#" onclick="PinGate.phoneRestoreToggle();return false;">📱 I lost my code: use my phone number instead</a></div>
+    <div id="rs-phone-box" class="hidden" style="max-width:300px;margin:8px auto 0;text-align:left">
+      <div style="font-size:0.74rem;color:var(--text-muted);line-height:1.5;margin-bottom:6px">We text a 6-digit code to the number you registered with. Anyone who controls that number can take over the account, so keep your SIM safe. This needs SMS to be switched on for this system.</div>
+      <input class="form-input" id="rs-phone" inputmode="tel" placeholder="Registered phone (024 123 4567)">
+      <button class="btn btn-ghost btn-full" id="rs-send" style="margin:6px 0" onclick="PinGate.phoneRestoreSend()">Send code</button>
+      <div id="rs-code-row" class="hidden"><input class="form-input" id="rs-sms" inputmode="numeric" maxlength="6" placeholder="6-digit code from SMS"><div style="font-size:0.72rem;color:var(--text-muted);margin:4px 0">Then choose your PIN in the boxes above and press:</div><button class="btn btn-primary btn-full" id="rs-pbtn" onclick="PinGate.phoneRestoreFinish()">Verify and restore →</button></div>
+    </div>
+    <div class="pin-switch"><a href="#" onclick="PinGate.backFromRestore();return false;">Back</a></div>
   </div>
 
   <!-- SIGN-UP VIEW -->
@@ -545,9 +572,11 @@ option{background:var(--bg-deep);}
         <input class="form-input" id="su-pin" type="password" inputmode="numeric" maxlength="4" placeholder="Create 4-digit PIN">
         <input class="form-input" id="su-pin2" type="password" inputmode="numeric" maxlength="4" placeholder="Confirm 4-digit PIN">
       </div>
+      <label style="display:flex;gap:8px;align-items:flex-start;max-width:280px;font-size:0.74rem;line-height:1.4;margin:6px 0;text-align:left"><input type="checkbox" id="su-privacy" style="margin-top:2px"><span>I have read the <a href="#" onclick="Privacy.show();return false;">privacy notice</a> and agree GEAMS may use my details to handle my emergencies.</span></label>
       <div class="pin-error" id="signup-error">&nbsp;</div>
       <button class="btn btn-primary btn-full" style="max-width:280px;margin-top:4px" onclick="PinGate.continueToFaceStep()">Continue →</button>
       <div class="pin-switch"><a href="#" onclick="PinGate.showLogin();return false;">Already registered? Log in</a></div>
+      <div class="pin-switch"><a href="#" onclick="PinGate.showRestore();return false;">New phone? Restore my account</a></div>
     </div>
 
     <!-- Step 2: compulsory Face ID capture — every civilian is registered
@@ -556,18 +585,20 @@ option{background:var(--bg-deep);}
          cosmetic step, account creation only completes from here. -->
     <div id="signup-step-face" class="hidden">
       <div class="pin-shield">🧿</div>
-      <div class="pin-title">Register Your Face ID</div>
+      <div class="pin-title">Face ID (optional)</div>
       <div class="pin-sub" style="margin-bottom:10px;max-width:280px">
-        GEAMS requires a real Face ID on every civilian account so Dispatch and emergency
-        responders can genuinely identify you if needed. This uses your device's camera —
-        your face never leaves this app as an image, only as a mathematical descriptor.
+        You can add a Face ID so an officer can check, with a logged reason, that a person is you.
+        Only numbers computed from your face are sent, not a photo. A match is a guide, never proof.
+        You can skip this and use GEAMS fully, and delete it later in Profile.
       </div>
+      <label style="display:flex;gap:8px;align-items:flex-start;max-width:280px;font-size:0.74rem;line-height:1.4;margin:0 0 8px;text-align:left"><input type="checkbox" id="su-face-consent" style="margin-top:2px"><span>I consent to GEAMS storing my face template on its server for this purpose.</span></label>
       <div id="su-face-area" style="width:100%;max-width:280px;border-radius:var(--r-lg);overflow:hidden;background:#000;min-height:220px;display:flex;align-items:center;justify-content:center">
         <div style="color:var(--text-muted);font-size:0.78rem;text-align:center;padding:20px">📷 Requesting camera access…</div>
       </div>
       <div id="su-face-status" style="text-align:center;font-size:0.76rem;color:var(--text-muted);min-height:18px;margin-top:6px">Loading face recognition model…</div>
       <div id="su-face-fallback" style="max-width:280px"></div>
       <button class="btn btn-primary btn-full" id="su-face-capture-btn" style="max-width:280px;margin-top:8px" onclick="PinGate.captureSignupFace()" disabled>Capture Face ID</button>
+      <button class="btn btn-ghost btn-full" style="max-width:280px;margin-top:6px" onclick="PinGate.skipSignupFace()">Skip Face ID — create my account</button>
       <div class="pin-switch"><a href="#" onclick="PinGate.backToDetailsStep();return false;">← Back to details</a></div>
     </div>
 
@@ -846,9 +877,13 @@ const GeamsSync = (() => {
     }
     return false;
   }
+  // Why the last write failed: 'network' (no signal / server down), 'refused' (the server said no: blocked, paused, limit),
+  // 'busy' (kept colliding). lastError is the server's own message for a refusal.
+  let lastFail = null, lastError = '';
   async function mergeShared(key, fallback, patchFn) {
     await ready;
-    if (mode === 'offline') return false;
+    lastFail = null; lastError = '';
+    if (mode === 'offline') { lastFail = 'network'; return false; }
     if (mode === 'server') {
       // compare-and-set loop so two devices writing at once never overwrite each other
       for (let i = 0; i < 40; i++) {
@@ -857,11 +892,11 @@ const GeamsSync = (() => {
           const next = patchFn(j.found ? j.value : fallback);
           const r = await http('/api/kv/' + encodeURIComponent(key), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: next, ifVersion: j.v }) });
           if (r.ok) return true;
-          if (r.status !== 409) return false;
+          if (r.status !== 409) { lastFail = r.status >= 500 || r.status === 429 || r.status === 503 ? 'network' : 'refused'; try { const jj = await r.clone().json(); lastError = (jj && jj.error) || ''; } catch (e) {} return false; }
           await new Promise(res => setTimeout(res, 10 + Math.random() * 60 * (i + 1)));
-        } catch (e) { return false; }
+        } catch (e) { lastFail = (e && e.code === 'COLLISION') ? 'refused' : 'network'; if (e && e.code === 'COLLISION') lastError = e.message; return false; }
       }
-      return false;
+      lastFail = 'busy'; return false;
     }
     try { const cur = await getShared(key, fallback); const next = patchFn(cur); await setShared(key, next); return true; }
     catch (e) { return false; }
@@ -895,7 +930,7 @@ const GeamsSync = (() => {
     try { if (url) localStorage.setItem('geams_backend', url.replace(/\/+$/, '')); else localStorage.removeItem('geams_backend'); } catch (e) {}
     location.reload();
   }
-  return { available, getShared, setShared, mergeShared, watch, ready, onStatus, setBackend, deviceId, devSecret, api, setToken, onAuthLost, verifiedPhone, adoptVerified, reconnect, get token(){ return authToken(); },
+  return { available, getShared, setShared, mergeShared, get lastFail(){ return lastFail; }, get lastError(){ return lastError; }, watch, ready, onStatus, setBackend, deviceId, devSecret, api, setToken, onAuthLost, verifiedPhone, adoptVerified, reconnect, get token(){ return authToken(); },
            get mode(){ return mode; }, get base(){ return base; }, get online(){ return online; }, get devices(){ return status.devices; }, get deviceApps(){ return status.byApp; } };
 })();
 
@@ -1412,7 +1447,7 @@ async function submitCivilianReport(opts) {
   const civLat = opts.lat != null ? opts.lat : (CivilianData.user.gpsLat || CivilianData.user.lat);
   const civLng = opts.lng != null ? opts.lng : (CivilianData.user.gpsLng || CivilianData.user.lng);
   const { station } = CivilianData.nearestStation(civLat, civLng);
-  const id = 'INC-' + (1000 + Math.floor(Math.random()*9000));
+  const id = newIncId();
   const now = new Date();
   if (GeamsSync.available()) {
     await GeamsSync.mergeShared('lcr:' + station.id + ':incidents', {}, (m) => {
@@ -1469,70 +1504,144 @@ function watchReportResolution(id, stationId, isHqHandled, hasLiveEvidence) {
  * An alert is saved on this phone first and is only treated as sent once the GEAMS server confirms it.
  * Without signal it stays queued (and survives closing the app), retries when signal returns, and meanwhile
  * offers the phone's own network: call 112, or text an emergency contact. Those go through the phone network, not GEAMS. */
+// Incident numbers: 6 random letters and digits, so two phones (or two stations) never pick the same one and one alert cannot silently replace another.
+function newIncId() { const a = new Uint8Array(6); try { crypto.getRandomValues(a); } catch (e) { for (let i = 0; i < 6; i++) a[i] = Math.floor(Math.random() * 256); } return 'INC-' + Array.from(a, b => (b % 36).toString(36)).join('').toUpperCase(); }
 const SosOutbox = (() => {
   const KEY = 'geams_sos_outbox'; let busy = false, timer = null;
   const esc = (t) => String(t == null ? '' : t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const load = () => { try { return JSON.parse(localStorage.getItem(KEY) || '[]'); } catch (e) { return []; } };
   const save = (a) => { try { localStorage.setItem(KEY, JSON.stringify(a)); } catch (e) {} };
-  const pending = () => load().filter(x => !x.sentAt);
+  const pending = () => load().filter(x => !x.sentAt && !x.refused);
+  const refusedList = () => load().filter(x => x.refused && !x.ack);
   async function attempt(item) {
     try {
       if (GeamsSync.mode !== 'server') { await GeamsSync.ready; if (GeamsSync.mode !== 'server') await GeamsSync.reconnect(); }
-      if (GeamsSync.mode !== 'server') return false;
-      const ok = await GeamsSync.mergeShared('lcr:' + item.stationId + ':incidents', {}, (m) => { m = m || {}; if (m[item.id]) return m; m[item.id] = item.record; return m; });
-      return ok === true;
-    } catch (e) { return false; }
+      if (GeamsSync.mode !== 'server') return 'network';
+      const ok = await GeamsSync.mergeShared('lcr:' + item.stationId + ':incidents', {}, (m) => {
+        m = m || {}; const old = m[item.id];
+        if (old) { if (old.civilianId === item.record.civilianId && old.createdAt === item.record.createdAt) return m;    // our own earlier try got through: nothing more to do
+          const e = new Error('That alert number is already used by another alert. Call 112 now.'); e.code = 'COLLISION'; throw e; }
+        m[item.id] = item.record; return m; });
+      if (ok === true) return 'sent';
+      if (GeamsSync.lastFail === 'refused') { item.refusedWhy = GeamsSync.lastError || ''; return 'refused'; }
+      return 'network';
+    } catch (e) { return 'network'; }
+  }
+  function giveUp(it) {
+    // The server said no. Retrying will not help, so stop, tell the person plainly, and stop the app pretending an alert is in progress.
+    try { const em = CivilianData.activeEmergency(); if (em && em.id === it.id) { CivilianData.stopEmergency(); const tb = document.getElementById('topbar'); if (tb) { tb.style.background = ''; tb.style.borderBottomColor = ''; } const dot = document.getElementById('logo-dot'); if (dot) dot.classList.remove('emergency'); } } catch (e) {}
   }
   async function flush(manual) {
     if (busy) return; busy = true;
     try {
-      const all = load(); let sentNow = 0;
+      const all = load(); let sentNow = 0, refusedNow = null;
       for (const it of all) {
-        if (it.sentAt) continue;
+        if (it.sentAt || it.refused) continue;
         it.tries = (it.tries || 0) + 1; it.lastTry = Date.now();
-        if (await attempt(it)) { it.sentAt = Date.now(); sentNow++; save(all); try { GeamsArchive.log(it.id, 'civ', 'created', 'Alert raised: ' + it.type + (it.queuedAt && it.sentAt - it.queuedAt > 5000 ? ' (sent after ' + Math.round((it.sentAt - it.queuedAt) / 1000) + ' s without signal)' : '') + ' · ' + (CivilianData.user.name || 'civilian')); } catch (e) {} }
+        const res = await attempt(it);
+        if (res === 'sent') { it.sentAt = Date.now(); sentNow++; save(all); try { GeamsArchive.log(it.id, 'civ', 'created', 'Alert raised: ' + it.type + (it.queuedAt && it.sentAt - it.queuedAt > 5000 ? ' (sent after ' + Math.round((it.sentAt - it.queuedAt) / 1000) + ' s without signal)' : '') + ' · ' + (CivilianData.user.name || 'civilian')); } catch (e) {} }
+        else if (res === 'refused') { it.refused = { at: Date.now(), why: it.refusedWhy || '' }; delete it.refusedWhy; refusedNow = it; save(all); giveUp(it); }
         else save(all);
       }
-      save(load().filter(x => !x.sentAt || Date.now() - x.sentAt < 3600000));
-      if (sentNow && typeof CivilianApp !== 'undefined') CivilianApp.showToast('success', '✅ Alert delivered', 'Signal is back — your alert has reached the control room', 8000);
-      if (manual && !sentNow && pending().length && typeof CivilianApp !== 'undefined') CivilianApp.showToast('warning', 'Still no signal', 'The alert is saved on this phone and will keep retrying', 5000);
+      save(load().filter(x => (!x.sentAt && !x.refused) || Date.now() - (x.sentAt || (x.refused && x.refused.at)) < 3600000));
+      if (sentNow && typeof CivilianApp !== 'undefined') CivilianApp.showToast('success', '✅ Alert delivered', 'Your alert has reached the control room', 8000);
+      if (refusedNow && typeof CivilianApp !== 'undefined') CivilianApp.showToast('error', '❌ Alert NOT accepted', (refusedNow.refused.why || 'GEAMS could not accept this alert.') + ' Call 112 now.', 15000);
+      if (manual && !sentNow && !refusedNow && pending().length && typeof CivilianApp !== 'undefined') CivilianApp.showToast('warning', 'Still no signal', 'The alert is saved on this phone and will keep retrying', 5000);
     } finally { busy = false; render(); }
   }
+  // Resolves to 'sent', 'queued' (no signal, will keep retrying) or 'refused'
   async function submit(item) {
     item.queuedAt = Date.now(); item.tries = 0;
     const all = load().filter(x => x.id !== item.id); all.push(item); save(all);
     await flush(false);
-    if (pending().some(x => x.id === item.id) && typeof CivilianApp !== 'undefined') CivilianApp.showToast('warning', '📡 No signal', 'Your alert is saved on this phone and will send as soon as signal returns', 9000);
+    const now = load().find(x => x.id === item.id);
     start();
+    if (now && now.sentAt) return 'sent'; if (now && now.refused) return 'refused';
+    if (typeof CivilianApp !== 'undefined') CivilianApp.showToast('warning', '📡 No signal', 'Your alert is saved on this phone and will send as soon as signal returns', 9000);
+    return 'queued';
   }
   function cancel(id) { const a = load(), n = a.filter(x => x.id !== id || x.sentAt); if (n.length !== a.length) { save(n); render(); return true; } return false; }
+  function dismiss(id) { const a = load(); a.forEach(x => { if (x.id === id) x.ack = true; }); save(a); render(); }
   function start() { if (!timer) timer = setInterval(() => { if (pending().length) flush(false); else { clearInterval(timer); timer = null; } }, 8000); }
+  /* Text to the GEAMS number (set by the server): the server reads the coordinates and tells the nearest control room. */
+  function smsGeamsHref(it) {
+    const r = it.record, kind = /fire/i.test(it.type) ? 'FIRE' : /medic|accident|ambul/i.test(it.type) ? 'MEDICAL' : 'POLICE';
+    const body = 'GEAMS ' + kind + ' ' + Number(r.lat).toFixed(5) + ',' + Number(r.lng).toFixed(5) + (CivilianData.user.name ? ' ' + CivilianData.user.name : '');
+    return 'sms:' + String(GEAMS_CONFIG.smsNumber).replace(/[^0-9+]/g, '') + '?body=' + encodeURIComponent(body);
+  }
   function smsHref(it) {
     const u = CivilianData.user, c = (u.emergencyContacts || [])[0], r = it.record;
     const body = 'EMERGENCY (' + it.type + '): ' + (u.name || 'I') + ' need help. My location: https://maps.google.com/?q=' + r.lat + ',' + r.lng + (u.phone ? ' Call me: ' + u.phone : '');
     return 'sms:' + (c && c.phone ? c.phone : '') + '?body=' + encodeURIComponent(body);
   }
   function render() {
-    let el = document.getElementById('sos-outbox'); const p = pending();
-    if (!p.length) { if (el) el.remove(); return; }
-    if (!el) { el = document.createElement('div'); el.id = 'sos-outbox'; el.setAttribute('role', 'alert'); el.style.cssText = 'position:fixed;left:8px;right:8px;bottom:78px;z-index:2147482000;background:#7c2d12;border:2px solid #fb923c;color:#fff;border-radius:12px;padding:12px;font-family:system-ui,sans-serif;box-shadow:0 8px 28px rgba(0,0,0,.55)'; document.body.appendChild(el); el.onclick = (ev) => { const b = ev.target.closest('[data-act]'); if (b && b.dataset.act === 'retry') { b.textContent = 'Trying…'; flush(true); } }; }
+    let el = document.getElementById('sos-outbox'); const p = pending(), rf = refusedList();
+    if (!p.length && !rf.length) { if (el) el.remove(); return; }
+    if (!p.length || rf.length) {                                    // a refusal is more urgent than a wait
+      const it = rf[0]; if (!it) return;
+      if (!el) { el = document.createElement('div'); el.id = 'sos-outbox'; el.setAttribute('role', 'alert'); document.body.appendChild(el); }
+      el.style.cssText = 'position:fixed;left:8px;right:8px;bottom:78px;z-index:2147483300;background:#7f1d1d;border:2px solid #f87171;color:#fff;border-radius:12px;padding:12px;font-family:system-ui,sans-serif;box-shadow:0 8px 28px rgba(0,0,0,.55)';
+      el.onclick = (ev) => { const b = ev.target.closest('[data-act]'); if (b && b.dataset.act === 'dismiss') dismiss(b.dataset.id); };
+      el.innerHTML = '<div style="font-weight:800">❌ Your alert was NOT accepted</div><div style="font-size:0.82rem;margin:4px 0 8px;line-height:1.45">' + esc(it.refused.why || 'GEAMS could not accept this alert from this phone.') + ' <b>No control room has this alert. Call 112 now.</b></div>' +
+        '<div style="display:flex;gap:6px;flex-wrap:wrap"><a href="tel:112" style="background:#fff;color:#7f1d1d;font-weight:800;border-radius:8px;padding:9px 14px;text-decoration:none">📞 Call 112</a><button data-act="dismiss" data-id="' + esc(it.id) + '" style="background:transparent;border:1px solid #fff;color:#fff;border-radius:8px;padding:9px 12px">Dismiss</button></div>';
+      return;
+    }
+    if (!el) { el = document.createElement('div'); el.id = 'sos-outbox'; el.setAttribute('role', 'alert'); el.style.cssText = 'position:fixed;left:8px;right:8px;bottom:78px;z-index:2147483300;background:#7c2d12;border:2px solid #fb923c;color:#fff;border-radius:12px;padding:12px;font-family:system-ui,sans-serif;box-shadow:0 8px 28px rgba(0,0,0,.55)'; document.body.appendChild(el); el.onclick = (ev) => { const b = ev.target.closest('[data-act]'); if (b && b.dataset.act === 'retry') { b.textContent = 'Trying…'; flush(true); } }; }
     const it = p[0], contact = ((CivilianData.user.emergencyContacts || [])[0]) || null;
     el.innerHTML = '<div style="font-weight:800">📡 No signal — alert saved on this phone</div>' +
       '<div style="font-size:0.8rem;margin:4px 0 8px;line-height:1.4">Your <b>' + esc(it.type) + '</b> alert has <b>not</b> reached the control room yet. GEAMS will send it the moment signal returns' + (p.length > 1 ? ' (' + p.length + ' waiting)' : '') + '. Tries so far: ' + (it.tries || 0) + '.</div>' +
       '<div style="display:flex;gap:6px;flex-wrap:wrap"><button data-act="retry" style="background:#fb923c;border:0;color:#111;font-weight:700;border-radius:8px;padding:8px 12px">Retry now</button>' +
       '<a href="tel:112" style="background:#fff;color:#7c2d12;font-weight:700;border-radius:8px;padding:8px 12px;text-decoration:none">📞 Call 112</a>' +
+      ((window.GEAMS_CONFIG && GEAMS_CONFIG.smsNumber) ? '<a data-act="textgeams" href="' + smsGeamsHref(it) + '" style="background:#16a34a;color:#fff;font-weight:700;border-radius:8px;padding:8px 12px;text-decoration:none">💬 Text GEAMS</a>' : '') +
       '<a href="' + smsHref(it) + '" style="background:transparent;border:1px solid #fff;color:#fff;border-radius:8px;padding:8px 12px;text-decoration:none">💬 Text ' + (contact && contact.name ? esc(contact.name) : 'my location') + '</a></div>' +
-      '<div style="font-size:0.65rem;opacity:.8;margin-top:6px">Calls and texts use your phone network, not GEAMS — the control room will not see them in GEAMS.</div>';
+      '<div style="font-size:0.65rem;opacity:.8;margin-top:6px">Calls and texts to people use your phone network, not GEAMS. A text to the GEAMS number (green button, when shown) does reach the nearest control room if the SMS service is working.</div>';
   }
   if (typeof window !== 'undefined') { window.addEventListener('online', () => flush(false)); document.addEventListener('visibilitychange', () => { if (!document.hidden && pending().length) flush(false); }); setTimeout(() => { if (pending().length) { render(); flush(false); start(); } }, 1500); }
-  return { submit, flush, cancel, pending, render };
+  return { submit, flush, cancel, dismiss, pending, refusedList, render };
 })();
 
+/* ── Pilot notice and HQ pause ──
+ * A small strip under the top bar says this is a pilot and that 112 still works. If HQ pauses civilian alerts, the strip turns red
+ * with HQ's message, and the send buttons say so instead of sending an alert nobody would read. */
+const Pilot = (() => {
+  let state = null, stop = null;
+  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const label = () => (window.GEAMS_CONFIG && GEAMS_CONFIG.pilotLabel) || 'Pilot';
+  function render() {
+    let el = document.getElementById('pilot-strip'); const tb = document.getElementById('topbar'); if (!tb) return;
+    if (!el) { el = document.createElement('div'); el.id = 'pilot-strip'; el.setAttribute('role', 'status'); tb.insertAdjacentElement('afterend', el); el.onclick = (ev) => { if (!ev.target.closest('a')) info(); }; }
+    if (state) {
+      el.style.cssText = 'flex:none;background:#b91c1c;color:#fff;padding:7px 12px;font:700 12.5px/1.35 system-ui,sans-serif;cursor:pointer';
+      el.innerHTML = '⚠ GEAMS alerts are paused. ' + esc(state.message || 'If this is an emergency, call 112 now.') + ' <a href="tel:112" style="color:#fff;text-decoration:underline;white-space:nowrap">📞 Call 112</a>';
+    } else {
+      el.style.cssText = 'flex:none;background:#1e293b;color:#cbd5e1;padding:4px 12px;font:600 11px/1.3 system-ui,sans-serif;text-align:center;cursor:pointer';
+      el.innerHTML = esc(label()) + ' · GEAMS is being tested. In an emergency you can also call <b>112</b>. <u>More</u>';
+    }
+  }
+  function info() {
+    if (typeof CivilianApp === 'undefined') return;
+    CivilianApp.openSheet('About this ' + esc(label().toLowerCase()), '<div style="font-size:0.84rem;line-height:1.6">GEAMS is being tested with a small number of control rooms. It may not be available in your area, and an alert may not always be seen straight away.<br><br><b>In an emergency you can always call 112.</b> If you send an alert and the app says it was not delivered, call 112.</div><a href="tel:112" class="btn btn-danger btn-full" style="display:block;text-align:center;margin-top:14px;text-decoration:none">📞 Call 112</a>');
+  }
+  function paused() { return state; }
+  function pausedSheet() {
+    if (typeof CivilianApp === 'undefined') return;
+    CivilianApp.openSheet('⚠ Alerts are paused', '<div style="font-size:0.9rem;line-height:1.6;margin-bottom:12px">' + esc((state && state.message) || 'GEAMS alerts are paused. If this is an emergency, call 112 now.') + '</div><a href="tel:112" class="btn btn-danger btn-full" style="display:block;text-align:center;text-decoration:none">📞 Call 112</a>');
+  }
+  function start() {
+    if (stop) return;
+    const go = () => { try { stop = GeamsSync.watch('hq:pilot', null, (v) => { state = v && v.paused ? v : null; render(); }, 5000); } catch (e) {} };
+    go(); render(); setInterval(render, 4000);
+  }
+  return { start, paused, pausedSheet, info, render };
+})();
+document.addEventListener('DOMContentLoaded', () => { Pilot.start(); });
+
 function startEmergencySync(em, notes, skipCreate) {
+  let sent;
   if (!skipCreate) {
-    SosOutbox.submit({ id: em.id, stationId: em.stationId, stationName: em.stationName, type: em.type, record: {
+    sent = SosOutbox.submit({ id: em.id, stationId: em.stationId, stationName: em.stationName, type: em.type, record: {
         id: em.id, type: em.type, priority: 'critical', status: 'new',
-        location: CivilianData.user.address, lat: em.lat, lng: em.lng,
+        location: (CivilianData.user.address || '') + (CivilianData.user.areaOnly ? ' [AREA ONLY, NO GPS: ask the caller where they are]' : ''), locationApprox: !!CivilianData.user.areaOnly, lat: em.lat, lng: em.lng,
         civilianId: CivilianData.user.id, civilianName: CivilianData.user.name,
         civilianPhone: CivilianData.user.phone, civilianLat: em.lat, civilianLng: em.lng,
         createdAt: em.startTime.toISOString(), source: 'civilian-app',
@@ -1635,6 +1744,7 @@ function startEmergencySync(em, notes, skipCreate) {
       }
     });
   }, 2000);
+  return sent;
 }
 
 const CivilianData = (() => {
@@ -1675,11 +1785,17 @@ const CivilianData = (() => {
     });
   }
   // LCRs created by HQ join the routing directory; disabled ones are removed from it.
+  // The 13 built-in entries are demo stations. On a real deployment (server says demoStations:false) they are never
+  // routing targets unless HQ has registered them; a disabled station is never a target.
+  const demoOff = () => !!(window.GEAMS_CONFIG && window.GEAMS_CONFIG.demoStations === false);
+  const usable = (s) => !s.disabled && (s.dynamic || s.registered || !demoOff());
+  function liveDirectory() { const l = STATION_DIRECTORY.filter(usable); return l.length ? l : STATION_DIRECTORY.slice(); }
   function applyDynamicStations(map) {
     if (!map) return;
     Object.values(map).forEach(r => {
       if (!r || !r.id) return;
       const i = STATION_DIRECTORY.findIndex(x => x.id === r.id);
+      if (i >= 0) { STATION_DIRECTORY[i].registered = !r.disabled; STATION_DIRECTORY[i].disabled = !!r.disabled; }
       if (r.disabled) { if (i >= 0 && STATION_DIRECTORY[i].dynamic) STATION_DIRECTORY.splice(i, 1); return; }
       if (i < 0) STATION_DIRECTORY.push({ id:r.id, name:r.name, lat:r.lat, lng:r.lng, dynamic:true });
       else if (STATION_DIRECTORY[i].dynamic && !STATION_DIRECTORY[i].locationVerified) { STATION_DIRECTORY[i].lat = r.lat; STATION_DIRECTORY[i].lng = r.lng; STATION_DIRECTORY[i].name = r.name; }
@@ -1701,8 +1817,8 @@ const CivilianData = (() => {
   // This is the civilian app's side of the routing system — every SOS
   // submitted through this app is directed to the station this returns.
   function nearestStation(lat, lng) {
-    let best = STATION_DIRECTORY[0], bestDist = Infinity;
-    STATION_DIRECTORY.forEach(s => {
+    const dir = liveDirectory(); let best = dir[0], bestDist = Infinity;
+    dir.forEach(s => {
       const d = haversineM(lat, lng, s.lat, s.lng);
       if (d < bestDist) { bestDist = d; best = s; }
     });
@@ -1748,7 +1864,7 @@ const CivilianData = (() => {
     const etaMin = null; // real ETA arrives only from the officer's Dispatch App
 
     activeEmergency = {
-      id:          'INC-' + (1000 + Math.floor(Math.random()*9000)),
+      id:          newIncId(),
       type,
       startTime:   new Date(),
       lat:         civLat,
@@ -1760,7 +1876,7 @@ const CivilianData = (() => {
       stationName: nearestLcr.name,
       stationId:   nearestLcr.id,
       distanceM,
-      caseId:      'INC-' + (1000 + Math.floor(Math.random()*9000)),
+      caseId:      newIncId(),
     };
     emergencyTimer = setInterval(() => {
       emergencySeconds++;
@@ -1933,7 +2049,7 @@ const CivilianData = (() => {
       // them at the previous/default coordinates. Falls back to a small
       // random jitter around Accra only if the address matches nothing.
       const addr = (details.address || '').toLowerCase();
-      let base = STATION_DIRECTORY.find(s => addr && addr.includes(s.name.split(' ')[0].toLowerCase()));
+      let base = liveDirectory().find(s => addr && addr.includes(s.name.split(' ')[0].toLowerCase()));
       if (!base) {
         const townKeywords = { accra:'GH-GA-ACC-001-B9C1', tema:'GH-GA-ACC-007-F2A3', kumasi:'GH-AS-KUM-001-A4F2',
           suame:'GH-AS-KUM-002-C7D9', takoradi:'GH-WR-TAK-001-D2E8', 'cape coast':'GH-CR-CAP-001-E5F1',
@@ -1942,7 +2058,7 @@ const CivilianData = (() => {
         const match = Object.keys(townKeywords).find(k => addr.includes(k));
         if (match) base = STATION_DIRECTORY.find(s => s.id === townKeywords[match]);
       }
-      if (!base) base = STATION_DIRECTORY[0];
+      if (!base) base = liveDirectory()[0];
       // Coarse estimate only (the town's station) — replaced by real GPS as soon as the device reports it.
       user.lat = base.lat; user.lng = base.lng; user.locationEstimated = true;
     }
@@ -1992,7 +2108,7 @@ const CivilianData = (() => {
     rnd, fmt, fmtDate, onUpdate, emit, startGPS, stopGPS, isLocationSharingOn, nearestStation, currentLatLng,
     loadAccount, saveAccount, registerUser, haversineM,
     loadPendingReports, addPendingReport, resolvePendingReport, getPendingReports, dismissReport,
-    stationDirectory: STATION_DIRECTORY,
+    get stationDirectory() { return liveDirectory(); },
   };
 })();
 
@@ -2163,6 +2279,7 @@ const CivilianApp = (() => {
      SOS — BIG RED BUTTON
   ════════════════════════════════════ */
   function triggerSOS() {
+    if (Pilot.paused()) { Pilot.pausedSheet(); return; }
     if (CivilianData.activeEmergency()) {
       /* Already active — go to emergency screen */
       navigate('emergency');
@@ -2183,7 +2300,7 @@ const CivilianApp = (() => {
           </div>
           <div style="background:var(--bg-deep);border-radius:var(--r-md);padding:10px;text-align:center">
             <div style="font-size:0.65rem;color:var(--text-muted);font-family:var(--font-mono);">NEAREST STATION</div>
-            <div style="font-size:0.75rem;font-weight:600;margin-top:3px">Accra Central</div>
+            <div style="font-size:0.75rem;font-weight:600;margin-top:3px">${(function(){try{const r=CivilianData.nearestStation(CivilianData.user.gpsLat||CivilianData.user.lat,CivilianData.user.gpsLng||CivilianData.user.lng);return r&&r.station?r.station.name:'Finding nearest control room…';}catch(e){return 'Finding nearest control room…';}})()}</div>
           </div>
         </div>
       </div>
@@ -2201,9 +2318,19 @@ const CivilianApp = (() => {
         <textarea class="form-textarea" id="sos-details" placeholder="Suspect description, number of people involved..." rows="2"></textarea>
       </div>`,
       `<button class="btn btn-ghost btn-sm" onclick="CivilianApp.closeSheet()">Cancel</button>
-       <button class="btn btn-danger btn-full btn-lg" onclick="CivilianApp.confirmSOS()">🚨 SEND EMERGENCY ALERT</button>`);
+       <button class="btn btn-danger btn-full btn-lg" onclick="CivilianApp.confirmSOS()">🚨 SEND EMERGENCY ALERT</button>
+       <button class="btn btn-full" id="sos-and-112" style="background:#fff;color:#7f1d1d;font-weight:800;border:2px solid #b91c1c;margin-top:8px" onclick="CivilianApp.sendAnd112()">📞 CALL 112 AND ALERT NEAREST CONTROL ROOM</button>
+       <div style="font-size:0.68rem;color:var(--text-muted);margin-top:6px;line-height:1.4">Dialling 112 yourself does not tell GEAMS. Use this button so the nearest control room is alerted too.</div>`);
   }
 
+  /* One tap: alert the nearest control room AND open the phone dialler for 112.
+     The dialler must open while the tap is still fresh, so it opens as soon as the alert has been handed over (or after 1.5 s at most).
+     If the phone goes to the call before the alert is confirmed, the saved-alert queue keeps trying and the app says what happened when you return. */
+  async function sendAnd112() {
+    const started = confirmSOS();
+    await Promise.race([started, new Promise(r => setTimeout(r, 1500))]);
+    try { const a = document.createElement('a'); a.href = 'tel:112'; document.body.appendChild(a); a.click(); setTimeout(() => a.remove(), 500); } catch (e) { window.location.href = 'tel:112'; }
+  }
   async function confirmSOS() {
     const type    = document.getElementById('sos-em-type')?.value || selectedEmType;
     const details = document.getElementById('sos-details')?.value || '';
@@ -2235,21 +2362,26 @@ const CivilianApp = (() => {
 
     const em = CivilianData.startEmergency(type);
     if (GeamsSync.available()) { em.officerName = null; em.officerBadge = null; em.officerETA = null; }
-    startEmergencySync(em, details);
+    const sending = startEmergencySync(em, details);
     // Flash topbar
     const tb = document.getElementById('topbar');
     if (tb) { tb.style.background='rgba(80,0,0,0.5)'; tb.style.borderBottomColor='var(--red)'; }
     const dot = document.getElementById('logo-dot');
     if (dot) dot.classList.add('emergency');
-    showToast('error','🚨 EMERGENCY ALERT SENT',`${type} · sent to the Control Room with your GPS · wait for an officer to be assigned`,7000);
+    showToast('info','Sending your alert…',`${type} · sending to the Control Room with your GPS`,4000);
+    // Say "sent" only when the server has it. If it is still trying, or was refused, the red/orange box on screen says so.
+    const res = await Promise.race([sending, new Promise(r => setTimeout(() => r('pending'), 4000))]);
+    if (res === 'refused') return;
+    if (res === 'sent') showToast('error','🚨 ALERT SENT',`${type} · the Control Room has it · wait for an officer to be assigned`,7000);
     // Navigate to emergency screen
-    setTimeout(()=>navigate('emergency'), 500);
+    setTimeout(()=>navigate('emergency'), 300);
   }
 
   /* ════════════════════════════════════
      SILENT SOS
   ════════════════════════════════════ */
   function silentSOS() {
+    if (Pilot.paused()) { Pilot.pausedSheet(); return; }
     if (CivilianData.activeEmergency()) {
       /* Already have an active report — don't let this create a second,
          orphaned incident from the same location. */
@@ -2305,11 +2437,13 @@ const CivilianApp = (() => {
 
     const em = CivilianData.startEmergency(type);
     if (GeamsSync.available()) { em.officerName = null; em.officerBadge = null; em.officerETA = null; }
-    startEmergencySync(em, 'Silent SOS — audio/video recording active');
+    const sending = startEmergencySync(em, 'Silent SOS — audio/video recording active');
     const dot = document.getElementById('logo-dot');
     if (dot) dot.classList.add('emergency');
-    showToast('error','🔇 Silent SOS Active','GPS broadcasting silently · Police alerted · Recording started',8000);
-    setTimeout(()=>navigate('emergency'),400);
+    const res = await Promise.race([sending, new Promise(r => setTimeout(() => r('pending'), 4000))]);
+    if (res === 'refused') return;
+    if (res === 'sent') showToast('error','🔇 Silent SOS sent','The Control Room has your alert and your GPS',8000);
+    setTimeout(()=>navigate('emergency'),300);
   }
 
   /* ════════════════════════════════════
@@ -3302,7 +3436,36 @@ const CivilianApp = (() => {
   let _faceStopWatch = null;
   let _faceLiveDescriptor = null;
 
+  // ── Account recovery: a code only you hold moves your account to a new phone ──
+  function showRecoveryCode(code, intro) {
+    const u = CivilianData.user;
+    openSheet('🛟 Your Recovery Code', `
+      <div style="font-size:0.78rem;line-height:1.6;color:var(--text-muted);margin-bottom:10px">${intro || 'Keep this code safe. If you lose or change your phone, it brings your profile, Face ID and alerts to the new one.'}</div>
+      <div style="font-family:var(--font-mono);font-size:1.25rem;font-weight:800;letter-spacing:2px;text-align:center;padding:14px;border:1px dashed var(--border-mid);border-radius:10px;user-select:all">${code}</div>
+      <div style="text-align:center;font-size:0.72rem;color:var(--text-muted);margin-top:8px">Account number: <b style="color:var(--text-white)">${u.id}</b></div>
+      <div style="font-size:0.72rem;line-height:1.55;color:var(--text-muted);margin-top:10px">Write both down or screenshot them and keep them somewhere that is <b>not only on this phone</b>. Anyone with this code and your account number can take over your account, so do not share it. It is shown only once.</div>`,
+      `<button class="btn btn-ghost" onclick="CivilianApp.copyRecoveryCode('${code}')">📋 Copy</button><button class="btn btn-primary btn-full" onclick="CivilianApp.closeSheet()">✅ I have saved it</button>`);
+  }
+  function copyRecoveryCode(code) {
+    const t = 'GEAMS account ' + CivilianData.user.id + ' recovery code: ' + code;
+    try { navigator.clipboard.writeText(t).then(() => showToast('success', 'Copied', 'Now paste it somewhere safe', 3000), () => showToast('warning', 'Could not copy', 'Write the code down instead', 4000)); }
+    catch (e) { showToast('warning', 'Could not copy', 'Write the code down instead', 4000); }
+  }
+  async function makeRecoveryCode() {
+    showToast('info', 'Creating your recovery code…', '', 2000);
+    let r; try { r = await GeamsSync.api('/api/civilian/recovery/create', 'POST', { civilianId: CivilianData.user.id }); } catch (e) { r = { ok: false, j: { error: 'Could not reach the server' } }; }
+    if (!r.ok) { showToast('error', 'No code created', (r.j && r.j.error) || 'Try again in a moment', 6000); return; }
+    showRecoveryCode(r.j.code);
+  }
+  function accountRecovery(first) {
+    if (!CivilianData.user.id) { showToast('warning', 'No account yet', 'Create your account first', 4000); return; }
+    if (first === true) { makeRecoveryCode(); return; }
+    openSheet('🛟 Recovery Code', `<div style="font-size:0.8rem;line-height:1.6;color:var(--text-muted)">Lost or changing your phone? A recovery code lets you restore this account on the new one (profile, Face ID and past alerts).<br><br>Making a new code <b>replaces</b> any code you had before.</div>`,
+      `<button class="btn btn-ghost" onclick="CivilianApp.closeSheet()">Cancel</button><button class="btn btn-primary btn-full" onclick="CivilianApp.makeRecoveryCode()">Make a new code</button>`);
+  }
+
   function enrolFace() {
+    if (!CivilianData.user.faceEnrolled && !Privacy.askFace()) return;
     if (CivilianData.user.faceEnrolled) {
       openSheet('🧿 Face ID Biometric', `
         <div style="font-size:0.82rem;color:var(--text-muted);line-height:1.6">
@@ -3395,7 +3558,7 @@ const CivilianApp = (() => {
     CivilianData.user.faceDescriptor = descriptorArray;
     CivilianData.saveAccount();
     // Sent to the server, which keeps it private. Officers can only ask the server "does this face match?".
-    GeamsSync.api('/api/face/enrol', 'POST', { civilianId: CivilianData.user.id, name: CivilianData.user.name, phone: CivilianData.user.phone, ghCard: CivilianData.user.ghCard, descriptor: descriptorArray })
+    GeamsSync.api('/api/face/enrol', 'POST', { civilianId: CivilianData.user.id, name: CivilianData.user.name, phone: CivilianData.user.phone, ghCard: CivilianData.user.ghCard, descriptor: descriptorArray, faceConsent: true, notice: Privacy.VER })
       .then(r => { if (!r.ok) showToast('warning', 'Face ID not shared', (r.j && r.j.error) || 'The server did not accept it'); }).catch(() => {});
     stopFaceEnrolCamera();
     closeSheet();
@@ -3588,6 +3751,7 @@ const CivilianApp = (() => {
 
   function enterApp() {
     startClock();
+    try { Privacy.afterLogin(); } catch (e) {}
     navigate('home');
 
     // Re-establish resolution watchers for any report still pending from
@@ -3617,6 +3781,7 @@ const CivilianApp = (() => {
           const first = CivilianData.user.gpsLat === undefined;
           CivilianData.user.gpsLat = pos.coords.latitude;
           CivilianData.user.gpsLng = pos.coords.longitude;
+          CivilianData.user.areaOnly = false; // a real fix replaces a manually chosen area
           CivilianData.saveAccount(); // remember the real fix across reloads
           const { station, distanceM } = CivilianData.nearestStation(pos.coords.latitude, pos.coords.longitude);
           CivilianData.emit('gps_update', { lat:pos.coords.latitude, lng:pos.coords.longitude, station, distanceM });
@@ -3674,10 +3839,10 @@ const CivilianApp = (() => {
   // and re-picking a new jurisdiction simulates moving between them.
   function simulateLocation() {
     const stations = CivilianData.stationDirectory;
-    openSheet('📍 Simulate My Location', `
+    openSheet('📍 Set my area (no GPS)', `
       <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:14px;line-height:1.6">
-        Real GPS isn't always available while testing. Pick a jurisdiction to simulate being there —
-        the nearest LCR, map, and SOS routing will update immediately.
+        GPS is not available. Pick the area you are in so your alert goes to the right control room.
+        <b>This is NOT your exact position.</b> Your alert will say "area only, no GPS" and the control room will have to ask you where you are. Turn GPS on as soon as you can.
       </div>
       <select class="form-select" id="sim-location-select">
         ${stations.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')}
@@ -3690,14 +3855,14 @@ const CivilianApp = (() => {
     const sel = document.getElementById('sim-location-select');
     const station = CivilianData.stationDirectory.find(s => s.id === sel.value);
     if (!station) return;
-    // Small jitter so the pin isn't exactly on top of the station marker
-    const jitter = () => (Math.random()-0.5)*0.01;
-    CivilianData.user.gpsLat = station.lat + jitter();
-    CivilianData.user.gpsLng = station.lng + jitter();
-    CivilianData.saveAccount(); // persist so this doesn't reset to Accra on next launch
+    // The area centre is used for ROUTING only and is flagged on every alert as "area only"; no invented offset.
+    CivilianData.user.gpsLat = station.lat;
+    CivilianData.user.gpsLng = station.lng;
+    CivilianData.user.areaOnly = true; CivilianData.user.areaName = station.name;
+    CivilianData.saveAccount();
     CivilianData.emit('gps_update', { lat: CivilianData.user.gpsLat, lng: CivilianData.user.gpsLng });
     closeSheet();
-    showToast('success','Location Updated', `Now simulating your location near ${station.name}`);
+    showToast('warning','Area set (not exact)', `Alerts will go to ${station.name} and say "area only, no GPS"`);
     renderScreen(currentScreen);
   }
 
@@ -3728,7 +3893,7 @@ const CivilianApp = (() => {
 
   return {
     navigate, showToast, openSheet, closeSheet, selectEmType,
-    triggerSOS, confirmSOS, silentSOS, confirmSilentSOS,
+    triggerSOS, confirmSOS, sendAnd112, silentSOS, confirmSilentSOS,
     cancelSOS, confirmCancelSOS, iAmSafe, confirmSafe,
     shareLocation, confirmShareLocation, stopSharing,
     verifyOfficer, runVerify, requestWelfareCheck, submitWelfareCheck,
@@ -3741,6 +3906,7 @@ const CivilianApp = (() => {
     stopEvidenceRelayManual, stopEvidenceRelayIfMatching, resumeEvidenceRelay, toggleLiveVideo, startLiveVideo, stopLiveVideo, flipLiveCamera,
     updateEmergencyContacts, editEmergencyContact, saveEmergencyContact, removeEmergencyContact,
     enrolFingerprint, runFingerprintScan, removeFingerprint, verifyFingerprint,
+    accountRecovery, makeRecoveryCode, showRecoveryCode, copyRecoveryCode,
     enrolFace, captureFaceNow, closeFaceSheet, removeFace, startFaceEnrolCamera,
     changePin, submitChangePin,
     manageLocationPermissions, saveLocationPermission,
@@ -3754,6 +3920,41 @@ const CivilianApp = (() => {
 })();
 
 /* ── PIN LOGIN GATE ── */
+
+/* ── Privacy notice and consent ── */
+const Privacy = (() => {
+  const VER = '2026-11-1';
+  const cfg = () => window.GEAMS_CONFIG || {};
+  const esc2 = (x) => String(x == null ? '' : x).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  function notice() {
+    const c = cfg(), contact = c.privacyContact ? esc2(c.privacyContact) : '<b>not set by the operator yet</b> — ask your control room who handles your data requests';
+    return `<div style="font-size:0.8rem;line-height:1.65">
+      <p><b>What GEAMS collects.</b> Your name, phone number, Ghana Card number, home address, your phone's location when you send or track an alert, the details and photos or recordings you add to an alert, and messages in the alert chat. If you choose it, a <b>face template</b> (numbers computed from your face; not a photo).</p>
+      <p><b>Why.</b> To send help to the right place and to let the emergency services identify you and contact you during an emergency.</p>
+      <p><b>Who sees it.</b> The control room that handles your alert, the officers and crews assigned to it, and national HQ. Face templates are kept on the server and never shown to staff: officers can only ask the server whether a face matches, and every such check is logged.</p>
+      <p><b>Face matching is optional.</b> You can use GEAMS without it. A match is only a guide for a human to check and can be wrong. You can remove your face record at any time in Profile → Privacy notice &amp; my consents.</p>
+      <p><b>How long.</b> Closed incidents are anonymised and then deleted after the periods set by the operator. Backups keep older copies until they rotate out.</p>
+      <p><b>Your rights.</b> You can download your data (Profile → Download my data), correct it, and ask for it to be deleted.</p>
+      <p><b>Contact for data requests:</b> ${contact}.${c.privacyUrl ? ' <a href="' + esc2(c.privacyUrl) + '" target="_blank" rel="noopener">Full notice</a>' : ''}</p>
+      <p style="color:var(--text-muted)">GEAMS does not replace calling 112. This notice version: ${VER}.</p></div>`;
+  }
+  function ack() { try { localStorage.setItem('geams_priv_ver', VER); } catch (e) {} try { GeamsSync.api('/api/civilian/consent', 'POST', { notice: VER, civilianId: (CivilianData.user || {}).id }).catch(() => {}); } catch (e) {} }
+  function seen() { try { return localStorage.getItem('geams_priv_ver') === VER; } catch (e) { return false; } }
+  function show() { CivilianApp.openSheet('🔒 Privacy notice', notice(), '<button class="btn btn-primary btn-full" onclick="Privacy.close()">OK, I have read it</button>'); }
+  function close() { ack(); CivilianApp.closeSheet(); }
+  function mine() {
+    const u = CivilianData.user || {};
+    CivilianApp.openSheet('🔒 Privacy notice & my consents', notice()
+      + `<div style="border-top:1px solid var(--border);margin-top:10px;padding-top:10px;font-size:0.8rem"><b>My consents</b><div style="margin:6px 0">Privacy notice: ${seen() ? 'read (version ' + VER + ')' : 'not yet confirmed on this phone'}</div>
+      <div style="margin:6px 0">Face template: ${u.faceEnrolled ? 'stored with your consent' : 'none stored'}</div>
+      ${u.faceEnrolled ? '<button class="btn btn-danger btn-full" onclick="Privacy.withdrawFace()">Withdraw face consent and delete my face record</button>' : ''}</div>`, '<button class="btn btn-ghost btn-full" onclick="CivilianApp.closeSheet()">Close</button>');
+  }
+  function withdrawFace() { if (!confirm('Delete your face record from this phone and from the server?')) return; CivilianApp.removeFace(); }
+  function askFace() { return confirm('Face matching (optional)\n\nGEAMS will store a face template (numbers from your face, not a photo) on its server so an officer can check, with a logged reason, whether a face matches you. A match is only a guide and can be wrong. You can delete it at any time in Profile.\n\nDo you consent?'); }
+  function afterLogin() { if (seen()) return; let n = 0; const t = setInterval(() => { const ov = document.getElementById('sheet-overlay'); if (seen() || ++n > 8) return clearInterval(t); if (ov && ov.classList.contains('hidden')) { clearInterval(t); show(); } }, 2500); }
+  return { VER, show, close, mine, ack, withdrawFace, askFace, afterLogin, seen };
+})();
+
 const PinGate = (() => {
   let entered  = '';
   const PIN_LEN = 4;
@@ -3765,6 +3966,7 @@ const PinGate = (() => {
   }
 
   function showLogin() {
+    document.getElementById('pin-restore-view').classList.add('hidden');
     document.getElementById('pin-signup-view').classList.add('hidden');
     document.getElementById('pin-login-view').classList.remove('hidden');
     const u = CivilianData.user;
@@ -3775,9 +3977,65 @@ const PinGate = (() => {
   }
 
   function showSignup() {
+    document.getElementById('pin-restore-view').classList.add('hidden');
     document.getElementById('pin-login-view').classList.add('hidden');
     document.getElementById('pin-signup-view').classList.remove('hidden');
     document.getElementById('signup-error').textContent = '\u00a0';
+  }
+
+  function showRestore() {
+    document.getElementById('pin-login-view').classList.add('hidden');
+    document.getElementById('pin-signup-view').classList.add('hidden');
+    document.getElementById('pin-restore-view').classList.remove('hidden');
+    document.getElementById('restore-error').textContent = '\u00a0';
+  }
+  function backFromRestore() { if (CivilianData.user.id && CivilianData.user.pin) showLogin(); else showSignup(); }
+  /* Restore through the registered phone number (needs SMS on the server) */
+  function phoneRestoreToggle() { document.getElementById('rs-phone-box').classList.toggle('hidden'); }
+  async function phoneRestorePost(path, body) { await GeamsSync.ready; const r = await fetch(GeamsSync.base + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); let j = {}; try { j = await r.json(); } catch (e) {} return { ok: r.ok, status: r.status, j }; }
+  async function phoneRestoreSend() {
+    const err = document.getElementById('restore-error'), phone = document.getElementById('rs-phone').value.trim(); err.textContent = '\u00a0';
+    if (!phone) { err.textContent = 'Enter the phone number you registered with'; return; }
+    try { const r = await phoneRestorePost('/api/civilian/otp/request', { phone }); if (!r.ok) { err.textContent = r.status === 501 ? 'SMS is not switched on for this system yet. Use your recovery code, or ask your control room.' : ((r.j && r.j.error) || 'Could not send the code'); return; }
+      document.getElementById('rs-code-row').classList.remove('hidden'); err.textContent = 'Code sent. It expires in 10 minutes.'; } catch (e) { err.textContent = 'Could not reach the server. Check your connection.'; }
+  }
+  async function phoneRestoreFinish() {
+    const err = document.getElementById('restore-error'), btn = document.getElementById('rs-pbtn'), phone = document.getElementById('rs-phone').value.trim(), code = document.getElementById('rs-sms').value.trim();
+    const pin = document.getElementById('rs-pin').value.trim(), pin2 = document.getElementById('rs-pin2').value.trim(), idv = document.getElementById('rs-id').value.trim().toUpperCase();
+    if (!/^\d{4}$/.test(pin)) { err.textContent = 'Choose a 4-digit PIN above first'; return; } if (pin !== pin2) { err.textContent = 'The two PINs do not match'; return; } if (!/^\d{6}$/.test(code)) { err.textContent = 'Enter the 6-digit code from the SMS'; return; }
+    err.textContent = '\u00a0'; btn.disabled = true; btn.textContent = 'Checking…';
+    try {
+      const v = await phoneRestorePost('/api/civilian/otp/verify', { phone, code, secret: GeamsSync.devSecret() });
+      if (!v.ok) { err.textContent = (v.j && v.j.error) || 'Wrong code'; btn.disabled = false; btn.textContent = 'Verify and restore →'; return; }
+      GeamsSync.adoptVerified(v.j.token);
+      const r = await GeamsSync.api('/api/civilian/recovery/restore', 'POST', { viaPhone: true, civilianId: /^CIV-\d{3,8}$/.test(idv) ? idv : undefined });
+      if (!r.ok) { err.textContent = (r.j && r.j.error) || 'Could not restore'; btn.disabled = false; btn.textContent = 'Verify and restore →'; return; }
+      applyRestored(r, pin);
+    } catch (e) { err.textContent = 'Could not reach the server. Check your connection.'; btn.disabled = false; btn.textContent = 'Verify and restore →'; }
+  }
+  function applyRestored(r, pin) {
+      const pr = r.j.profile || {};
+      Object.assign(CivilianData.user, { id: pr.id, name: pr.name, phone: pr.phone, ghCard: pr.ghCard, address: pr.address || '', registeredDate: pr.registeredDate, verified: true, faceEnrolled: !!r.j.faceEnrolled, faceDescriptor: null, pin });
+      if (typeof pr.lat === 'number') { CivilianData.user.lat = pr.lat; CivilianData.user.lng = pr.lng; }
+      CivilianData.saveAccount();
+      try { localStorage.setItem('geams_unlocked', '1'); } catch (e) {}
+      hide();
+      setTimeout(() => { CivilianApp.enterApp(); CivilianApp.showRecoveryCode(r.j.newCode, 'Welcome back, ' + (pr.name || '') + '. ' + (r.j.alertsMoved ? r.j.alertsMoved + ' of your alerts moved to this phone. ' : '') + 'Your old recovery code no longer works. This is your new one.'); }, 350);
+  }
+  async function doRestore() {
+    const err = document.getElementById('restore-error'), btn = document.getElementById('rs-btn');
+    const id = document.getElementById('rs-id').value.trim().toUpperCase(), code = document.getElementById('rs-code').value.trim();
+    const pin = document.getElementById('rs-pin').value.trim(), pin2 = document.getElementById('rs-pin2').value.trim();
+    if (!/^CIV-\d{3,8}$/.test(id)) { err.textContent = 'Enter your account number, like CIV-12345'; return; }
+    if (code.replace(/[^A-Za-z0-9]/g, '').length < 15) { err.textContent = 'Enter the full recovery code'; return; }
+    if (!/^\d{4}$/.test(pin)) { err.textContent = 'PIN must be exactly 4 digits'; return; }
+    if (pin !== pin2) { err.textContent = 'The two PINs do not match'; return; }
+    err.textContent = '\u00a0'; btn.disabled = true; btn.textContent = 'Restoring…';
+    try {
+      const r = await GeamsSync.api('/api/civilian/recovery/restore', 'POST', { civilianId: id, code });
+      if (!r.ok) { err.textContent = (r.j && r.j.error) || 'Could not restore. Check your connection.'; btn.disabled = false; btn.textContent = 'Restore account →'; return; }
+      applyRestored(r, pin);
+    } catch (e) { err.textContent = 'Could not reach the server. Check your connection.'; btn.disabled = false; btn.textContent = 'Restore account →'; }
   }
 
   function hide() {
@@ -3851,6 +4109,7 @@ const PinGate = (() => {
     if (pin !== pin2) {
       err.textContent = 'PINs do not match'; return;
     }
+    if (!document.getElementById('su-privacy').checked) { err.textContent = 'Please read and accept the privacy notice'; return; }
 
     signupDraft = { name, phone, ghCard, address, pin };
     err.textContent = '\u00a0';
@@ -3950,6 +4209,7 @@ const PinGate = (() => {
       CivilianApp.showToast('warning', 'No Face Detected', 'Align your face in the frame first');
       return;
     }
+    if (!document.getElementById('su-face-consent').checked) { CivilianApp.showToast('warning', 'Consent needed', 'Tick the consent box to save a Face ID, or skip this step'); return; }
     const descriptorArray = Array.from(_suFaceLiveDescriptor);
     stopSignupFaceCamera();
     finalizeSignup(descriptorArray);
@@ -3972,12 +4232,13 @@ const PinGate = (() => {
       if (faceDescriptorOrNull) {
         CivilianData.user.faceEnrolled = true;
         CivilianData.user.faceDescriptor = faceDescriptorOrNull;
-        CivilianData.saveAccount();
+        CivilianData.saveAccount(); Privacy.ack();
         // Sent to the server, which keeps it private (officers can only ask it to compare a face).
-        GeamsSync.api('/api/face/enrol', 'POST', { civilianId: CivilianData.user.id, name: CivilianData.user.name, phone: CivilianData.user.phone, ghCard: CivilianData.user.ghCard, descriptor: faceDescriptorOrNull }).catch(() => {});
+        GeamsSync.api('/api/face/enrol', 'POST', { civilianId: CivilianData.user.id, name: CivilianData.user.name, phone: CivilianData.user.phone, ghCard: CivilianData.user.ghCard, descriptor: faceDescriptorOrNull, faceConsent: true, notice: Privacy.VER }).catch(() => {});
       }
 
       try { localStorage.setItem('geams_unlocked', '1'); } catch (e) {}
+      try { Privacy.ack(); } catch (e) {}
       if (err) err.textContent = '\u00a0';
       signupDraft = null;
       hide();
@@ -3989,6 +4250,7 @@ const PinGate = (() => {
             ? `Account created for ${draft.name} with Face ID · nearest LCR: ${station.name} (${(distanceM/1000).toFixed(1)} km)`
             : `Account created for ${draft.name} · nearest LCR: ${station.name} (${(distanceM/1000).toFixed(1)} km) · Add Face ID later from Profile`,
           6000);
+        setTimeout(() => { try { CivilianApp.accountRecovery(true); } catch (e) {} }, 7000);
       }, 350);
     };
 
@@ -4005,7 +4267,7 @@ const PinGate = (() => {
     }
   }
 
-  return { show, showLogin, showSignup, press, backspace,
+  return { show, showLogin, showSignup, showRestore, backFromRestore, doRestore, phoneRestoreToggle, phoneRestoreSend, phoneRestoreFinish, press, backspace,
     continueToFaceStep, backToDetailsStep, startSignupFaceCamera, captureSignupFace, skipSignupFace };
 })();
 /* GEAMS CIVILIAN — pages.js */
@@ -4355,7 +4617,7 @@ const ScreenTrack = (() => {
         <div style="padding:8px 12px;display:flex;align-items:center;gap:8px;border-top:1px solid var(--border-dim);background:var(--bg-deep)">
           <span style="font-size:0.9rem">📡</span>
           <span style="font-size:0.72rem;flex:1">Nearest LCR: <b>${station.name}</b></span>
-          <button class="btn btn-ghost btn-sm" onclick="CivilianApp.simulateLocation()">📍 Simulate Location</button>
+          ${(window.GEAMS_CONFIG && window.GEAMS_CONFIG.simulateLocation) ? '<button class="btn btn-ghost btn-sm" onclick="CivilianApp.simulateLocation()">📍 Simulate Location (test mode)</button>' : ''}
         </div>
       </div>
 
@@ -4614,6 +4876,11 @@ const ScreenProfile = (() => {
             {icon:'🧿',label:'Enrol Face ID Biometric',fn:"CivilianApp.enrolFace()"},
             {icon:'🧬',label:'Enrol Fingerprint Biometric',fn:"CivilianApp.enrolFingerprint()"},
             {icon:'🔑',label:'Change GEAMS PIN',fn:"CivilianApp.changePin()"},
+            {icon:'🛟',label:'Recovery Code (for a new phone)',fn:"CivilianApp.accountRecovery()"},
+            {icon:'🔒',label:'Privacy notice & my consents',fn:"Privacy.mine()"},
+            {icon:'🌐',label:'Language',fn:"GeamsI18n.pick()"},
+            {icon:'🔠',label:'Text size, contrast & movement',fn:"GeamsA11y.open()"},
+            {icon:'💬',label:'Send feedback',fn:"Feedback.open('civilian',true)"},
             {icon:'📍',label:'Manage Location Permissions',fn:"CivilianApp.manageLocationPermissions()"},
             {icon:'📥',label:'Download My Data (GDPR)',fn:"CivilianApp.downloadMyData()"},
             {icon:'🗑',label:'Request Account Deletion',fn:"CivilianApp.requestAccountDeletion()"},
@@ -4801,4 +5068,41 @@ const PublicAlerts = (() => {
 </script>
 <script>PublicAlerts.start({ audience: 'civilians', stationId: () => { const ll = CivilianData.currentLatLng(); return ll && ll.lat != null && ll.lng != null ? CivilianData.nearestStation(ll.lat, ll.lng).station.id : null; } });</script>
 <script>try { if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) navigator.serviceWorker.register('/geams-sw.js').catch(() => {}); } catch (e) {}</script>
+
+<script>
+/* Feedback: a small form any signed-in person can use. Goes to HQ only. */
+const Feedback = (() => {
+  const e2 = (x) => String(x == null ? '' : x).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  function open(app, isCivilian) {
+    const old = document.getElementById('fb-overlay'); if (old) old.remove();
+    const o = document.createElement('div'); o.id = 'fb-overlay';
+    o.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,.78);display:flex;align-items:center;justify-content:center;padding:16px';
+    const inp = 'width:100%;box-sizing:border-box;padding:10px 12px;margin-top:6px;border-radius:8px;border:1px solid #3a4a5c;background:#0b1118;color:#fff;font-size:15px;font-family:inherit';
+    o.innerHTML = '<div style="width:100%;max-width:400px;background:#101a24;border:1px solid #2c3d4f;border-radius:14px;padding:18px;color:#e6eef6;font-family:system-ui,sans-serif">'
+      + '<div style="font-size:17px;font-weight:700">💬 Send feedback</div>'
+      + '<div style="font-size:13px;color:#9db0c3;margin:6px 0 10px;line-height:1.45">Tell the GEAMS team what is wrong, what could be better, or what works. Do <b>not</b> use this for an emergency: call 112.</div>'
+      + '<select id="fb-kind" style="' + inp + '"><option value="problem">Something is wrong</option><option value="idea">An idea</option><option value="praise">Something works well</option></select>'
+      + '<textarea id="fb-text" rows="5" maxlength="1000" placeholder="What happened? What were you doing?" style="' + inp + '"></textarea>'
+      + (isCivilian ? '<label style="display:flex;gap:8px;font-size:12.5px;color:#9db0c3;margin-top:8px;align-items:flex-start"><input type="checkbox" id="fb-ok" style="margin-top:2px"><span>You may contact me about this. Your feedback is anonymous unless you tick this.</span></label><input id="fb-contact" placeholder="Phone number (only if ticked)" style="' + inp + '">' : '<div style="font-size:12px;color:#9db0c3;margin-top:8px">Staff feedback shows your sign-in name to HQ.</div>')
+      + '<div id="fb-err" style="color:#ff8a80;font-size:13px;min-height:18px;margin-top:6px"></div>'
+      + '<div style="display:flex;gap:8px"><button id="fb-cancel" style="flex:1;padding:11px;border-radius:8px;border:1px solid #3a4a5c;background:transparent;color:#cfd9e3">Cancel</button><button id="fb-send" style="flex:2;padding:11px;border-radius:8px;border:0;background:#1f9d6a;color:#fff;font-weight:700">Send</button></div></div>';
+    document.body.appendChild(o);
+    const err = (t) => { document.getElementById('fb-err').textContent = t || ''; };
+    document.getElementById('fb-cancel').onclick = () => o.remove();
+    document.getElementById('fb-send').onclick = async () => {
+      const text = document.getElementById('fb-text').value.trim(); if (text.length < 5) return err('Please write a few words');
+      const btn = document.getElementById('fb-send'); btn.disabled = true; btn.textContent = 'Sending…';
+      try {
+        const body = { kind: document.getElementById('fb-kind').value, text, app: app + ' ' + (window.GEAMS_BUILD || ''), contactOk: isCivilian ? document.getElementById('fb-ok').checked : false, contact: isCivilian ? document.getElementById('fb-contact').value : '' };
+        const r = await fetch((GeamsSync.base || '') + '/api/feedback', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (GeamsSync.token || '') }, body: JSON.stringify(body) });
+        let j = {}; try { j = await r.json(); } catch (e) {}
+        if (!r.ok) { err(j.error || 'Not sent'); btn.disabled = false; btn.textContent = 'Send'; return; }
+        o.innerHTML = '<div style="background:#101a24;border:1px solid #2c3d4f;border-radius:14px;padding:22px;color:#e6eef6;font-family:system-ui,sans-serif;max-width:340px;text-align:center"><div style="font-size:30px">✅</div><div style="font-weight:700;margin:6px 0">Thank you, sent to HQ</div><div style="font-size:12.5px;color:#9db0c3">Reference ' + e2(j.id) + '</div><button id="fb-done" style="margin-top:12px;padding:10px 24px;border-radius:8px;border:0;background:#1f9d6a;color:#fff;font-weight:700">Close</button></div>';
+        document.getElementById('fb-done').onclick = () => o.remove();
+      } catch (e) { err('Could not reach the server. Try again when you have a connection.'); btn.disabled = false; btn.textContent = 'Send'; }
+    };
+  }
+  return { open };
+})();
+</script>
 </body></html>

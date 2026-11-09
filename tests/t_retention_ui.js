@@ -1,0 +1,25 @@
+const { chromium } = require('playwright');const fs=require('fs'),{spawn}=require('child_process');const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+let pass=0,fail=0;const ok=(n,c,x)=>{c?pass++:fail++;console.log((c?'PASS ':'FAIL ')+n+(c?'':'  '+(x||'')))};
+const B='http://localhost:8080';
+(async()=>{
+ const ROOT='/tmp/gretui';fs.rmSync(ROOT,{recursive:true,force:true});fs.mkdirSync(ROOT,{recursive:true});
+ const key='lcr:GH-VR-HOH-001-P3Q7:incidents',now=Date.now(),day=86400000;
+ const inc={OLD1:{id:'OLD1',status:'resolved',civilianName:'Ama',createdAt:new Date(now-200*day).toISOString(),srv:{received:now-200*day},resolvedAt:now-200*day}};
+ fs.writeFileSync(ROOT+'/d.json',JSON.stringify({[key]:{value:inc,v:1,ts:now}}));
+ const srv=spawn('node',['geams-server.js'],{env:{...process.env,PORT:'8080',GEAMS_DATA:ROOT+'/d.json',GEAMS_HQ_USERS:ROOT+'/u.json',GEAMS_HQ_ADMIN_PASSWORD:'Test-Owner-Pass-1',GEAMS_SEED_DEFAULT_STATIONS:'1',GEAMS_BACKUP_HOURS:'0',GEAMS_RETAIN_INCIDENT_DAYS:'90',GEAMS_BACKUP_DIR:ROOT+'/bk'}});await sleep(2500);
+ const br=await chromium.launch();
+ const mk=async(f)=>{const c=await br.newContext({geolocation:{latitude:7.152,longitude:0.474},permissions:['geolocation']});await c.route(/cdnjs|unpkg|jsdelivr|tile|arcgis|openstreetmap|fonts|osrm/,r=>r.abort());const p=await c.newPage();p.on('pageerror',e=>{if(!/L is not defined|reading '(addTo|on|setView|remove|classList|invalidateSize|getContainer)'/.test(e.message))console.log('PAGEERR',f,e.message)});await p.goto(B+'/'+f);await sleep(1800);return p};
+ const Q=await mk('geams-hq-dashboard__1_.html');await Q.fill('#hq-user','hqadmin');await Q.fill('#hq-pass','Test-Owner-Pass-1');await Q.evaluate(()=>HqAuth.submit({preventDefault(){}}));await sleep(3500);
+ await Q.evaluate(()=>{HqOps.retention()});await sleep(1800);
+ let m=await Q.evaluate(()=>(document.querySelector('.modal-body')||document.getElementById('modal-body')||document.body).innerText);
+ ok('screen shows policy and one due',/delete after 90/.test(m)&&/1\s*to delete/.test(m),m.slice(0,300));
+ Q.on('dialog',d=>d.accept());
+ await Q.evaluate(()=>{HqOps.retentionRun()});await sleep(4000);
+ m=await Q.evaluate(()=>(document.querySelector('.modal-body')||document.getElementById('modal-body')||document.body).innerText);
+ ok('after run shows log and nothing due',/deleted 1/.test(m)&&/0\s*to delete/.test(m),m.slice(0,400));
+ const r=await fetch(B+'/api/hq/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'hqadmin',password:'Test-Owner-Pass-1'})});const t=(await r.json()).token;
+ const v=(await (await fetch(B+'/api/kv/'+encodeURIComponent(key),{headers:{Authorization:'Bearer '+t}})).json()).value;
+ ok('incident really deleted on the server',!v.OLD1,JSON.stringify(v));
+ ok('both HQ dashboard buttons present',(await Q.evaluate(()=>(document.documentElement.innerHTML.match(/HqOps\.retention\(\)/g)||[]).length))>=2);
+ await br.close();srv.kill();console.log('\n'+pass+' passed, '+fail+' failed');process.exit(fail?1:0);
+})().catch(e=>{console.log('ERR',e.stack);process.exit(2)});

@@ -1,0 +1,86 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>GEAMS pilot runbook</title>
+<style>body{font:15px/1.55 system-ui,Segoe UI,Arial,sans-serif;max-width:820px;margin:24px auto;padding:0 16px;color:#111}h1{font-size:26px}h2{margin-top:30px;border-bottom:2px solid #111;padding-bottom:4px}h3{margin-bottom:4px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #999;padding:6px 8px;vertical-align:top;text-align:left}th{background:#eee}.box{border:2px solid #b00;padding:10px 14px;background:#fff4f4;margin:14px 0}.ok{border-color:#060;background:#f3fff3}li{margin:3px 0}code{background:#eee;padding:1px 4px}input[type=checkbox]{margin-right:6px}@media print{h2{page-break-before:always}h2:first-of-type{page-break-before:avoid}}</style></head><body>
+<h1>GEAMS pilot runbook</h1>
+<p>For the person running the pilot (the "pilot lead"). Print it. Tick the boxes. Keep it next to the phone you will use for the test.</p>
+<div class="box"><b>What this document is not.</b> It does not replace legal advice. Items marked <b>[LAWYER]</b> must be checked by a Ghanaian lawyer or the Data Protection Commission before real people use the system. GEAMS is a pilot tool: keep the existing 112 / police / fire / ambulance phone routes running in parallel for the whole pilot. Do not tell civilians that GEAMS replaces them.</div>
+
+<h2>1. Before anything: the go / no-go list</h2>
+<p>Do not start the pilot until every line is ticked.</p>
+<table><tr><th>Done</th><th>Item</th><th>Where to check</th></tr>
+<tr><td><input type="checkbox"></td><td>Server is on HTTPS, with a real database (<code>GEAMS_DATABASE_URL</code>) and the owner password set (<code>GEAMS_HQ_ADMIN_PASSWORD</code>)</td><td>HQ app → Security check: no red lines</td></tr>
+<tr><td><input type="checkbox"></td><td>Backups on, encrypted (<code>GEAMS_BACKUP_PASSPHRASE</code>), and a copy goes off the server (<code>GEAMS_BACKUP_PUT_URL</code>). One restore has been practised on a spare server</td><td>HQ app → Storage health; deploy checklist section C</td></tr>
+<tr><td><input type="checkbox"></td><td>Passphrase and owner password written down and stored in two separate safe places</td><td>Paper, safe</td></tr>
+<tr><td><input type="checkbox"></td><td>Personal commander accounts required (<code>GEAMS_REQUIRE_COMMANDER_ACCOUNTS=1</code>) and each commander has their own account</td><td>HQ → Security check</td></tr>
+<tr><td><input type="checkbox"></td><td>Privacy notice published and the contact details in it are real <b>[LAWYER]</b></td><td>Civilian app → Profile</td></tr>
+<tr><td><input type="checkbox"></td><td>Registration with the Data Protection Commission and a lawful basis for face data decided <b>[LAWYER]</b></td><td>Lawyer</td></tr>
+<tr><td><input type="checkbox"></td><td>Retention periods chosen and set (<code>GEAMS_RETAIN_INCIDENT_DAYS</code> etc.) <b>[LAWYER]</b></td><td>HQ → Data retention</td></tr>
+<tr><td><input type="checkbox"></td><td>Real-phone test script (section 4) passed on at least two different phones and two networks</td><td>Section 4</td></tr>
+<tr><td><input type="checkbox"></td><td>The pilot station has staff for every shift, and a named person who answers the phone if the system is down</td><td>Rota</td></tr>
+<tr><td><input type="checkbox"></td><td>Map tiles and any SMS / location services you rely on are paid for and working (they are outside GEAMS)</td><td>Section 4, step 9</td></tr></table>
+
+<h2>2. Setting up the pilot</h2>
+<h3>Week before</h3>
+<ol><li>HQ owner signs in, creates the pilot station (and any second station) and prints each station's sign-in details.</li>
+<li>Each commander signs in once, sets their personal password, and creates their own commander account.</li>
+<li>Officers, fire crews and ambulance crews register in their app. The control room approves each one under <b>Crew approvals</b>. Hand each person their quick-start card (<code>quick-start-cards.html</code>). Tell them to change the first password.</li>
+<li>Test with staff acting as civilians first (family and friends of staff). Use the real-phone test script.</li></ol>
+<h3>Day of launch</h3>
+<ol><li>Check Storage health is green and the latest backup is under 24 hours old.</li>
+<li>Station staff sign in 30 minutes before. Confirm the map shows and a test alert from a staff phone arrives.</li>
+<li>Announce through your normal channels. Tell civilians what GEAMS can and cannot do (the privacy notice and the first screen say it too).</li></ol>
+
+<h2>3. Running it day to day</h2>
+<table><tr><th>When</th><th>Who</th><th>What</th></tr>
+<tr><td>Start of every shift</td><td>Control room</td><td>Sign in, confirm the alert sound works, check no old unassigned alerts are waiting.</td></tr>
+<tr><td>Every day</td><td>Pilot lead</td><td>HQ → Storage health. Last backup under 24 h? Database OK? Write the answer in the log.</td></tr>
+<tr><td>Every week</td><td>Pilot lead</td><td>Check the face-check log (HQ → Face &amp; ID checks log): does every check have a reason and a real incident? Ask about any that do not.</td></tr>
+<tr><td>Every week</td><td>Pilot lead</td><td>Run Data retention preview. Apply only after a backup (the screen does it for you).</td></tr>
+<tr><td>Every month</td><td>Pilot lead</td><td>Practise one restore from backup on a spare server. Review the crew list; disable anyone who left.</td></tr></table>
+
+<h3>When someone leaves or loses a phone</h3>
+<ul><li><b>Officer / fire / ambulance crew member leaves:</b> control room disables the account (Crew approvals). Their sign-in stops working on the next request.</li>
+<li><b>Crew member forgot password:</b> control room resets it (Crew accounts → Reset). They are forced to choose a new one.</li>
+<li><b>Suspect a stolen phone or leaked passwords:</b> HQ owner → Rotate tokens. Every staff sign-in ends; people sign in again.</li>
+<li><b>Civilian got a new phone:</b> they use <b>Restore my account</b> with the recovery code they saved. Without the code, the old alerts stay with the old phone; they can still make new alerts.</li></ul>
+
+<h2>4. Incident-day plan</h2>
+<h3>If GEAMS itself has a problem during a real emergency</h3>
+<ol><li>Use the normal phone routes at once. GEAMS is not the only way in.</li>
+<li>Pilot lead checks HQ → Storage health and the server's status page.</li>
+<li>If the server is down: restart it. Data is saved every half second to disk and to the database; nothing should be lost.</li>
+<li>If the data looks wrong: do <b>not</b> restore over it yet. Take a copy of the broken state first, then follow the restore steps in the deploy checklist.</li></ol>
+<h3>Lockdown</h3>
+<p>If you believe the system is being abused (for example, a flood of fake alerts): HQ owner → <b>Lockdown</b>. Staff and the public can read but cannot change anything except HQ and civilians reporting an emergency. Lift it when safe. Every lockdown is logged.</p>
+<h3>Rollback (stop the pilot)</h3>
+<ol><li>HQ owner turns on Lockdown with a clear reason.</li><li>Announce through normal channels that the pilot is paused and to use 112.</li><li>Export what you need (HQ → Export incidents).</li><li>Take a final backup. Keep it as long as the law and your retention policy say <b>[LAWYER]</b>.</li><li>Leave the server up read-only until everyone has been told.</li></ol>
+
+<h2>5. Real-phone test script</h2>
+<p>The automated tests run in a simulated browser. They cannot check GPS, camera, battery, mobile data or real map tiles. Only a real phone can. Do this on <b>two different phones</b> (one Android, one iPhone if you can) and on <b>Wi-Fi and mobile data</b>. Write what you saw in the result column.</p>
+<table><tr><th>#</th><th>Step</th><th>Expected</th><th>Result</th></tr>
+<tr><td>1</td><td>Open the civilian link in the phone's browser. Add to home screen.</td><td>App opens full screen with no browser bar. Map shows streets (not grey). Zoom + / − buttons visible.</td><td></td></tr>
+<tr><td>2</td><td>Sign up with a real phone number. Allow location when asked.</td><td>Profile created. The app offers the recovery code. Save it.</td><td></td></tr>
+<tr><td>3</td><td>Move outdoors. Wait 30 s. Open Profile → check the location dot.</td><td>Dot is within about 20 m of where you are.</td><td></td></tr>
+<tr><td>4</td><td>Send a test alert (tell the control room it is a test first).</td><td>Control room sees it within 5 seconds with the right place and your name.</td><td></td></tr>
+<tr><td>5</td><td>Control room assigns an officer. Officer accepts on their phone.</td><td>Your app shows the officer assigned. Officer sees route and your live position.</td><td></td></tr>
+<tr><td>6</td><td>Walk 50 m. Watch both screens.</td><td>Your moving dot updates on the control-room and officer maps.</td><td></td></tr>
+<tr><td>7</td><td>Take a photo as evidence from the alert screen.</td><td>Uploads; control room can open it. (Camera permission was asked.)</td><td></td></tr>
+<tr><td>8</td><td>Turn on Airplane mode for 20 s, then off. Send a message in the alert chat.</td><td>App says you are offline, then reconnects and the message arrives. Nothing is lost or duplicated.</td><td></td></tr>
+<tr><td>9</td><td>Lock the phone for 2 minutes, then unlock during an open alert.</td><td>App is still signed in and still shows the alert. Note any delay.</td><td></td></tr>
+<tr><td>10</td><td>Control room resolves the incident.</td><td>Your app shows resolved. It disappears from the officer's active list.</td><td></td></tr>
+<tr><td>11</td><td>Wipe the app data (or use a second phone). Use <b>Restore my account</b> with the saved code.</td><td>Your old alerts come back on the new phone; the old phone no longer sees them.</td><td></td></tr>
+<tr><td>12</td><td>Officer registers a face in Profile (with consent), control room runs a verify on a live incident using the camera.</td><td>Result shows as a guide, with the warning that a match is not proof. It appears in the face-check log.</td><td></td></tr>
+<tr><td>13</td><td>Battery: leave the civilian app open during an alert for 30 min. Note the battery percentage change.</td><td>Record it. If over about 10% in 30 min, tell the developers.</td><td></td></tr>
+<tr><td>14</td><td>Try a weak signal spot (edge of coverage).</td><td>Alert still goes (possibly slower). Note how long.</td><td></td></tr></table>
+<p><b>Pass rule:</b> steps 1 to 11 must pass on both phones before launch. A fail on 12 to 14 does not stop the pilot but must be written down and told to the staff, because they affect what you promise people.</p>
+
+<h2>6. Known limits you must tell people about</h2>
+<ul><li>Face matching is a guide to help a human decide, not proof of identity. It can be wrong, especially for dark skin in poor light, for twins, and for older photos.</li>
+<li>Location is only as good as the phone's GPS and the signal. Indoors it can be off by hundreds of metres.</li>
+<li>GEAMS does not call the emergency number for the person. If an alert is not acknowledged, they must call.</li>
+<li>If the phone has no data signal, the app cannot send. SMS fallback only works if you have set up an SMS provider and tested it.</li>
+<li>The recovery code is the only way to move alerts to a new phone. If lost with the phone, the old alerts cannot be reclaimed.</li>
+<li>Data is stored on your server. Backups hold old data until they rotate out.</li></ul>
+
+<h2>7. Contacts to fill in before launch</h2>
+<table><tr><th>Role</th><th>Name</th><th>Phone</th></tr><tr><td>Pilot lead</td><td></td><td></td></tr><tr><td>Technical person (server)</td><td></td><td></td></tr><tr><td>HQ owner</td><td></td><td></td></tr><tr><td>Station commander</td><td></td><td></td></tr><tr><td>Data protection contact (named in the privacy notice)</td><td></td><td></td></tr><tr><td>Lawyer</td><td></td><td></td></tr></table>
+</body></html>

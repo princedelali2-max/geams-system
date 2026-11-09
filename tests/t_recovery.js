@@ -1,0 +1,70 @@
+const fs=require('fs'),{spawn}=require('child_process');const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+let pass=0,fail=0;const ok=(n,c,x)=>{c?pass++:fail++;console.log((c?'PASS ':'FAIL ')+n+(c?'':'  '+String(typeof x==='string'?x:JSON.stringify(x)).slice(0,250)))};
+const H='GH-VR-HOH-001-P3Q7',H2='GH-GA-ACC-001-B9C1',B='http://localhost:8086';
+const J=async(m,p,t,b)=>{const r=await fetch(B+p,{method:m,headers:{'Content-Type':'application/json',...(t?{Authorization:'Bearer '+t}:{})},body:b?JSON.stringify(b):undefined});let j={};try{j=await r.json()}catch(e){}return{s:r.status,j}};
+const kv=k=>'/api/kv/'+encodeURIComponent(k);
+(async()=>{
+ const ROOT='/tmp/grec';fs.rmSync(ROOT,{recursive:true,force:true});fs.mkdirSync(ROOT,{recursive:true});
+ const srv=spawn('node',['geams-server.js'],{env:{...process.env,PORT:'8086',GEAMS_DATA:ROOT+'/d.json',GEAMS_HQ_USERS:ROOT+'/u.json',GEAMS_HQ_ADMIN_PASSWORD:'Test-Owner-Pass-1',GEAMS_SEED_DEFAULT_STATIONS:'1',GEAMS_BACKUP_HOURS:'0'}});await sleep(2000);
+ const hq=(await J('POST','/api/hq/login',null,{username:'hqadmin',password:'Test-Owner-Pass-1'})).j.token;
+ const st=n=>({id:n,name:n,region:'V',town:'x',lat:7.15,lng:0.47,jurisdictionRadiusM:3000});await J('PUT',kv('registry:stations'),hq,{value:{[H]:st(H),[H2]:st(H2)}});
+ const lcr=(await J('POST','/api/lcr/login',null,{stationId:H,passphrase:'hohoe2024'})).j.token,lcr2=(await J('POST','/api/lcr/login',null,{stationId:H2,passphrase:'accra2024'})).j.token;
+ const mk=async(kind,name,phone,lcrId)=>{await J('POST','/api/unit/signup',null,{kind,password:'oldpass123',cred:{name,phone,lcrId,rank:'X'}});const p=(await J('GET','/api/lcr/pending',hq)).j.pending.find(x=>x.name===name);await J('POST','/api/lcr/approve',hq,{kind,badge:p.badge,approve:true});return (await J('POST','/api/unit/login',null,{kind,name,password:'oldpass123'})).j};
+ // ---- crew password
+ const o=await mk('officer','Pw Officer','0245000001',H),f=await mk('fire','Pw Fire','0245000002',H);
+ ok('plain login has no mustChange',o.token&&!o.mustChange);
+ let r=await J('POST','/api/unit/password',o.token,{current:'wrong',password:'newpass1234'});ok('wrong current password refused',r.s===401);
+ r=await J('POST','/api/unit/password',o.token,{current:'oldpass123',password:'short'});ok('short new password refused',r.s===400);
+ r=await J('POST','/api/unit/password',o.token,{current:'oldpass123',password:'oldpass123'});ok('same password refused',r.s===400);
+ r=await J('POST','/api/unit/password',null,{current:'a',password:'newpass1234'});ok('needs sign-in',r.s===401);
+ r=await J('POST','/api/unit/password',(await J('POST','/api/civilian/session',null,{secret:'z'.repeat(30)})).j.token,{current:'a',password:'newpass1234'});ok('civilian cannot use crew password endpoint',r.s===401);
+ r=await J('POST','/api/unit/password',o.token,{current:'oldpass123',password:'newpass1234'});ok('officer changes own password',r.s===200&&r.j.token,r);const newTok=r.j.token;
+ r=await J('GET',kv('lcr:'+H+':officers'),o.token);ok('old sign-in ended',r.s===401,String(r.s));
+ r=await J('GET',kv('lcr:'+H+':officers'),newTok);ok('new sign-in works',r.s===200,String(r.s));
+ r=await J('POST','/api/unit/login',null,{kind:'officer',name:'Pw Officer',password:'oldpass123'});ok('old password no longer works',r.s===401);
+ r=await J('POST','/api/unit/login',null,{kind:'officer',name:'Pw Officer',password:'newpass1234'});ok('new password works',r.s===200&&r.j.token);
+ let last;for(let i=0;i<7;i++)last=(await J('POST','/api/unit/password',newTok,{current:'bad'+i,password:'whatever123'})).s;ok('repeated wrong current passwords locked out',last===429,String(last));
+ // ---- reset by control room
+ r=await J('POST','/api/lcr/unit/reset',lcr2,{kind:'fire',badge:f.cred.badge});ok('other station cannot reset this crew',r.s===403);
+ r=await J('POST','/api/lcr/unit/reset',(await J('POST','/api/civilian/session',null,{secret:'y'.repeat(30)})).j.token,{kind:'fire',badge:f.cred.badge});ok('civilian cannot reset',r.s===401);
+ r=await J('POST','/api/lcr/unit/reset',lcr,{kind:'fire',badge:'NOPE'});ok('unknown crew 404',r.s===404);
+ r=await J('POST','/api/lcr/unit/reset',lcr,{kind:'fire',badge:f.cred.badge});ok('own control room resets',r.s===200&&/^[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(r.j.password),r);const tmp=r.j.password;
+ r=await J('GET',kv('fire:'+H+':incidents'),f.token);ok('crew old session ended by reset',r.s===401,String(r.s));
+ r=await J('POST','/api/unit/login',null,{kind:'fire',name:'Pw Fire',password:'oldpass123'});ok('previous password dead after reset',r.s===401);
+ r=await J('POST','/api/unit/login',null,{kind:'fire',name:'Pw Fire',password:tmp});ok('temporary password signs in and demands a change',r.s===200&&r.j.mustChange===true,r);const tt=r.j.token;
+ r=await J('POST','/api/unit/password',tt,{current:tmp,password:'mine-own-pass1'});ok('crew sets their own password',r.s===200);
+ r=await J('POST','/api/unit/login',null,{kind:'fire',name:'Pw Fire',password:'mine-own-pass1'});ok('mustChange cleared',r.s===200&&!r.j.mustChange,r);
+ r=await J('POST','/api/lcr/unit/reset',hq,{kind:'fire',badge:f.cred.badge});ok('HQ can reset too',r.s===200);
+ for(let i=0;i<6;i++)await J('POST','/api/unit/login',null,{kind:'officer',name:'Pw Officer',password:'bad'+i});
+ r=await J('POST','/api/lcr/unit/reset',lcr,{kind:'officer',badge:o.cred.badge});const t2=r.j.password;r=await J('POST','/api/unit/login',null,{kind:'officer',name:'Pw Officer',password:t2});ok('reset also clears a lockout',r.s===200,r);
+ ok('hashes never leave the server',(await J('GET',kv('registry:unitAuth'),hq)).s===403);
+ // ---- civilian recovery
+ const secA='A'.repeat(32),secB='B'.repeat(32),secC='C'.repeat(32);
+ const A=(await J('POST','/api/civilian/session',null,{secret:secA})).j.token;
+ r=await J('POST','/api/civilian/recovery/create',A,{civilianId:'CIV-30001'});ok('no recovery code before the profile is saved',r.s===404);
+ await J('PUT','/api/civilian/profile',A,{id:'CIV-30001',profile:{id:'CIV-30001',name:'Esi Lost',phone:'0245111111',ghCard:'GHA-333333333-3',address:'Hohoe',registeredDate:'2026-11-01'}});
+ await J('POST','/api/face/enrol',A,{civilianId:'CIV-30001',descriptor:Array.from({length:128},(_,i)=>Math.sin(i)*0.2),faceConsent:true});
+ await J('PUT',kv('lcr:'+H+':incidents'),A,{value:{'INC-R1':{id:'INC-R1',status:'new',type:'medical',lat:7.158,lng:0.48,civilianId:'CIV-30001',civilianName:'Esi Lost',civilianPhone:'0245111111'}}});
+ r=await J('POST','/api/civilian/recovery/create',A,{civilianId:'CIV-30001'});ok('owner creates a recovery code',r.s===200&&/^[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}$/.test(r.j.code),r);const code=r.j.code;
+ const B2=(await J('POST','/api/civilian/session',null,{secret:secB})).j.token;
+ r=await J('POST','/api/civilian/recovery/create',B2,{civilianId:'CIV-30001'});ok("another phone cannot make a code for someone else's account",r.s===403);
+ r=await J('GET',kv('registry:civRecovery'),hq);ok('recovery hashes are server-only',r.s===403);
+ r=await J('GET',kv('lcr:'+H+':incidents'),B2);ok('new phone cannot see the old alert yet',!(r.j.value||{})['INC-R1']);
+ r=await J('POST','/api/civilian/recovery/restore',B2,{civilianId:'CIV-30001',code:'AAAAA-BBBBB-CCCCC'});ok('wrong code refused',r.s===401);
+ r=await J('POST','/api/civilian/recovery/restore',B2,{civilianId:'CIV-99999',code});ok('unknown account looks the same as a wrong code',r.s===401);
+ r=await J('POST','/api/civilian/recovery/restore',B2,{civilianId:'CIV-30001',code:code.toLowerCase().replace(/-/g,' ')});ok('code accepted in lower case with spaces',r.s===200&&r.j.profile&&r.j.profile.name==='Esi Lost',r);const nc=r.j.newCode;
+ ok('restore returns profile, face flag, moved alerts and a fresh code',r.j.faceEnrolled===true&&r.j.alertsMoved===1&&nc&&nc!==code,r.j);
+ r=await J('POST','/api/civilian/recovery/restore',(await J('POST','/api/civilian/session',null,{secret:secC})).j.token,{civilianId:'CIV-30001',code});ok('used code cannot be replayed',r.s===401);
+ r=await J('GET',kv('lcr:'+H+':incidents'),B2);ok('new phone now sees its own alert',!!(r.j.value||{})['INC-R1']);
+ r=await J('GET',kv('lcr:'+H+':incidents'),A);ok('old phone no longer sees it',!(r.j.value||{})['INC-R1']);
+ r=await J('POST','/api/civilian/profile',A,{});r=await J('PUT','/api/civilian/profile',A,{id:'CIV-30001',profile:{name:'Thief',phone:'1'}});ok('old phone cannot edit the profile any more',r.s===403);
+ r=await J('PUT','/api/civilian/profile',B2,{id:'CIV-30001',profile:{id:'CIV-30001',name:'Esi Lost',phone:'0245111111',ghCard:'GHA-333333333-3',address:'Accra'}});ok('new phone can edit it',r.s===200);
+ // face check still works on the moved record
+ const o2=await mk('officer','Face Rec Officer','0245000009',H);const mp=(await J('GET',kv('lcr:'+H+':incidents'),lcr)).j.value;mp['INC-R1'].officerName='Face Rec Officer';mp['INC-R1'].officerBadge=o2.cred.badge;await J('PUT',kv('lcr:'+H+':incidents'),lcr,{value:mp});
+ r=await J('POST','/api/face/verify',o2.token,{incId:'INC-R1'});ok('face record travelled with the account',r.j.enrolled===true,r);
+ r=await J('POST','/api/civilian/recovery/create',B2,{civilianId:'CIV-30001'});ok('new code can be made from the new phone',r.s===200);
+ // lockout after repeated wrong codes
+ const D=(await J('POST','/api/civilian/session',null,{secret:'D'.repeat(32)})).j.token;let lk;for(let i=0;i<7;i++)lk=(await J('POST','/api/civilian/recovery/restore',D,{civilianId:'CIV-30001',code:'ZZZZZ-ZZZZZ-ZZZZ'+i})).s;ok('wrong-code guessing is locked out',lk===429,String(lk));
+ r=await J('POST','/api/civilian/recovery/restore',D,{civilianId:'CIV-30001',code:r.j&&r.j.code||'x'});ok('lock holds even for a later try',r.s===429||r.s===401);
+ srv.kill();console.log(`\n${pass} passed, ${fail} failed`);process.exit(fail?1:0);
+})().catch(e=>{console.log('ERR',e.stack);process.exit(2)});

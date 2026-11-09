@@ -1,0 +1,24 @@
+[Unit]
+Description=GEAMS emergency alert server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=geams
+Group=geams
+WorkingDirectory=/opt/geams
+EnvironmentFile=/etc/geams/geams.env
+ExecStart=/usr/bin/node /opt/geams/geams-server.js
+Restart=always
+RestartSec=3
+# Give the server time to write its last save when it is stopped
+TimeoutStopSec=20
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/geams
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

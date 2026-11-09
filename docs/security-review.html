@@ -1,0 +1,91 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>GEAMS security self-review pack</title>
+<style>body{font:15px/1.55 system-ui,Segoe UI,Arial,sans-serif;max-width:880px;margin:24px auto;padding:0 16px;color:#111}h1{font-size:26px}h2{margin-top:30px;border-bottom:2px solid #111;padding-bottom:4px}table{border-collapse:collapse;width:100%;margin:8px 0}td,th{border:1px solid #999;padding:6px 8px;vertical-align:top;text-align:left}th{background:#eee}.box{border:2px solid #b00;padding:10px 14px;background:#fff4f4;margin:14px 0}code{background:#eee;padding:1px 4px}li{margin:3px 0}</style></head><body>
+<h1>GEAMS security self-review pack</h1>
+<p>For a security reviewer, or for you before one is hired. It says what GEAMS does to protect itself, how to check that, and, most important, <b>what has not been checked</b>.</p>
+<div class="box"><b>This is a self-review, not an audit.</b> The same people who built GEAMS wrote these checks. They show the known protections work; they cannot show there are no other holes. Before real use at national scale, have an independent security professional test the system you actually deploy (your server, your network, your hosting) and fix what they find.</div>
+
+<h2>1. What is being protected</h2>
+<table><tr><th>Data</th><th>Why it is sensitive</th><th>Where it lives</th></tr>
+<tr><td>Civilian name, phone, Ghana Card, address, location</td><td>Identifies a person and where they are in an emergency</td><td>Server store (<code>registry:civilians</code>, incident records)</td></tr>
+<tr><td>Face templates</td><td>Biometric; cannot be changed if leaked</td><td>Server only (<code>registry:faces</code>); never sent to any app</td></tr>
+<tr><td>Incident evidence (photos, recordings), chat</td><td>Court evidence; may show victims</td><td>Server files, sealed with a hash</td></tr>
+<tr><td>Staff passwords, station passphrases, recovery codes</td><td>Give control of the system</td><td>Server only, stored hashed with scrypt</td></tr>
+<tr><td>Signing key (<code>geams-secret.key</code> or <code>GEAMS_TOKEN_SECRET</code>)</td><td>Whoever has it can forge any sign-in</td><td>Server disk / environment</td></tr>
+<tr><td>Backups</td><td>A full copy of everything</td><td>Server disk, optional off-site copy, AES-256-GCM if a passphrase is set</td></tr></table>
+
+<h2>2. Who is trusted for what</h2>
+<ul><li><b>Civilian phone</b>: trusted only for its own alerts. Proves ownership with a secret kept on the phone (hashed into its token). Cannot read other people's alerts, faces or accounts.</li>
+<li><b>Officer / fire / ambulance crew</b>: only incidents of their own control room, and officers only the incident assigned to them.</li>
+<li><b>Control room (station)</b>: own station's records and crews. Needs the station passphrase, plus a personal commander account if <code>GEAMS_REQUIRE_COMMANDER_ACCOUNTS=1</code>.</li>
+<li><b>HQ</b>: everything except raw server-only keys. HQ owner alone can rotate tokens, lock down, run retention, set legal hold.</li>
+<li><b>The server</b> is the only place rules are enforced. The apps' own checks are for convenience; every rule is enforced again on the server.</li></ul>
+
+<h2>3. Controls built in, and the test that checks each</h2>
+<table><tr><th>Control</th><th>Test file</th></tr>
+<tr><td>Signed expiring tokens; edited, expired, unsigned and promoted tokens refused</td><td><code>t_security.js</code></td></tr>
+<tr><td>Per-role, per-station read/write rules; civilians cannot see others' alerts; crews fenced to their station</td><td><code>t_regress.js</code>, <code>t_privacy.js</code></td></tr>
+<tr><td>Server-only keys (passwords, faces, recovery, consents, feedback, retention log) unreadable and unwritable even by HQ</td><td><code>t_security.js</code>, <code>t_privacy.js</code></td></tr>
+<tr><td>Face templates never leave the server; officer face checks need an incident and are logged</td><td><code>t_privacy.js</code>, <code>t_privacy_ui.js</code></td></tr>
+<tr><td>Face record only with consent; consent and notice recorded</td><td><code>t_consent.js</code>, <code>t_consent_ui.js</code></td></tr>
+<tr><td>Rate limits: logins, signups, civilian sessions, face checks, feedback, recovery, SMS codes, and 10 alerts per phone per hour</td><td><code>t_security.js</code>, <code>t_recovery.js</code></td></tr>
+<tr><td>Token revocation: rotate all, password change, disabled crew</td><td><code>t_recovery.js</code>, <code>t_regress.js</code></td></tr>
+<tr><td>Lockdown blocks all changes except HQ and civilian emergency alerts</td><td><code>t_regress.js</code>, <code>t_sweep.js</code></td></tr>
+<tr><td>Evidence sealed with hash and custody log; replacement refused</td><td><code>t_regress.js</code></td></tr>
+<tr><td>Path traversal and secret-file requests refused; no directory listing</td><td><code>t_security.js</code></td></tr>
+<tr><td>Oversized and malformed requests refused without crashing or leaking stack traces; odd key names (<code>__proto__</code> etc.) handled</td><td><code>t_security.js</code></td></tr>
+<tr><td>Live event stream carries only the key name and a version number, never data</td><td><code>t_security.js</code></td></tr>
+<tr><td>Handover notes and crew roster: only that station and HQ can read; handovers cannot be edited or removed; crew can only change their own availability; changes are logged without note text</td><td><code>t_crew.js</code>, <code>t_crew_ui.js</code></td></tr>
+<tr><td>Accessibility settings and screen-reader names on all six apps; guided tour sends nothing; staff language lists exclude live incident words</td><td><code>t_a11y.js</code>, <code>t_guide.js</code>, <code>t_stafflang.js</code></td></tr>
+<tr><td>Content-Security-Policy on every app page; no page violates it; blocks outside scripts, outside data sends, framing and base-tag tricks</td><td><code>t_csp.js</code></td></tr>
+<tr><td>Bundled libraries unchanged since review</td><td><code>t_vendor.js</code></td></tr>
+<tr><td>Security headers: <code>nosniff</code>, frame blocking, no referrer, camera/microphone/location limited to the app, HSTS over HTTPS</td><td><code>t_security.js</code></td></tr>
+<tr><td>Cross-origin access can be limited to your own site (<code>GEAMS_ALLOWED_ORIGIN</code>)</td><td><code>t_security.js</code></td></tr>
+<tr><td>Encrypted backups, verified restore</td><td><code>t_storage_real.js</code></td></tr>
+<tr><td>Retention and legal hold never touch open or held incidents</td><td><code>t_retention.js</code></td></tr>
+<tr><td>Capacity and stability under load</td><td><code>t_load.js</code></td></tr>
+<tr><td>Staff action log; false-alarm flag and block</td><td><code>t_stafflog.js</code>, <code>t_abuse.js</code></td></tr>
+<tr><td>Phone-number restore, wrong-person refusals</td><td><code>t_phonerestore.js</code></td></tr></table>
+<p>Run them all: <code>node tests/t_security.js</code> (and the others) from the folder that holds <code>geams-server.js</code>. Each starts its own temporary server.</p>
+
+<h2>4. Known gaps and weaknesses (be honest with the reviewer)</h2>
+<table><tr><th>Gap</th><th>Why it matters</th><th>What to do</th></tr>
+<tr><td><b>The Content-Security-Policy is only partly strict.</b> The apps use inline scripts and click handlers, so the policy has to allow inline script (<code>eval</code> is no longer allowed; the face library ran without it in a desktop test, not yet on real phones; <code>GEAMS_CSP_EVAL=1</code> restores it).</td><td>The policy does stop: scripts loaded from other sites, data being sent to any site other than this server and the map, route and search hosts, plugins, extra <code>&lt;base&gt;</code> tags, framing by other sites, and forms posting elsewhere. It does <b>not</b> stop script injected inline into a page, which is still the main risk.</td><td>Reviewer should test for script injection in every field shown to others. Longer term: move scripts and click handlers out of the pages, then remove <code>'unsafe-inline'</code> (about 860 inline handlers plus ones built in code; deferred). Violations are reported to HQ &gt; App errors. <code>GEAMS_CSP=report</code> logs without blocking; <code>off</code> disables.</td></tr>
+<tr><td>Sign-in tokens are kept in the browser (session storage) and sent as a header.</td><td>Script injection (above) could read one.</td><td>Same as above. Tokens expire (12 h staff, 7 days civilians) and can all be revoked with Rotate tokens.</td></tr>
+<tr><td>Cross-origin access is open to every site by default.</td><td>Sign-in is by header, not cookie, so a foreign site cannot use someone's session, but it is wider than needed.</td><td>Set <code>GEAMS_ALLOWED_ORIGIN</code> to your real site address.</td></tr>
+<tr><td>Anyone can send an app-error report (<code>/api/clientlog</code>) and ask for an app's version (<code>/api/version</code>).</td><td>A flood could fill the error list or hide real errors.</td><td>Limited by address and per page; the list keeps only the latest 500; only HQ can read it.</td></tr>
+<tr><td>Restoring an account by phone number trusts the SIM.</td><td>SIM-swap attackers could take over an account and read its alert history.</td><td>Tell people to protect their SIM; consider requiring the recovery code only; monitor restores.</td></tr>
+<tr><td>Anyone can open the live event stream and see which keys changed and when (not their contents).</td><td>Leaks activity patterns only.</td><td>Accept, or require a token on the stream (not done).</td></tr>
+<tr><td>Civilian sessions are anonymous (a secret on the phone). The limits are per phone and per network address.</td><td>An attacker with many phones or addresses could still send many false alerts.</td><td>Turn on phone verification (<code>GEAMS_REQUIRE_VERIFIED_CIVILIANS=1</code>, needs SMS) and watch the alert volume.</td></tr>
+<tr><td>One server process, one signing key, files on one disk.</td><td>A server break-in gives everything. A disk failure loses data not yet in the database or a backup.</td><td>Use the database, off-site encrypted backups, and keep the signing key in the host's secret store.</td></tr>
+<tr><td>The station passphrase is shared by the people in a control room unless commander accounts are required.</td><td>Hard to say who did what.</td><td>Require personal commander accounts.</td></tr>
+<tr><td>Face matching can be wrong and can be unfair across skin tones and lighting.</td><td>A false match could harm a person.</td><td>It is shown only as a guide, every check is logged, and HQ reviews the log. Train staff.</td></tr>
+<tr><td>Not tested: PostgreSQL, SMS gateway, Ghana Post lookup, outside timestamp, off-site backup, real HTTPS/proxy setup, real phones.</td><td>Security of those depends on your configuration.</td><td>Test them in your environment.</td></tr>
+<tr><td>Dependencies (map library, face model) are copied into <code>vendor/</code> and not automatically updated.</td><td>Known flaws in old versions would stay.</td><td>Check the library versions in <code>vendor/</code> against their published security notices before launch.</td></tr>
+<tr><td>No penetration test, no code audit by an outsider, no review of your hosting.</td><td>Unknown problems remain.</td><td>Commission one.</td></tr></table>
+
+<h2>5. Settings that matter for security</h2>
+<table><tr><th>Setting</th><th>Should be</th></tr>
+<tr><td>HTTPS in front of the server</td><td>Always. Without it, passwords and tokens cross the network in the clear.</td></tr>
+<tr><td><code>GEAMS_HQ_ADMIN_PASSWORD</code></td><td>Long, unique, stored safely</td></tr>
+<tr><td><code>GEAMS_TOKEN_SECRET</code></td><td>Set from the host's secret store (32+ random bytes)</td></tr>
+<tr><td><code>GEAMS_BACKUP_PASSPHRASE</code></td><td>Set; stored apart from the server</td></tr>
+<tr><td><code>GEAMS_REQUIRE_COMMANDER_ACCOUNTS</code></td><td><code>1</code></td></tr>
+<tr><td><code>GEAMS_ALLOWED_ORIGIN</code></td><td>Your site address(es), comma-separated</td></tr>
+<tr><td><code>GEAMS_AUTO_APPROVE_UNITS</code></td><td>Off</td></tr>
+<tr><td>HQ screen "Security Configuration Check"</td><td>No red lines</td></tr></table>
+
+<h2>6. Questions to put to the reviewer</h2>
+<ol><li>Can you get any civilian's name, phone, Ghana Card or face data without being that civilian or an authorised staff member?</li>
+<li>Can you read or change another control room's incidents, crews or evidence?</li>
+<li>Can you inject script through any field a staff member will see?</li>
+<li>Can you make the server unavailable with a modest number of requests?</li>
+<li>Can you forge, reuse or extend a sign-in after it should be revoked?</li>
+<li>Can you recover any secret from backups, logs or error messages?</li>
+<li>Is the deployment (HTTPS, firewall, database access, secret handling) set up safely?</li></ol>
+
+<h2>7. If something is found</h2>
+<ol><li>HQ owner: <b>Lockdown</b> if it is being used against you; <b>Rotate tokens</b> if sign-ins may be stolen.</li>
+<li>Take a backup before changing anything.</li>
+<li>Write down what, when, who found it, what data might be affected.</li>
+<li>Telling the Data Protection Commission and affected people may be a legal duty <b>[LAWYER]</b>.</li></ol>
+</body></html>

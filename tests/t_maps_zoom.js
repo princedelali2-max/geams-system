@@ -1,0 +1,10 @@
+const {chromium}=require('playwright');const fs=require('fs');const png=fs.readFileSync('/tmp/tile.png');
+(async()=>{const br=await chromium.launch();let pass=0,fail=0;const ok=(n,c,x)=>{c?pass++:fail++;console.log((c?'PASS ':'FAIL ')+n+(c?'':' '+x))};
+const c=await br.newContext({viewport:{width:1200,height:800}});const zs=new Set();
+await c.route(/arcgisonline/,r=>{const m=/tile\/(\d+)\//.exec(r.request().url());if(m&&/World_Imagery/.test(r.request().url()))zs.add(+m[1]);r.fulfill({status:200,contentType:'image/png',body:png})});
+const p=await c.newPage();await p.goto('http://localhost:8088/geams-hq-dashboard__1_.html');await p.waitForTimeout(1200);
+await p.evaluate(()=>{const d=document.body.appendChild(Object.assign(document.createElement('div'),{id:'tm',style:'position:fixed;left:0;top:0;width:500px;height:400px;z-index:99999'}));const m=L.map(d,{center:[5.6,-0.2],zoom:18});L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19}).addTo(m)});
+await p.waitForTimeout(2500);
+const r=await p.evaluate(()=>({loaded:document.querySelectorAll('#tm .leaflet-tile-loaded').length}));
+ok('map at zoom 18 still shows tiles',r.loaded>0,JSON.stringify(r));ok('never requests imagery beyond level 16',[...zs].every(z=>z<=16)&&zs.size>0,[...zs]);
+console.log('requested levels',[...zs]);await br.close();console.log(pass+' passed, '+fail+' failed')})();
