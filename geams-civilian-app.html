@@ -351,8 +351,8 @@ option{background:var(--bg-deep);}
   flex-direction:column;justify-content:flex-end;}
 .sheet-overlay.hidden{display:none;}
 .sheet{background:var(--bg-raised);border-radius:var(--r-xl) var(--r-xl) 0 0;
-  border:1px solid var(--border-mid);border-bottom:none;max-height:90vh;
-  overflow-y:auto;animation:sheetUp 0.28s var(--ease);
+  border:1px solid var(--border-mid);border-bottom:none;max-height:90vh;max-height:92dvh;
+  display:flex;flex-direction:column;overflow:hidden;animation:sheetUp 0.28s var(--ease);
   padding-bottom:calc(var(--safe-bottom)+8px);}
 @keyframes sheetUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
 .sheet-handle{width:36px;height:4px;border-radius:2px;background:var(--border-mid);margin:10px auto 0;}
@@ -364,8 +364,13 @@ option{background:var(--bg-deep);}
   display:flex;align-items:center;justify-content:center;cursor:pointer;
   color:var(--text-muted);font-size:1rem;transition:all var(--fast) var(--ease);}
 .sheet-close:hover{color:var(--red);border-color:var(--red-border);}
-.sheet-body{padding:16px 18px;}.sheet-footer{padding:10px 18px;
-  border-top:1px solid var(--border-dim);display:flex;gap:8px;}
+.sheet-body{padding:16px 18px;overflow-y:auto;-webkit-overflow-scrolling:touch;flex:1 1 auto;min-height:0;}.sheet-handle,.sheet-header{flex-shrink:0;}.sheet-footer{flex-shrink:0;padding:10px 18px;
+  border-top:1px solid var(--border-dim);display:flex;gap:8px;flex-wrap:wrap;}
+.sheet-footer .btn{white-space:normal;line-height:1.25;text-align:center;}
+.sos-actions{display:flex;flex-direction:column;gap:8px;width:100%;}
+.sos-actions .btn{min-height:46px;padding:8px 12px;font-size:0.84rem;font-weight:800;}
+.sos-note{font-size:0.68rem;color:var(--text-muted);line-height:1.4;text-align:center;}
+@media (max-height:700px){.sos-btn{width:132px;height:132px}.sheet{max-height:96vh;max-height:96dvh}}
 
 /* ── LEAFLET OVERRIDES ── */
 .leaflet-popup-content-wrapper{background:#08180d;color:#a7d9b8;border:1px solid #14301c;
@@ -460,8 +465,33 @@ option{background:var(--bg-deep);}
 .pin-switch a{color:var(--primary);text-decoration:none;}
 .pin-switch a:active{opacity:0.7;}
 #pin-login-view{display:flex;flex-direction:column;align-items:center;width:100%;flex-shrink:0;}
-#pin-signup-view{display:flex;flex-direction:column;align-items:center;width:100%;flex-shrink:0;}
-#pin-signup-view.hidden{display:none;}
+#pin-login-view.hidden{display:none;}
+#pin-keypad-block{display:flex;flex-direction:column;align-items:center;width:100%;}
+#pin-keypad-block.hidden,#pin-welcome.hidden{display:none;}
+/* the keep-awake notice must never sit on top of buttons: taps pass through it, and on the login screen it moves to the top-left corner */
+[data-geams-pill]{pointer-events:none !important;}
+body:has(#pin-gate:not(.hidden):not(.fading)) [data-geams-pill]{top:8px !important;bottom:auto !important;left:8px !important;transform:none !important;max-width:42%;white-space:normal !important;font-size:10px !important;line-height:1.25 !important;padding:5px 9px !important;border-radius:12px !important;}
+#rs-phone-box.hidden,#rs-code-row.hidden{display:none;}
+.pin-modal a{color:var(--primary-bright,#4ade80);}
+body:has(.sheet-overlay:not(.hidden)) #geams-sync-badge,body:has(#pin-signup-view:not(.hidden)) #geams-sync-badge,body:has(#pin-restore-view:not(.hidden)) #geams-sync-badge{display:none !important;}
+.pin-actions{display:flex;gap:8px;margin-top:14px;width:100%;max-width:320px;}
+.pin-actions .btn{flex:1;white-space:normal;line-height:1.25;padding:8px 10px;font-size:0.8rem;}
+/* Create account and Restore open as popups over the login screen, so the page never grows long */
+#pin-signup-view,#pin-restore-view{position:fixed;inset:0;z-index:6;display:flex;align-items:center;justify-content:center;
+  background:rgba(2,13,8,0.88);backdrop-filter:blur(4px);padding:12px;}
+#pin-signup-view.hidden,#pin-restore-view.hidden{display:none;}
+.pin-modal{position:relative;width:100%;max-width:340px;max-height:calc(100vh - 24px);max-height:calc(100dvh - 24px);overflow-y:auto;
+  -webkit-overflow-scrolling:touch;background:var(--bg-raised);border:1px solid var(--border-mid);border-radius:var(--r-xl);
+  padding:16px 16px 14px;display:flex;flex-direction:column;align-items:center;gap:6px;box-shadow:0 12px 40px rgba(0,0,0,0.6);}
+.pin-modal .pin-shield{font-size:1.6rem;}
+.pin-x{position:absolute;top:8px;right:8px;width:34px;height:34px;border-radius:50%;background:var(--bg-active);border:1px solid var(--border-base);
+  color:var(--text-muted);font-size:0.9rem;cursor:pointer;display:flex;align-items:center;justify-content:center;z-index:2;}
+.pin-modal .pin-signup-form{gap:7px;max-width:none;margin-top:2px;}
+.pin-modal .form-input{padding-top:9px;padding-bottom:9px;font-size:0.85rem;}
+.pin-pair{display:grid;grid-template-columns:1fr 1fr;gap:7px;}
+.pin-modal .pin-switch{margin-top:6px;}
+.pin-modal #signup-step-details>*,.pin-modal #signup-step-face>*{max-width:100%;}
+@media (max-height:700px){#pin-gate{gap:8px;padding:20px 16px}.pin-keypad{grid-template-columns:repeat(3,54px);gap:9px;margin-top:4px}.pin-key{width:54px;height:54px}.pin-shield{font-size:1.8rem}}
 #signup-step-details,#signup-step-face{display:flex;flex-direction:column;align-items:center;width:100%;}
 #signup-step-details.hidden,#signup-step-face.hidden{display:none;}
 .pin-signup-form{display:flex;flex-direction:column;gap:10px;width:100%;max-width:280px;margin-top:6px;}
@@ -506,6 +536,10 @@ option{background:var(--bg-deep);}
   <div id="pin-login-view">
     <div class="pin-shield">🛡️</div>
     <div class="pin-title">GEAMS Secure Access</div>
+    <div id="pin-welcome" class="hidden" style="max-width:290px;margin-top:6px">
+      <div class="pin-sub" style="line-height:1.5;font-size:0.8rem">Welcome. Create your free account to send alerts, or restore the one you already have.</div>
+    </div>
+    <div id="pin-keypad-block">
     <div class="pin-user" id="pin-login-user"></div>
     <div class="pin-sub">Enter your 4-digit GEAMS PIN</div>
     <div class="pin-dots" id="pin-dots">
@@ -529,20 +563,24 @@ option{background:var(--bg-deep);}
       <button class="pin-key" onclick="PinGate.press('0')">0</button>
       <button class="pin-key pin-key-ghost" onclick="PinGate.backspace()">⌫</button>
     </div>
-    <div class="pin-switch"><a href="#" onclick="PinGate.showSignup();return false;">New here? Create an account</a></div>
-    <div class="pin-switch"><a href="#" onclick="PinGate.showRestore();return false;">New phone? Restore my account</a></div>
+    </div>
+    <div class="pin-actions">
+      <button class="btn btn-primary" onclick="PinGate.showSignup()">Create an account</button>
+      <button class="btn btn-ghost" onclick="PinGate.showRestore()">Restore my account</button>
+    </div>
   </div>
 
   <!-- RESTORE VIEW (new phone) -->
-  <div id="pin-restore-view" class="hidden">
+  <div id="pin-restore-view" class="hidden" onclick="if(event.target===this)PinGate.backFromRestore()">
+   <div class="pin-modal" role="dialog" aria-modal="true" aria-label="Restore your account">
+    <button class="pin-x" aria-label="Close" onclick="PinGate.backFromRestore()">✕</button>
     <div class="pin-shield">🛟</div>
     <div class="pin-title">Restore Your Account</div>
-    <div class="pin-sub" style="margin-bottom:6px;max-width:300px;text-align:center">Use your account number and the recovery code you saved. Your profile, Face ID and alerts move to this phone.</div>
+    <div class="pin-sub" style="margin-bottom:4px;max-width:300px;text-align:center;line-height:1.4">Enter your account number and the recovery code you saved. Your profile and alerts move to this phone.</div>
     <div class="pin-signup-form">
       <input class="form-input" id="rs-id" placeholder="Account number (CIV-12345)" autocapitalize="characters">
       <input class="form-input" id="rs-code" placeholder="Recovery code (XXXXX-XXXXX-XXXXX)" autocapitalize="characters">
-      <input class="form-input" id="rs-pin" type="password" inputmode="numeric" maxlength="4" placeholder="Choose a 4-digit PIN for this phone">
-      <input class="form-input" id="rs-pin2" type="password" inputmode="numeric" maxlength="4" placeholder="Confirm 4-digit PIN">
+      <div class="pin-pair"><input class="form-input" id="rs-pin" type="password" inputmode="numeric" maxlength="4" placeholder="New PIN (4 digits)"><input class="form-input" id="rs-pin2" type="password" inputmode="numeric" maxlength="4" placeholder="Confirm PIN"></div>
     </div>
     <div class="pin-error" id="restore-error">&nbsp;</div>
     <button class="btn btn-primary btn-full" id="rs-btn" style="max-width:280px;margin-top:4px" onclick="PinGate.doRestore()">Restore account →</button>
@@ -553,11 +591,14 @@ option{background:var(--bg-deep);}
       <button class="btn btn-ghost btn-full" id="rs-send" style="margin:6px 0" onclick="PinGate.phoneRestoreSend()">Send code</button>
       <div id="rs-code-row" class="hidden"><input class="form-input" id="rs-sms" inputmode="numeric" maxlength="6" placeholder="6-digit code from SMS"><div style="font-size:0.72rem;color:var(--text-muted);margin:4px 0">Then choose your PIN in the boxes above and press:</div><button class="btn btn-primary btn-full" id="rs-pbtn" onclick="PinGate.phoneRestoreFinish()">Verify and restore →</button></div>
     </div>
-    <div class="pin-switch"><a href="#" onclick="PinGate.backFromRestore();return false;">Back</a></div>
+    <div class="pin-switch"><a href="#" onclick="PinGate.backFromRestore();return false;">Close</a></div>
+   </div>
   </div>
 
-  <!-- SIGN-UP VIEW -->
-  <div id="pin-signup-view" class="hidden">
+  <!-- SIGN-UP VIEW (popup) -->
+  <div id="pin-signup-view" class="hidden" onclick="if(event.target===this)PinGate.showLogin()">
+   <div class="pin-modal" role="dialog" aria-modal="true" aria-label="Create an account">
+    <button class="pin-x" aria-label="Close" onclick="PinGate.showLogin()">✕</button>
 
     <!-- Step 1: details -->
     <div id="signup-step-details">
@@ -569,13 +610,11 @@ option{background:var(--bg-deep);}
         <input class="form-input" id="su-phone" placeholder="Phone number (e.g. 024 000 0000)">
         <input class="form-input" id="su-ghcard" placeholder="Ghana Card number (GHA-XXXXXXXXX-X)">
         <input class="form-input" id="su-address" placeholder="Home address">
-        <input class="form-input" id="su-pin" type="password" inputmode="numeric" maxlength="4" placeholder="Create 4-digit PIN">
-        <input class="form-input" id="su-pin2" type="password" inputmode="numeric" maxlength="4" placeholder="Confirm 4-digit PIN">
+        <div class="pin-pair"><input class="form-input" id="su-pin" type="password" inputmode="numeric" maxlength="4" placeholder="Create PIN (4 digits)"><input class="form-input" id="su-pin2" type="password" inputmode="numeric" maxlength="4" placeholder="Confirm PIN"></div>
       </div>
       <label style="display:flex;gap:8px;align-items:flex-start;max-width:280px;font-size:0.74rem;line-height:1.4;margin:6px 0;text-align:left"><input type="checkbox" id="su-privacy" style="margin-top:2px"><span>I have read the <a href="#" onclick="Privacy.show();return false;">privacy notice</a> and agree GEAMS may use my details to handle my emergencies.</span></label>
       <div class="pin-error" id="signup-error">&nbsp;</div>
       <button class="btn btn-primary btn-full" style="max-width:280px;margin-top:4px" onclick="PinGate.continueToFaceStep()">Continue →</button>
-      <div class="pin-switch"><a href="#" onclick="PinGate.showLogin();return false;">Already registered? Log in</a></div>
       <div class="pin-switch"><a href="#" onclick="PinGate.showRestore();return false;">New phone? Restore my account</a></div>
     </div>
 
@@ -602,6 +641,7 @@ option{background:var(--bg-deep);}
       <div class="pin-switch"><a href="#" onclick="PinGate.backToDetailsStep();return false;">← Back to details</a></div>
     </div>
 
+   </div>
   </div>
 
 </div>
@@ -2317,10 +2357,12 @@ const CivilianApp = (() => {
         <label class="form-label">Additional Details (optional)</label>
         <textarea class="form-textarea" id="sos-details" placeholder="Suspect description, number of people involved..." rows="2"></textarea>
       </div>`,
-      `<button class="btn btn-ghost btn-sm" onclick="CivilianApp.closeSheet()">Cancel</button>
-       <button class="btn btn-danger btn-full btn-lg" onclick="CivilianApp.confirmSOS()">🚨 SEND EMERGENCY ALERT</button>
-       <button class="btn btn-full" id="sos-and-112" style="background:#fff;color:#7f1d1d;font-weight:800;border:2px solid #b91c1c;margin-top:8px" onclick="CivilianApp.sendAnd112()">📞 CALL 112 AND ALERT NEAREST CONTROL ROOM</button>
-       <div style="font-size:0.68rem;color:var(--text-muted);margin-top:6px;line-height:1.4">Dialling 112 yourself does not tell GEAMS. Use this button so the nearest control room is alerted too.</div>`);
+      `<div class="sos-actions">
+         <button class="btn btn-danger btn-full" onclick="CivilianApp.confirmSOS()">🚨 SEND EMERGENCY ALERT</button>
+         <button class="btn btn-full" id="sos-and-112" style="background:#fff;color:#7f1d1d;border:2px solid #b91c1c" onclick="CivilianApp.sendAnd112()">📞 CALL 112 + ALERT CONTROL ROOM</button>
+         <div class="sos-note">Dialling 112 yourself does not tell GEAMS. Use the second button so the nearest control room is alerted too.</div>
+         <button class="btn btn-ghost btn-sm btn-full" onclick="CivilianApp.closeSheet()">Cancel</button>
+       </div>`);
   }
 
   /* One tap: alert the nearest control room AND open the phone dialler for 112.
@@ -3972,24 +4014,26 @@ const PinGate = (() => {
     const u = CivilianData.user;
     const label = document.getElementById('pin-login-user');
     if (label) label.textContent = `${u.name} · ${u.id}`;
+    const has = !!(u && u.id && u.pin);
+    const kb = document.getElementById('pin-keypad-block'), wl = document.getElementById('pin-welcome');
+    if (kb) kb.classList.toggle('hidden', !has);
+    if (wl) wl.classList.toggle('hidden', has);
     entered = '';
     render();
   }
 
   function showSignup() {
     document.getElementById('pin-restore-view').classList.add('hidden');
-    document.getElementById('pin-login-view').classList.add('hidden');
     document.getElementById('pin-signup-view').classList.remove('hidden');
     document.getElementById('signup-error').textContent = '\u00a0';
   }
 
   function showRestore() {
-    document.getElementById('pin-login-view').classList.add('hidden');
     document.getElementById('pin-signup-view').classList.add('hidden');
     document.getElementById('pin-restore-view').classList.remove('hidden');
     document.getElementById('restore-error').textContent = '\u00a0';
   }
-  function backFromRestore() { if (CivilianData.user.id && CivilianData.user.pin) showLogin(); else showSignup(); }
+  function backFromRestore() { showLogin(); }
   /* Restore through the registered phone number (needs SMS on the server) */
   function phoneRestoreToggle() { document.getElementById('rs-phone-box').classList.toggle('hidden'); }
   async function phoneRestorePost(path, body) { await GeamsSync.ready; const r = await fetch(GeamsSync.base + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); let j = {}; try { j = await r.json(); } catch (e) {} return { ok: r.ok, status: r.status, j }; }
@@ -4918,7 +4962,7 @@ document.addEventListener('DOMContentLoaded',()=>{CivilianApp.boot();});
     try {
       if (!show) { if (pill) { pill.remove(); pill = null; } return; }
       if (pill) return;
-      pill = document.createElement('div');
+      pill = document.createElement('div'); pill.setAttribute('data-geams-pill','1');
       pill.textContent = '⚠ Screen may go to sleep — tap here to keep it awake';
       pill.style.cssText = 'position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom,0px) + 70px);transform:translateX(-50%);z-index:2147483000;background:#7c2d12;color:#fff;font:600 12px/1.3 system-ui,sans-serif;padding:8px 14px;border-radius:18px;box-shadow:0 4px 14px rgba(0,0,0,.4);cursor:pointer;max-width:90vw;text-align:center';
       pill.onclick = function () { gestured = true; acquire(); };
