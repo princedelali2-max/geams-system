@@ -4,3 +4,10 @@ Third-party files served by GEAMS itself so the apps need no outside host to loa
   fonts/        Exo 2 and Share Tech Mono (SIL Open Font License 1.1), via @fontsource
 Map pictures (tiles), place search and road routing are still online services unless you set GEAMS_TILE_URL,
 GEAMS_ROUTE_URL and GEAMS_GEOCODE_URL to your own servers.
+
+Security check (npm audit and registry, 6 Nov 2026):
+  Leaflet 1.9.4 is the newest 1.x release and has no published advisories.
+  face-api.js 0.22.2 is the newest release but is no longer maintained. It bundles TensorFlow.js 1.7.0, for which npm reports a
+  node-fetch advisory. That code runs only in Node.js; GEAMS uses the browser build, where the browser's own fetch is used, so
+  the advisory does not apply here. Re-check before launch and every few months. Planned: replace with a maintained library.
+  CHECKSUMS.txt lists the SHA-256 of every third-party file; tests/t_vendor.js verifies them.

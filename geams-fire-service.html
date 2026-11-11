@@ -970,41 +970,65 @@ const FireApp = (() => {
   }
   function stopGps() {
     if (gpsWatch != null && navigator.geolocation) { navigator.geolocation.clearWatch(gpsWatch); }
-    gpsWatch = null;
+    gpsWatch = null; if (hbTimer) { clearInterval(hbTimer); hbTimer = null; } lastFix = null;
+  }
+  /* ── LIVE POSITION AND ETA ──
+   * Position is this device's real GPS. ETA is the remaining ROAD time when the routing service answers (re-fetched every ~15 s or when the unit
+   * has moved), otherwise a straight-line estimate with a detour allowance, and the app says which one it is using. A heartbeat re-sends the fix every
+   * 10 s even when the vehicle is stationary, and the server stamps when each position arrived, so the HQ can see how old it is. */
+  let lastFix = null, hbTimer = null;
+  const road = { at: 0, fromLat: null, fromLng: null, toLat: null, toLng: null, durS: null, distM: null, pts: [], pending: false, failAt: 0 };
+  function legTarget(job) { return { lat: job.lat, lng: job.lng, name: 'the scene', kind: 'scene' }; }
+  function roadFresh(t) { return road.distM != null && Date.now() - road.at < 60000 && distM(road.toLat, road.toLng, t.lat, t.lng) < 80; }
+  async function fetchRoad(lat, lng, t) {
+    const now = Date.now(); if (road.pending || now - road.failAt < 30000) return;
+    const movedFrom = road.fromLat == null ? 1e9 : distM(road.fromLat, road.fromLng, lat, lng), movedTo = road.toLat == null ? 1e9 : distM(road.toLat, road.toLng, t.lat, t.lng);
+    if (now - road.at < 15000 || (movedFrom < 30 && movedTo < 30 && now - road.at < 45000)) return;
+    road.pending = true; const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 7000);
+    try {
+      const url = `${((window.GEAMS_CONFIG || {}).routeUrl || 'https://router.project-osrm.org')}/route/v1/driving/${lng},${lat};${t.lng},${t.lat}?overview=full&geometries=geojson`;
+      const r = await fetch(url, { signal: ctl.signal }), j = await r.json(); if (!j.routes || !j.routes[0]) throw new Error('no route');
+      const rt = j.routes[0]; road.pts = rt.geometry.coordinates.map(c => [c[1], c[0]]); road.distM = rt.distance; road.durS = rt.duration; road.at = Date.now(); road.fromLat = lat; road.fromLng = lng; road.toLat = t.lat; road.toLng = t.lng; road.failAt = 0;
+    } catch (e) { road.failAt = Date.now(); } finally { clearTimeout(to); road.pending = false; }
+  }
+  function etaFor(lat, lng, speed, t) {
+    const straight = distM(lat, lng, t.lat, t.lng);
+    if (roadFresh(t)) { const rem = Math.max(straight, road.distM - distM(road.fromLat, road.fromLng, lat, lng)); return { min: Math.max(0, Math.round((road.durS * rem / road.distM) / 60)), src: 'road', km: rem / 1000 }; }
+    const v = (speed && speed > 2) ? speed : 30 / 3.6; return { min: Math.max(0, Math.round((straight * 1.3) / v / 60)), src: 'straight-line', km: straight * 1.3 / 1000 };
+  }
+  function reportFix(fix) {
+    const cj = FireData.currentJob; if (!cj || cj.status !== 'en_route') return;
+    const t = legTarget(cj); if (t.lat == null || t.lng == null) return;
+    fetchRoad(fix.lat, fix.lng, t);
+    const e = etaFor(fix.lat, fix.lng, fix.speed, t);
+    cj.unitLat = fix.lat; cj.unitLng = fix.lng; cj.unitETA = e.min; cj.etaSrc = e.src; cj.etaKm = e.km;
+    GeamsFireSync.pushUpdate(FireData.crew.lcrId, cj.id, { unitLat: fix.lat, unitLng: fix.lng, unitETA: e.min, etaSource: e.src, etaTarget: t.kind, etaKm: Math.round(e.km * 10) / 10, unitAt: Date.now(), gpsAcc: fix.acc != null ? Math.round(fix.acc) : null });
+    if (cj.mutualAidRequestId) FireMutualAid.pushUnitUpdate(cj.mutualAidRequestId, { unitLat: fix.lat, unitLng: fix.lng, unitETA: e.min });
+    if (unitMarker) unitMarker.setLatLng([fix.lat, fix.lng]);
+    if (routeLine) routeLine.setLatLngs(roadFresh(t) ? [[fix.lat, fix.lng], ...road.pts, [t.lat, t.lng]] : [[fix.lat, fix.lng], [t.lat, t.lng]]);
+    if (currentScreen === 'job') updateStatBar();
+    if (distM(fix.lat, fix.lng, t.lat, t.lng) < 50 && !cj._arrivalToasted) { cj._arrivalToasted = true; showToast('info', 'Arriving', 'You are within 50 m of the scene — mark On Scene', 5000); }
   }
   function startRoute(station, job) {
-    routeCoords = [[station.lat, station.lng], [job.lat, job.lng]]; // straight line only
+    routeCoords = [[station.lat, station.lng], [job.lat, job.lng]];
     routeStep = 0;
     if (routeTimer) { clearInterval(routeTimer); routeTimer = null; }
     stopGps();
     if (!navigator.geolocation) {
-      showToast('error', 'GPS unavailable', 'This device has no geolocation — your position cannot be shared with the Control Room', 7000);
+      showToast('error', 'GPS unavailable', 'This device has no geolocation — your position cannot be shared with the Control Room or HQ', 7000);
       return;
     }
     let warned = false;
     gpsWatch = navigator.geolocation.watchPosition((pos) => {
       const cj = FireData.currentJob;
       if (!cj || cj.status === 'complete') { stopGps(); return; }
-      if (cj.status !== 'en_route') return; // only report while en route
-      const lat = pos.coords.latitude, lng = pos.coords.longitude;
-      cj.unitLat = lat; cj.unitLng = lng;
-      const dM = distM(lat, lng, job.lat, job.lng);
-      const v = (pos.coords.speed && pos.coords.speed > 2) ? pos.coords.speed : 30/3.6;
-      cj.unitETA = Math.max(0, Math.round(dM / v / 60));
-      GeamsFireSync.pushUpdate(FireData.crew.lcrId, job.id, { unitLat: lat, unitLng: lng, unitETA: cj.unitETA });
-      if (job.mutualAidRequestId) {
-        FireMutualAid.pushUnitUpdate(job.mutualAidRequestId, { unitLat: lat, unitLng: lng, unitETA: cj.unitETA });
-      }
-      if (unitMarker) unitMarker.setLatLng([lat, lng]);
-      if (currentScreen === 'job') updateStatBar();
-      if (dM < 50 && !cj._arrivalToasted) {
-        cj._arrivalToasted = true;
-        showToast('info', 'Arriving', 'You are within 50 m of the scene — mark On Scene', 5000);
-      }
+      lastFix = { lat: pos.coords.latitude, lng: pos.coords.longitude, speed: pos.coords.speed, acc: pos.coords.accuracy };
+      reportFix(lastFix);
     }, (err) => {
       if (warned) return; warned = true;
-      showToast('warning', 'GPS', err && err.code === 1 ? 'Location permission is blocked — allow it so the Control Room can see your real position.' : 'No GPS fix yet — still trying.', 7000);
+      showToast('warning', 'GPS', err && err.code === 1 ? 'Location permission is blocked — allow it so the Control Room and HQ can see your real position.' : 'No GPS fix yet — still trying.', 7000);
     }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 });
+    hbTimer = setInterval(() => { if (lastFix) reportFix(lastFix); }, 10000);
   }
 
   function setStatus(status) {
@@ -1022,6 +1046,7 @@ const FireApp = (() => {
       setTimeout(() => navigate('queue'), 800);
       return;
     }
+    if (status === 'en_route' && lastFix) reportFix(lastFix);
     renderJob();
   }
 
@@ -1189,6 +1214,7 @@ const FireApp = (() => {
         <div class="job-detail-row"><b>${job.type}</b></div>
         <div class="job-detail-row">📍 ${job.location}</div>
         <div class="job-detail-row">🧭 GPS: ${job.lat?.toFixed(5)}, ${job.lng?.toFixed(5)}</div>
+        <div class="job-detail-row" id="live-line" style="color:var(--cyan)">${liveLine(job)}</div>
         ${job.civilianName ? `<div class="job-detail-row">👤 ${job.civilianName}${job.civilianPhone ? ' · ' + job.civilianPhone : ''}</div>` : ''}
         ${job.notes ? `<div class="job-detail-row">📝 ${job.notes}</div>` : ''}
         ${renderMutualAidStatusRow(job)}
@@ -1232,9 +1258,15 @@ const FireApp = (() => {
     return { accepted:'Accepted', en_route:'En Route', on_scene:'On Scene', complete:'Complete' }[s] || s;
   }
 
+  function liveLine(job) {
+    if (job.status !== 'en_route') return job.status === 'accepted' ? 'Tap Depart to start sharing your live position and ETA.' : '';
+    if (!lastFix) return '⏳ Waiting for a GPS fix. Your position is not being shared yet.';
+    return '🛰 Live position shared every few seconds' + (job.etaSrc ? ' · ETA by ' + (job.etaSrc === 'road' ? 'road route' : 'straight line (road data unavailable)') : '') + (job.etaKm != null ? ' · about ' + job.etaKm.toFixed(1) + ' km to go' : '');
+  }
   function updateStatBar() {
-    const eta = document.getElementById('stat-eta');
-    if (eta && FireData.currentJob) eta.textContent = FireData.currentJob.unitETA ?? '—';
+    const eta = document.getElementById('stat-eta'), j = FireData.currentJob;
+    if (eta && j) eta.textContent = j.unitETA ?? '—';
+    const ll = document.getElementById('live-line'); if (ll && j) ll.textContent = liveLine(j);
   }
 
   let backupMarker = null;

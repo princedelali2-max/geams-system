@@ -1,0 +1,5 @@
+// Builds geams-fire-hq.html and geams-ambulance-hq.html from one template, so they cannot drift apart.
+const fs=require('fs'),path=require('path'),root=path.join(__dirname,'..');
+const t=fs.readFileSync(path.join(__dirname,'agency-hq.template.html'),'utf8');
+const D={fire:{KIND:'fire',LABEL:'Fire',LABEL_LOWER:'fire',EMOJI:'🚒',COLOR:'#dc2626',TYPES:['Structure fire','Bush fire','Vehicle fire','Rescue','Other']},ambulance:{KIND:'ambulance',LABEL:'Ambulance',LABEL_LOWER:'ambulance',EMOJI:'🚑',COLOR:'#0d9488',TYPES:['Medical emergency','Road accident','Maternity','Patient transfer','Other']}};
+for(const k of Object.keys(D)){let s=t;if(k!=='ambulance')s=s.replace(/<!--AMB_ONLY_START-->[\s\S]*?<!--AMB_ONLY_END-->/g,'').replace(/\/\*AMB_ONLY_START\*\/[\s\S]*?\/\*AMB_ONLY_END\*\//g,'');else s=s.replace(/<!--AMB_ONLY_(START|END)-->|\/\*AMB_ONLY_(START|END)\*\//g,'');s=s.split('{{TYPE_OPTIONS}}').join(D[k].TYPES.map(x=>'<option>'+x+'</option>').join(''));for(const [a,b] of Object.entries(D[k]))if(typeof b==='string')s=s.split('{{'+a+'}}').join(b);fs.writeFileSync(path.join(root,'geams-'+k+'-hq.html'),s);console.log('wrote geams-'+k+'-hq.html',s.length)}

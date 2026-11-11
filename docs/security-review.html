@@ -15,7 +15,8 @@
 
 <h2>2. Who is trusted for what</h2>
 <ul><li><b>Civilian phone</b>: trusted only for its own alerts. Proves ownership with a secret kept on the phone (hashed into its token). Cannot read other people's alerts, faces or accounts.</li>
-<li><b>Officer / fire / ambulance crew</b>: only incidents of their own control room, and officers only the incident assigned to them.</li>
+<li><b>Officer / fire / ambulance crew</b>: only their own control room's records (another area answers 403), and officers only the incident assigned to them.</li>
+<li><b>Fire HQ / Ambulance HQ</b>: each sees only its own service: the alerts control rooms forwarded to its crews, its own crew list and its own reports. Never police incidents, officers, intel, evidence or the other service. A new HQ account must choose its own password before anything opens. A crew member's HQ messages are readable only by that person and their own HQ. Created, reset and disabled by the HQ owner only (<code>t_agency.js</code>).</li>
 <li><b>Control room (station)</b>: own station's records and crews. Needs the station passphrase, plus a personal commander account if <code>GEAMS_REQUIRE_COMMANDER_ACCOUNTS=1</code>.</li>
 <li><b>HQ</b>: everything except raw server-only keys. HQ owner alone can rotate tokens, lock down, run retention, set legal hold.</li>
 <li><b>The server</b> is the only place rules are enforced. The apps' own checks are for convenience; every rule is enforced again on the server.</li></ul>
@@ -23,7 +24,8 @@
 <h2>3. Controls built in, and the test that checks each</h2>
 <table><tr><th>Control</th><th>Test file</th></tr>
 <tr><td>Signed expiring tokens; edited, expired, unsigned and promoted tokens refused</td><td><code>t_security.js</code></td></tr>
-<tr><td>Per-role, per-station read/write rules; civilians cannot see others' alerts; crews fenced to their station</td><td><code>t_regress.js</code>, <code>t_privacy.js</code></td></tr>
+<tr><td>Per-role, per-station read/write rules; civilians cannot see others' alerts; control rooms and crews fenced to their own station</td><td><code>t_regress.js</code>, <code>t_privacy.js</code></td></tr>
+<tr><td>Fire HQ and Ambulance HQ: separate accounts, own-service data only, forced password change, lockout, disable ends sessions, encrypted backups, server-stamped response times</td><td><code>t_agency.js</code>, <code>t_agency_ui.js</code></td></tr>
 <tr><td>Server-only keys (passwords, faces, recovery, consents, feedback, retention log) unreadable and unwritable even by HQ</td><td><code>t_security.js</code>, <code>t_privacy.js</code></td></tr>
 <tr><td>Face templates never leave the server; officer face checks need an incident and are logged</td><td><code>t_privacy.js</code>, <code>t_privacy_ui.js</code></td></tr>
 <tr><td>Face record only with consent; consent and notice recorded</td><td><code>t_consent.js</code>, <code>t_consent_ui.js</code></td></tr>

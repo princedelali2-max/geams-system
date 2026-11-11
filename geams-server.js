@@ -110,7 +110,7 @@ const MIME = { '.html':'text/html; charset=utf-8', '.js':'text/javascript', '.cs
 const buildOf = (file) => { try { return crypto.createHash('sha1').update(fs.readFileSync(file)).digest('hex').slice(0, 8); } catch (e) { return ''; } };
 function injectBuild(file, buf) {
   const b = buildOf(file), s = buf.toString('utf8');
-  return Buffer.from(s.replace(/<\/head>/i, '<script>window.GEAMS_BUILD="' + b + '";window.GEAMS_FILE=' + JSON.stringify(path.basename(file)) + ';</script><script src="vendor/geams-diag.js"></script>' + (/vendor\/geams-i18n\.js/.test(s) ? '' : '<script src="vendor/geams-i18n.js"></script>') + '<script src="vendor/geams-guide.js"></script><script src="vendor/geams-a11y.js"></script>' + (/geams-(dispatch-app|fire-service|ambulance-service)\.html$/.test(file) ? '<script src="vendor/geams-roster.js"></script>' : '') + (/geams-(station|hq)-dashboard__1_\.html$/.test(file) ? '<script src="vendor/geams-bulk.js"></script>' : '') + '</head>'), 'utf8');
+  return Buffer.from(s.replace(/<\/head>/i, '<script>window.GEAMS_BUILD="' + b + '";window.GEAMS_FILE=' + JSON.stringify(path.basename(file)) + ';</script><script src="vendor/geams-diag.js"></script>' + (/vendor\/geams-i18n\.js/.test(s) ? '' : '<script src="vendor/geams-i18n.js"></script>') + '<script src="vendor/geams-guide.js"></script><script src="vendor/geams-a11y.js"></script>' + (/geams-(dispatch-app|fire-service|ambulance-service)\.html$/.test(file) ? '<script src="vendor/geams-roster.js"></script>' : '') + (/geams-(station|hq)-dashboard__1_\.html$/.test(file) ? '<script src="vendor/geams-bulk.js"></script>' : '') + (/geams-hq-dashboard__1_\.html$/.test(file) ? '<script src="vendor/geams-agency-admin.js"></script>' : '') + (/geams-(fire|ambulance)-service\.html$/.test(file) ? '<script src="vendor/geams-agency-banner.js"></script>' : '') + '</head>'), 'utf8');
 }
 
 /* Staff action log: who changed what and when. It records field names and status words, never names, phones or locations. */
@@ -225,7 +225,7 @@ function signToken(payload, ms) {
   const body = Buffer.from(JSON.stringify(p)).toString('base64url');
   return 'v1.' + body + '.' + crypto.createHmac('sha256', TOKEN_SECRET).update(body).digest('base64url');
 }
-const CMD_KEY = 'registry:commanderAuth';
+const CMD_KEY = 'registry:commanderAuth', AGENCY_KEY = 'registry:agencyHq';
 const commanderAccts = (sid) => { const m = store[CMD_KEY] && store[CMD_KEY].value; return (m && m[sid]) || {}; };
 function verifyToken(t) {
   const m = /^v1\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/.exec(String(t || '')); if (!m) return null;
@@ -234,7 +234,8 @@ function verifyToken(t) {
   if (!p || p.exp < Date.now() || revoked.has(p.jti)) return null;
   if (p.r !== 'hq' && p.r !== 'civilian') { const ep = store['registry:authEpoch'] && store['registry:authEpoch'].value; if (ep && ep.at && p.iat < ep.at) return null; }   // HQ rotated every station-side token
   if (p.r === 'hq' && p.hr !== 'admin') { const u = hqUsers[p.u]; if (!u || (u.changed && u.changed > p.iat)) return null; }
-  if (p.r === 'officer' || p.r === 'fire' || p.r === 'ambulance') { const ua = (store['registry:unitAuth'] && store['registry:unitAuth'].value || {})[p.r + ':' + p.b]; if (ua && ua.changed && ua.changed > p.iat) return null; }   // password changed or reset: older sign-ins end
+  if (p.r === 'officer' || p.r === 'fire' || p.r === 'ambulance') { const ua = (store['registry:unitAuth'] && store['registry:unitAuth'].value || {})[p.r + ':' + p.b]; if (ua && ((ua.changed && ua.changed > p.iat) || ua.disabled)) return null; }   // password changed or reset, or account disabled by its HQ: older sign-ins end
+  if (p.r === 'fire_hq' || p.r === 'ambulance_hq') { const a = (store[AGENCY_KEY] && store[AGENCY_KEY].value || {})[p.ak + ':' + p.u]; if (!a || a.disabled || (a.changed && a.changed > p.iat)) return null; }   // password changed or reset: older sign-ins end
   if (p.r === 'lcr') {
     const st = (store['registry:stations'] && store['registry:stations'].value || {})[p.s]; if (st && st.disabled) return null;
     const accts = commanderAccts(p.s);
@@ -250,7 +251,7 @@ function rawToken(req, allowCookie) {
 }
 function sessionOf(req, allowCookie) {
   const p = verifyToken(rawToken(req, allowCookie)); if (!p) return null;
-  return { dev: p.d, role: p.r, user: p.u, cmd: p.cu ? { user: p.cu, name: p.cn, rank: p.cr } : null, hqRole: p.hr, sid: p.s, lcr: p.l, badge: p.b, id: p.i, phone: p.p, verified: !!p.v, jti: p.jti };
+  return { dev: p.d, role: p.r, user: p.u, cmd: p.cu ? { user: p.cu, name: p.cn, rank: p.cr } : null, hqRole: p.hr, sid: p.s, lcr: p.l, badge: p.b, id: p.i, phone: p.p, verified: !!p.v, jti: p.jti, agency: p.ak, mc: !!p.mc, name: p.cn };
 }
 function issue(res, req, payload, ms) {
   const t = signToken(payload, ms);
@@ -366,17 +367,22 @@ function seedDefaultStations() {
  * One rule per family of shared records. 'public' = no sign-in needed (read only),
  * 'server' = only the server itself, otherwise the list of roles that may do it.
  * Honest limit: a record is one shared map, so the server decides by ROLE (and, for a control room's own
- * roster, by station), not field by field. Officers, fire and ambulance crews are not yet fenced to their own
- * station on the server (planned with per-station data rooms). */
+ * roster, by station), not field by field. Officers, fire and ambulance crews are fenced to their own control room's
+ * records: another area's incidents and roster answer 403 (checked by t_agency.js). */
+const AGENCY_ROLES = ['fire_hq', 'ambulance_hq'];
 const ALL_R = ['hq', 'lcr', 'officer', 'fire', 'ambulance', 'civilian'];
 const RULES = [
-  [/^registry:(stationAuth|unitAuth|unitPending|pushSubs|commanderAuth|authEpoch|faces|faceAudit|civRecovery|retentionLog|consents|feedback|clientErrors|staffLog|blocks|escalations)$/, { r: 'server', w: 'server' }],
+  [/^registry:(stationAuth|unitAuth|unitPending|pushSubs|commanderAuth|authEpoch|faces|faceAudit|civRecovery|retentionLog|consents|feedback|clientErrors|staffLog|blocks|escalations|agencyHq|agencyEscalations|agencyChat)$/, { r: 'server', w: 'server' }],
   [/^hq:lockdown$/, { r: ALL_R, w: 'server' }],
   [/^hq:pilot$/, { r: ALL_R, w: 'server' }],
   [/^registry:stations$/, { r: 'public', w: ['hq'] }],
   [/^registry:stationLocations$/, { r: 'public', w: ['hq', 'lcr'] }],
   [/^registry:lcrCommanders$/, { r: ['hq', 'lcr', 'officer'], w: ['hq', 'lcr'] }],
-  [/^registry:(officers|fire|ambulance)$/, { r: ['hq', 'lcr', 'officer', 'fire', 'ambulance'], w: 'server' }],
+  [/^registry:officers$/, { r: ['hq', 'lcr', 'officer', 'fire', 'ambulance'], w: 'server' }],
+  [/^registry:fire$/, { r: ['hq', 'lcr', 'officer', 'fire', 'ambulance', 'fire_hq'], w: 'server' }],
+  [/^registry:ambulance$/, { r: ['hq', 'lcr', 'officer', 'fire', 'ambulance', 'ambulance_hq'], w: 'server' }],
+  [/^agency:fire:broadcast$/, { r: ['hq', 'lcr', 'fire', 'fire_hq'], w: 'server' }],
+  [/^agency:ambulance:broadcast$/, { r: ['hq', 'lcr', 'ambulance', 'ambulance_hq'], w: 'server' }],
   [/^registry:civilians$/, { r: ['hq', 'lcr'], w: 'server' }],
   [/^hq:tacticalOps$/, { r: ['hq', 'lcr'], w: ['hq'] }],
   [/^hq:lcr_status$/, { r: ['hq', 'lcr'], w: ['hq', 'lcr'] }],
@@ -389,20 +395,24 @@ const RULES = [
   [/^lcr:([^:]+):roster$/, { r: ['hq', 'lcr', 'officer', 'fire', 'ambulance'], w: ['hq', 'lcr', 'officer', 'fire', 'ambulance'], fence: true, fenceRead: true }],
   [/^lcr:([^:]+):officers$/, { r: ['hq', 'lcr', 'officer', 'fire', 'ambulance'], w: ['hq', 'lcr', 'officer'], own: true, fence: true }],
   [/^lcr:([^:]+):officerAlerts$/, { r: ['hq', 'lcr', 'officer'], w: ['hq', 'lcr', 'officer'], own: true, fence: true }],
-  [/^fire:([^:]+):incidents$/, { r: ['hq', 'lcr', 'fire'], w: ['hq', 'lcr', 'fire'], fence: true }],
-  [/^ambulance:([^:]+):incidents$/, { r: ['hq', 'lcr', 'ambulance'], w: ['hq', 'lcr', 'ambulance'], fence: true }],
+  [/^fire:([^:]+):incidents$/, { r: ['hq', 'lcr', 'fire', 'fire_hq'], w: ['hq', 'lcr', 'fire'], fence: true }],
+  [/^ambulance:([^:]+):incidents$/, { r: ['hq', 'lcr', 'ambulance', 'ambulance_hq'], w: ['hq', 'lcr', 'ambulance'], fence: true }],
   [/^mutualaid:(fire|ambulance):requests$/, { r: ['hq', 'lcr', 'fire', 'ambulance'], w: ['hq', 'lcr', 'fire', 'ambulance'] }],
   [/^backup:/, { r: ['hq', 'lcr'], w: ['hq', 'lcr'] }],
   [/^(chat|evidence|archive|rtc):/, { r: ALL_R, w: ALL_R }],
 ];
 function authorize(req, key, action, allowCookie) {
-  let rule = { r: 'auth', w: 'auth' }, m = null;
-  for (const [re, rl] of RULES) { m = re.exec(key); if (m) { rule = rl; break; } }
+  let rule = { r: 'auth', w: 'auth' }, m = null, matched = false;
+  for (const [re, rl] of RULES) { m = re.exec(key); if (m) { rule = rl; matched = true; break; } }
   const need = rule[action];
   if (need === 'server') return { code: 403, error: 'This data is private to the server' };
   if (need === 'public' && action === 'r') return { ses: sessionOf(req, allowCookie) };
   const ses = sessionOf(req, allowCookie);
   if (!ses) return { code: 401, error: 'Sign in required' };
+  if (AGENCY_ROLES.includes(ses.role)) {            // a fire or ambulance HQ reads only the records named for it, never the catch-all
+    if (ses.mc) return { code: 403, error: 'Choose your own password first' };
+    if (!matched) return { code: 403, error: 'Your role (' + ses.role + ') cannot ' + (action === 'r' ? 'read' : 'write') + ' this data' };
+  }
   if (Array.isArray(need) && !need.includes(ses.role)) return { code: 403, error: 'Your role (' + ses.role + ') cannot ' + (action === 'r' ? 'read' : 'write') + ' this data' };
   if (action === 'w' && rule.own && ses.role === 'lcr' && m && m[1] && ses.sid !== m[1]) return { code: 403, error: 'A control room can only change its own roster' };
   // a control room writes only its own station's incident, intel and service maps (reading across stations stays allowed for archives)
@@ -813,6 +823,25 @@ function validateWrite(key, prevV, nextV, ses, m) {
     }
     return {};
   }
+  // forwarded fire / ambulance jobs: the server stamps when each step happened, so the HQ's response figures cannot be made up by a page
+  if (/^(fire|ambulance):[^:]+:incidents$/.test(key)) {
+    if (!isObj(nextV)) return { error: 'Records must be a map keyed by incident id' };
+    const prev = isObj(prevV) ? prevV : {}, now = Date.now();
+    for (const [id, rec] of Object.entries(nextV)) {
+      if (!isObj(rec)) continue; const old = prev[id]; if (old && same(old, rec)) continue;
+      const sv = Object.assign({}, old && isObj(old.srv) ? old.srv : {});
+      if (!old && !sv.forwarded) sv.forwarded = now;
+      if (rec.serviceStatus && !['new', 'reassigned'].includes(rec.serviceStatus) && !sv.accepted) sv.accepted = now;
+      if (old && (old.unitLat !== rec.unitLat || old.unitLng !== rec.unitLng || old.unitAt !== rec.unitAt)) sv.posAt = now;   // when the crew's position last reached the server
+      if (rec.serviceStatus === 'en_route' && !sv.departed) sv.departed = now;
+      if (rec.leg === 'to_destination' && !sv.pickedUp) sv.pickedUp = now;
+      if (rec.serviceStatus === 'on_scene' && rec.leg === 'to_destination' && !sv.atDestination) sv.atDestination = now;
+      if (rec.serviceStatus === 'on_scene' && !sv.onScene) sv.onScene = now;
+      if (rec.serviceStatus === 'complete' && !sv.completed) sv.completed = now;
+      rec.srv = sv;
+    }
+    return {};
+  }
   // incidents of a control room
   if (/^lcr:[^:]+:incidents$/.test(key)) {
     if (!isObj(nextV)) return { error: 'Incidents must be a map keyed by incident id' };
@@ -926,7 +955,7 @@ function kvGet(key, def) { return store[key] ? store[key].value : def; }
 function kvSet(key, value) {
   const cur = store[key], v = (cur ? cur.v : 0) + 1;
   store[key] = { value, v, ts: Date.now() }; scheduleSave(key);
-  if (!/^registry:(stationAuth|unitAuth|unitPending|pushSubs|commanderAuth|authEpoch|faces|faceAudit|civRecovery|retentionLog|consents|feedback|clientErrors|staffLog|blocks|escalations)$/.test(key)) broadcast({ key, v });
+  if (!/^registry:(stationAuth|unitAuth|unitPending|pushSubs|commanderAuth|authEpoch|faces|faceAudit|civRecovery|retentionLog|consents|feedback|clientErrors|staffLog|blocks|escalations|agencyHq|agencyEscalations|agencyChat)$/.test(key)) broadcast({ key, v });
 }
 
 /* ── Officer, fire and ambulance accounts live on the server ── */
@@ -936,6 +965,16 @@ const UNIT = {
   ambulance: { key: 'registry:ambulance', prefix: 'GNAS-', idf: 'crewId',    idp: 'MEDIC-' },
 };
 const UNIT_AUTH = 'registry:unitAuth', UNIT_PENDING = 'registry:unitPending';
+const CHAT_KEY = 'registry:agencyChat';
+const chatThread = (kind, badge) => { const t = (kvGet(CHAT_KEY, {}) || {})[kind + ':' + badge]; return t && Array.isArray(t.items) ? t : { items: [], hqReadAt: 0, crewReadAt: 0 }; };
+function chatPost(kind, badge, from, by, text, readField) {
+  const all = Object.assign({}, kvGet(CHAT_KEY, {}) || {}), id = kind + ':' + badge, t = Object.assign({ items: [], hqReadAt: 0, crewReadAt: 0 }, all[id] || {}), now = Date.now();
+  t.items = t.items.concat([{ id: crypto.randomBytes(5).toString('hex'), at: now, from, by, text }]).slice(-200); t[readField] = now; t.last = now; all[id] = t;
+  const keys = Object.keys(all); if (keys.length > 3000) keys.sort((a, b) => (all[a].last || 0) - (all[b].last || 0)).slice(0, keys.length - 3000).forEach(k => delete all[k]);
+  kvSet(CHAT_KEY, all); return t;
+}
+const chatOut = (t, side) => ({ items: t.items.slice(-100), unread: t.items.filter(m => m.from !== side && m.at > (side === 'hq' ? t.hqReadAt : t.crewReadAt)).length });
+const agencyOf = (ses) => ses && AGENCY_ROLES.includes(ses.role) ? ses.agency : null;   // 'fire' | 'ambulance' | null
 const sha256hex = (x) => crypto.createHash('sha256').update(x).digest('hex');
 const clean = (v, n) => String(v == null ? '' : v).replace(/[<>]/g, '').trim().slice(0, n || 80);
 function scrubLegacyUnits() {            // move old browser-made hashes out of the readable lists
@@ -997,6 +1036,9 @@ const server = http.createServer(async (req, res) => {
   }
 
   try {
+    if (p.startsWith('/api/') && !/^\/api\/(agency\/|kv\/|events$|ping$|health$|presence$|version$|clientlog$|csp-report$|lcr\/(crew\/bulk|unit\/reset|pending|approve)$)/.test(p)) {   // a fire or ambulance HQ token opens nothing outside its own endpoints
+      const sg = sessionOf(req, true); if (sg && AGENCY_ROLES.includes(sg.role)) return json(res, 403, { error: 'This sign-in is for the ' + sg.agency + ' HQ screens only' });
+    }
     if (p === '/api/health') return json(res, 200, { ok: true, version: 2, time: Date.now(), ...devices(), keys: Object.keys(store).length, saving: saveState.ok });
     if (p === '/api/ping' && req.method === 'GET') {
       const d = u.searchParams.get('d');
@@ -1227,9 +1269,21 @@ const server = http.createServer(async (req, res) => {
         noteFail(k); return json(res, 401, { error: 'Invalid name or password' });
       }
       fails.delete(k);
+      { const ua0 = kvGet(UNIT_AUTH, {})[kind + ':' + hit.badge]; if (ua0 && ua0.disabled) return json(res, 403, { error: 'This account has been disabled by your HQ. Ask them to turn it back on.' }); }
       { const ua = kvGet(UNIT_AUTH, {})[kind + ':' + hit.badge]; return json(res, 200, { token: unitToken(res, req, kind, hit), cred: hit, mustChange: !!(ua && ua.mustChange) }); }
     }
     // ── Crew passwords: change your own, or have your control room (or HQ) reset it ──
+    if (p === '/api/unit/hq-chat') {          // a fire or ambulance crew member and their own HQ: administrative messages only
+      const ses = sessionOf(req); if (!ses || !['fire', 'ambulance'].includes(ses.role) || !ses.badge) return json(res, 401, { error: 'Sign in as a fire or ambulance crew member' });
+      if (req.method === 'GET') { const t = chatThread(ses.role, ses.badge); const all = Object.assign({}, kvGet(CHAT_KEY, {}) || {}), id = ses.role + ':' + ses.badge;
+        if (all[id] && u.searchParams.get('read') === '1') { all[id] = Object.assign({}, t, { crewReadAt: Date.now() }); kvSet(CHAT_KEY, all); }
+        return json(res, 200, Object.assign(chatOut(t, 'crew'), { hq: ses.role === 'fire' ? 'Fire HQ' : 'Ambulance HQ', note: 'For administrative matters only (shifts, kit, leave, accounts). In an emergency use the alert screens or call 112.' })); }
+      if (req.method === 'POST') { const b = await readBody(req), text = clean(b.message, 500); if (text.length < 1) return json(res, 400, { error: 'Write a message' });
+        if (!bump('hqc|' + ses.role + ':' + ses.badge, 30, 600000)) return json(res, 429, { error: 'Too many messages. Wait a few minutes.' });
+        const list = kvGet(UNIT[ses.role].key, []) || [], me = list.find(x => x.badge === ses.badge);
+        const t = chatPost(ses.role, ses.badge, 'crew', (me && me.name) || ses.user || ses.badge, text, 'crewReadAt'); return json(res, 200, Object.assign({ ok: true }, chatOut(t, 'crew'))); }
+      return json(res, 405, { error: 'GET or POST only' });
+    }
     if (p === '/api/unit/password' && req.method === 'POST') {
       const ses = sessionOf(req); if (!ses || !UNIT[ses.role]) return json(res, 401, { error: 'Sign in as a crew member' });
       const k = 'upw|' + ses.role + ':' + ses.badge; const wait = lockedOut(k); if (wait) return json(res, 429, { error: 'Too many attempts. Try again in ' + Math.ceil(wait / 60) + ' min.' });
@@ -1246,10 +1300,11 @@ const server = http.createServer(async (req, res) => {
     }
     // ── Bulk setup: a control room (or HQ) adds many crew at once; each gets a one-time temporary password ──
     if (p === '/api/lcr/crew/bulk' && req.method === 'POST') {
-      const ses = sessionOf(req); if (!ses || !['lcr', 'hq'].includes(ses.role)) return json(res, 401, { error: 'Sign in as a control room or HQ' });
-      const b = await readBody(req), kind = String(b.kind || ''), U = UNIT[kind]; if (!U) return json(res, 400, { error: 'Unknown account type' });
+      const ses = sessionOf(req); if (!ses || !['lcr', 'hq', ...AGENCY_ROLES].includes(ses.role)) return json(res, 401, { error: 'Sign in as a control room or HQ' });
+      if (ses.mc) return json(res, 403, { error: 'Choose your own password first' });
+      const b = await readBody(req), kind = agencyOf(ses) || String(b.kind || ''), U = UNIT[kind]; if (!U) return json(res, 400, { error: 'Unknown account type' });
       const sid = ses.role === 'lcr' ? ses.sid : String(b.stationId || ''); if (!sid) return json(res, 400, { error: 'Say which control room these crew belong to' });
-      if (ses.role === 'hq' && !((kvGet('registry:stations', {}) || {})[sid]) && !BUILTIN_STATIONS.includes(sid)) return json(res, 404, { error: 'Unknown control room' });
+      if (ses.role !== 'lcr' && !((kvGet('registry:stations', {}) || {})[sid]) && !BUILTIN_STATIONS.includes(sid)) return json(res, 404, { error: 'Unknown control room' });
       const rows = Array.isArray(b.rows) ? b.rows : []; if (!rows.length) return json(res, 400, { error: 'No rows to import' }); if (rows.length > 200) return json(res, 400, { error: 'At most 200 people at a time' });
       const dry = b.dry === true; if (!dry && !bump('cbk|' + ses.user, 10, 3600000)) return json(res, 429, { error: 'Too many bulk imports. Try again later.' });
       const list = Array.isArray(kvGet(U.key, null)) ? kvGet(U.key, []).slice() : [], ua = Object.assign({}, kvGet(UNIT_AUTH, {}));
@@ -1293,17 +1348,221 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, dryRun: dry, created: dry ? created.map(c => ({ ...c, passphrase: undefined })) : created, skipped, note: dry ? 'Preview only: nothing was created.' : 'These passphrases are shown ONCE. Print the sheet and hand each to the right commander.' });
     }
     if (p === '/api/lcr/unit/reset' && req.method === 'POST') {
-      const ses = sessionOf(req); if (!ses || !['lcr', 'hq'].includes(ses.role)) return json(res, 401, { error: 'Sign in as a control room or HQ' });
-      const b = await readBody(req), kind = String(b.kind || ''), U = UNIT[kind]; if (!U) return json(res, 400, { error: 'Unknown account type' });
+      const ses = sessionOf(req); if (!ses || !['lcr', 'hq', ...AGENCY_ROLES].includes(ses.role)) return json(res, 401, { error: 'Sign in as a control room or HQ' });
+      if (ses.mc) return json(res, 403, { error: 'Choose your own password first' });
+      const b = await readBody(req), kind = agencyOf(ses) || String(b.kind || ''), U = UNIT[kind]; if (!U) return json(res, 400, { error: 'Unknown account type' });
       const cred = (kvGet(U.key, []) || []).find(x => x.badge === String(b.badge || '')); if (!cred) return json(res, 404, { error: 'No such crew member' });
       if (ses.role === 'lcr' && cred.lcrId !== ses.sid) return json(res, 403, { error: 'That crew member belongs to another control room' });
       if (!bump('urs|' + ses.user, 20, 3600000)) return json(res, 429, { error: 'Too many resets. Try again later.' });
       const pw = newPassphrase(), salt = crypto.randomBytes(16).toString('hex'), ua = Object.assign({}, kvGet(UNIT_AUTH, {})), id = kind + ':' + cred.badge, cur = ua[id] || {};
-      ua[id] = { salt, hash: pwHash(pw, salt), created: cur.created || Date.now(), changed: Date.now() + 1, mustChange: true, resetBy: ses.role + ':' + ses.user, resetAt: Date.now() };
+      ua[id] = { salt, hash: pwHash(pw, salt), created: cur.created || Date.now(), changed: Date.now() + 1, mustChange: true, resetBy: ses.role + ':' + ses.user, resetAt: Date.now() }; if (cur.disabled) ua[id].disabled = cur.disabled;
       kvSet(UNIT_AUTH, ua);
       for (const kk of [...fails.keys()]) if (kk.endsWith('|' + kind + '|' + String(cred.name).toLowerCase())) fails.delete(kk);
       console.log('crew password reset: ' + id + ' by ' + ses.role + ':' + ses.user); staffLog(ses, 'crew.password_reset', id, cred.name);
       return json(res, 200, { ok: true, name: cred.name, badge: cred.badge, password: pw, note: 'Give this temporary password to the crew member in person or by phone. They must choose their own at next sign-in.' });
+    }
+    // ═══ Fire and Ambulance HQ ═══
+    // Each agency has its own national HQ. Control rooms (LCRs) still receive every alert and forward it to the nearest fire or
+    // ambulance station; the agency HQ then sees that forwarded copy live, can move it to another station, message its crews,
+    // run its people and pull its own reports. It never reads police incident records.
+    if (p === '/api/hq/agency') {          // the national HQ owner creates, resets, disables and re-enables agency HQ accounts
+      const ses = sessionOf(req); if (!ses || ses.role !== 'hq') return json(res, 401, { error: 'HQ sign-in required' });
+      if (ses.hqRole !== 'admin') return json(res, 403, { error: 'Only the HQ owner can manage Fire and Ambulance HQ accounts' });
+      const map = Object.assign({}, kvGet(AGENCY_KEY, {}) || {});
+      if (req.method === 'GET') return json(res, 200, { accounts: Object.values(map).map(a => ({ kind: a.kind, username: a.username, name: a.name, disabled: !!a.disabled, mustChange: !!a.mustChange, created: a.created, lastLogin: a.lastLogin || null })).sort((x, y) => (x.kind + x.username).localeCompare(y.kind + y.username)) });
+      if (req.method === 'POST') {
+        const b = await readBody(req), kind = String(b.kind || ''), act = String(b.action || 'create'), un = String(b.username || '').trim().toLowerCase(), id = kind + ':' + un;
+        if (!['fire', 'ambulance'].includes(kind)) return json(res, 400, { error: 'Choose Fire or Ambulance' });
+        if (!/^[a-z0-9._-]{3,32}$/.test(un)) return json(res, 400, { error: 'Username: 3-32 letters, digits, dot, dash or underscore' });
+        if (!bump('agm|' + ses.user, 40, 3600000)) return json(res, 429, { error: 'Too many changes. Try again later.' });
+        if (act === 'create') {
+          if (map[id]) return json(res, 409, { error: 'That username already exists for this agency' });
+          const name = clean(b.name, 80); if (name.length < 2) return json(res, 400, { error: 'Enter the person\'s full name' });
+          if (Object.values(map).filter(a => a.kind === kind).length >= 30) return json(res, 400, { error: 'At most 30 HQ accounts per agency' });
+          const pw = newPassphrase(), salt = crypto.randomBytes(16).toString('hex');
+          map[id] = { kind, username: un, name, salt, hash: pwHash(pw, salt), mustChange: true, created: Date.now(), changed: Date.now(), createdBy: ses.user };
+          kvSet(AGENCY_KEY, map); staffLog(ses, 'agency.account_created', id, name);
+          return json(res, 200, { ok: true, kind, username: un, name, password: pw, note: 'Shown once. Hand it to the person; they must choose their own password at first sign-in.' });
+        }
+        const a = map[id]; if (!a) return json(res, 404, { error: 'No such HQ account' });
+        if (act === 'reset') { const pw = newPassphrase(), salt = crypto.randomBytes(16).toString('hex'); map[id] = Object.assign({}, a, { salt, hash: pwHash(pw, salt), mustChange: true, changed: Date.now() + 1 }); kvSet(AGENCY_KEY, map); for (const kk of [...fails.keys()]) if (kk.endsWith('|agency|' + id)) fails.delete(kk); staffLog(ses, 'agency.password_reset', id, a.name); return json(res, 200, { ok: true, kind, username: un, name: a.name, password: pw, note: 'Shown once. They must choose their own password at next sign-in.' }); }
+        if (act === 'disable' || act === 'enable') { map[id] = Object.assign({}, a, { disabled: act === 'disable', changed: Date.now() + 1 }); kvSet(AGENCY_KEY, map); staffLog(ses, 'agency.account_' + act + 'd', id, a.name); return json(res, 200, { ok: true }); }
+        return json(res, 400, { error: 'Unknown action' });
+      }
+      return json(res, 405, { error: 'GET or POST only' });
+    }
+    if (p === '/api/agency/login' && req.method === 'POST') {
+      const b = await readBody(req), kind = String(b.kind || ''), un = String(b.username || '').trim().toLowerCase(), id = kind + ':' + un, k = clientIp(req) + '|agency|' + id;
+      if (!['fire', 'ambulance'].includes(kind)) return json(res, 400, { error: 'Unknown agency' });
+      const wait = lockedOut(k); if (wait) return json(res, 429, { error: 'Too many failed attempts. Try again in ' + Math.ceil(wait / 60) + ' min.' });
+      const map = kvGet(AGENCY_KEY, {}) || {}, a = map[id];
+      const ok = a && eq(pwHash(String(b.password || ''), a.salt), a.hash); if (!a) pwHash(String(b.password || ''), OWNER_SALT);
+      if (!ok) { noteFail(k); return json(res, 401, { error: 'Wrong username or password' }); }
+      if (a.disabled) return json(res, 403, { error: 'This HQ account has been disabled by the national HQ.' });
+      fails.delete(k); const m2 = Object.assign({}, map); m2[id] = Object.assign({}, a, { lastLogin: Date.now() }); store[AGENCY_KEY] = { value: m2, v: (store[AGENCY_KEY].v || 0) + 1, ts: Date.now() }; scheduleSave(AGENCY_KEY);
+      return json(res, 200, { token: issue(res, req, { r: kind + '_hq', ak: kind, u: un, cn: a.name, mc: a.mustChange ? 1 : 0 }, SESSION_MS), kind, user: un, name: a.name, mustChange: !!a.mustChange, expires: Date.now() + SESSION_MS });
+    }
+    if (p === '/api/agency/logout' && req.method === 'POST') { const s = sessionOf(req, true); if (s) revoked.add(s.jti); res.setHeader('Set-Cookie', 'geams_t=; Path=/; HttpOnly; Max-Age=0'); return json(res, 200, { ok: true }); }
+    if (p === '/api/agency/password' && req.method === 'POST') {
+      const ses = sessionOf(req); if (!ses || !AGENCY_ROLES.includes(ses.role)) return json(res, 401, { error: 'Sign in to the HQ first' });
+      const id = ses.agency + ':' + ses.user, k = 'agpw|' + id; const wait = lockedOut(k); if (wait) return json(res, 429, { error: 'Too many attempts. Try again in ' + Math.ceil(wait / 60) + ' min.' });
+      const b = await readBody(req), map = Object.assign({}, kvGet(AGENCY_KEY, {}) || {}), a = map[id];
+      if (!a || !eq(pwHash(String(b.current || ''), a.salt), a.hash)) { noteFail(k); return json(res, 401, { error: 'Your current password is not right' }); }
+      const np = String(b.password || ''); if (np.length < 10) return json(res, 400, { error: 'New password must be at least 10 characters' });
+      if (np === String(b.current || '')) return json(res, 400, { error: 'Choose a password different from the current one' });
+      fails.delete(k); const salt = crypto.randomBytes(16).toString('hex'); map[id] = Object.assign({}, a, { salt, hash: pwHash(np, salt), mustChange: false, changed: Date.now() }); kvSet(AGENCY_KEY, map);
+      staffLog(ses, 'agency.password_changed', id, '');
+      return json(res, 200, { ok: true, token: issue(res, req, { r: ses.agency + '_hq', ak: ses.agency, u: ses.user, cn: a.name }, SESSION_MS) });
+    }
+    if (p.startsWith('/api/agency/')) {
+      const ses = sessionOf(req, req.method === 'GET'); if (!ses || !AGENCY_ROLES.includes(ses.role)) return json(res, 401, { error: 'Sign in to the Fire or Ambulance HQ' });
+      if (ses.mc) return json(res, 403, { error: 'Choose your own password first' });
+      const kind = ses.agency, U = UNIT[kind], KEY = (sid) => kind + ':' + sid + ':incidents', label = kind === 'fire' ? 'Fire' : 'Ambulance';
+      const incs = () => { const out = []; for (const k of Object.keys(store)) { const m = /^(fire|ambulance):([^:]+):incidents$/.exec(k); if (!m || m[1] !== kind || !isObj(store[k].value)) continue; for (const [id, r] of Object.entries(store[k].value)) if (isObj(r) && !r.drill && !r.reassignedTo) out.push({ sid: m[2], id, r }); } return out; };
+      const st = (r) => r.serviceStatus || 'new', tOf = (r) => (r.srv && r.srv.forwarded) || r.forwardedAt || 0;
+      if (p === '/api/agency/overview' && req.method === 'GET') {
+        const now = Date.now(), reg = kvGet('registry:stations', {}) || {}, loc = kvGet('registry:stationLocations', {}) || {}, crews = kvGet(U.key, []) || [], all = incs();
+        const by = {}; const S = (sid) => by[sid] || (by[sid] = { sid, name: (reg[sid] && reg[sid].name) || sid, region: (reg[sid] && reg[sid].region) || '', town: (reg[sid] && reg[sid].town) || '', lat: null, lng: null, lcrOnline: lcrOnline(sid), crews: 0, crewsDisabled: 0, waiting: 0, active: 0, doneToday: 0, oldestWaitingSecs: 0 });
+        for (const [sid, r] of Object.entries(reg)) { if (r && r.disabled) continue; const o = S(sid), l = loc[sid] || r; if (typeof l.lat === 'number' && typeof l.lng === 'number') { o.lat = l.lat; o.lng = l.lng; } }
+        const ua = kvGet(UNIT_AUTH, {}); crews.forEach(c => { const o = S(c.lcrId); o.crews++; if ((ua[kind + ':' + c.badge] || {}).disabled) o.crewsDisabled++; });
+        const day = now - 86400000, list = [];
+        for (const { sid, id, r } of all) {
+          const o = S(sid), s = st(r), t = tOf(r);
+          if (s === 'new') { o.waiting++; o.oldestWaitingSecs = Math.max(o.oldestWaitingSecs, Math.round((now - t) / 1000)); }
+          else if (s !== 'complete' && s !== 'reassigned') o.active++;
+          else if (s === 'complete' && ((r.srv && r.srv.completed) || t) >= day) o.doneToday++;
+          if (s !== 'complete' && s !== 'reassigned' ? true : t >= now - 6 * 3600000) list.push({ sid, station: o.name, id, type: String(r.type || '').slice(0, 40), priority: String(r.priority || '').slice(0, 12), location: String(r.location || '').slice(0, 120), lat: typeof r.lat === 'number' ? r.lat : null, lng: typeof r.lng === 'number' ? r.lng : null, status: s, unit: r.unitName || null, unitBadge: r.unitBadge || null, eta: r.unitETA || null, forwardedAt: t, acceptedAt: (r.srv && r.srv.accepted) || null, reassignedTo: r.reassignedTo || null, reassignedFrom: r.reassignedFrom || null, waitedSecs: s === 'new' ? Math.round((now - t) / 1000) : null,
+            unitLat: typeof r.unitLat === 'number' ? r.unitLat : null, unitLng: typeof r.unitLng === 'number' ? r.unitLng : null, etaSource: r.etaSource || null, etaTarget: r.etaTarget || null, etaKm: typeof r.etaKm === 'number' ? r.etaKm : null, leg: r.leg || null, posAt: (r.srv && r.srv.posAt) || null, posAgeSecs: (r.srv && r.srv.posAt) ? Math.round((now - r.srv.posAt) / 1000) : null, positionStale: s === 'en_route' && (!(r.srv && r.srv.posAt) || now - r.srv.posAt > 60000), departedAt: (r.srv && r.srv.departed) || null, pickedUpAt: (r.srv && r.srv.pickedUp) || null,
+            transfer: isObj(r.transfer) ? { from: r.transfer.from, to: r.transfer.to, patient: r.transfer.patient || '', needs: r.transfer.needs || '', contact: r.transfer.contact || '' } : null });
+        }
+        list.sort((a, b) => (a.status === 'new' ? 0 : 1) - (b.status === 'new' ? 0 : 1) || b.forwardedAt - a.forwardedAt);
+        const esc = Object.values(kvGet('registry:agencyEscalations', {}) || {}).filter(e => e.kind === kind && e.open).map(e => ({ key: e.key, sid: e.sid, station: e.station, id: e.ref, type: e.type, priority: e.priority, since: e.since, flaggedAt: e.flaggedAt, waitedSecs: e.waitedSecs || null, reason: e.reason, neighbours: e.neighbours || [], ackBy: e.ackBy || null, ackAt: e.ackAt || null }));
+        const bc = kvGet('agency:' + kind + ':broadcast', null);
+        return json(res, 200, { kind, label, user: ses.user, name: ses.name, now, refreshesEverySecs: 3, stations: Object.values(by).sort((a, b) => (b.waiting - a.waiting) || (b.active - a.active) || a.name.localeCompare(b.name)), incidents: list.slice(0, 400), escalations: esc, thresholdSecs: AG_ESC().secs, broadcasts: bc && Array.isArray(bc.items) ? bc.items.slice(-5).reverse() : [],
+          unreadChat: Object.entries(kvGet(CHAT_KEY, {}) || {}).filter(([k]) => k.startsWith(kind + ':')).reduce((n, [, t]) => n + t.items.filter(m => m.from === 'crew' && m.at > (t.hqReadAt || 0)).length, 0), totals: { stations: Object.keys(by).length, stationsOnline: Object.values(by).filter(x => x.lcrOnline).length, crewAccounts: crews.length, waiting: list.filter(x => x.status === 'new').length, active: list.filter(x => !['new', 'complete', 'reassigned'].includes(x.status)).length },
+          note: 'Counts come from alerts that control rooms forwarded to ' + label.toLowerCase() + ' crews. Crew numbers are accounts, not who is on shift. This screen refreshes about every 3 seconds; it is not a push alert, so keep it open or use the escalation warnings.' });
+      }
+      if (p === '/api/agency/reassign' && req.method === 'POST') {
+        const b = await readBody(req), from = String(b.sid || ''), to = String(b.toSid || ''), id = String(b.id || '');
+        const reg = kvGet('registry:stations', {}) || {}; if (!reg[to] || reg[to].disabled) return json(res, 404, { error: 'Unknown destination station' }); if (from === to) return json(res, 400, { error: 'Choose a different station' });
+        const src = kvGet(KEY(from), null), rec = isObj(src) ? src[id] : null; if (!isObj(rec)) return json(res, 404, { error: 'That alert was not found at the first station' });
+        if (st(rec) !== 'new') return json(res, 409, { error: 'A crew has already taken this alert (' + st(rec).replace('_', ' ') + '). It cannot be moved now.' });
+        const dest = Object.assign({}, kvGet(KEY(to), {}) || {}); if (dest[id]) return json(res, 409, { error: 'That station already has this alert' });
+        const now = Date.now(), nm = (reg[to] && reg[to].name) || to;
+        dest[id] = Object.assign({}, rec, { serviceStatus: 'new', stationId: to, stationName: nm, reassignedFrom: from, reassignedFromName: (reg[from] && reg[from].name) || from, reassignedBy: ses.user, reassignedAt: now, unitName: null, unitBadge: null, unitETA: null, unitLat: null, unitLng: null, srv: { forwarded: now } });
+        const s2 = Object.assign({}, src); s2[id] = Object.assign({}, rec, { serviceStatus: 'reassigned', reassignedTo: to, reassignedToName: nm, reassignedBy: ses.user, reassignedAt: now });
+        kvSet(KEY(to), dest); kvSet(KEY(from), s2); staffLog(ses, 'agency.reassign', id, kind + ' → ' + to, from);
+        return json(res, 200, { ok: true, id, from, to, toName: nm });
+      }
+      if (p === '/api/agency/escalation/ack' && req.method === 'POST') {
+        const b = await readBody(req), map = Object.assign({}, kvGet('registry:agencyEscalations', {}) || {}), e = map[String(b.key || '')]; if (!e || e.kind !== kind) return json(res, 404, { error: 'Unknown warning' });
+        e.ackBy = ses.user; e.ackAt = Date.now(); e.ackNote = clean(b.note, 160); kvSet('registry:agencyEscalations', map); staffLog(ses, 'agency_' + kind + '.ack', e.ref, e.ackNote ? 'note' : '', e.sid); return json(res, 200, { ok: true });
+      }
+      if (p === '/api/agency/broadcast' && req.method === 'POST') {
+        const b = await readBody(req), msg = clean(b.message, 300); if (msg.length < 3) return json(res, 400, { error: 'Write a message (at least 3 characters)' });
+        if (!bump('agb|' + ses.user, 20, 3600000)) return json(res, 429, { error: 'Too many messages. Try again later.' });
+        const sid = String(b.sid || ''); if (sid && !(kvGet('registry:stations', {}) || {})[sid]) return json(res, 404, { error: 'Unknown station' });
+        const cur = kvGet('agency:' + kind + ':broadcast', null), items = cur && Array.isArray(cur.items) ? cur.items.slice(-29) : [];
+        const item = { id: crypto.randomBytes(6).toString('hex'), at: Date.now(), by: ses.name || ses.user, priority: b.priority === 'urgent' ? 'urgent' : 'info', message: msg, sid: sid || null, sidName: sid ? stationMeta(sid).name : null };
+        items.push(item); kvSet('agency:' + kind + ':broadcast', { items }); staffLog(ses, 'agency_' + kind + '.broadcast', item.id, item.priority + (sid ? ' (one station)' : ' (all stations)'), sid || null);
+        return json(res, 200, { ok: true, item });
+      }
+      if (p === '/api/agency/crew' && req.method === 'GET') {
+        const ua = kvGet(UNIT_AUTH, {}), reg = kvGet('registry:stations', {}) || {}, all = incs();
+        const list = (kvGet(U.key, []) || []).map(c => { const a = ua[kind + ':' + c.badge] || {}, job = all.find(x => x.r.unitBadge === c.badge && !['new', 'complete', 'reassigned'].includes(st(x.r)));
+          return { badge: c.badge, name: c.name, rank: c.rank || '', phone: c.phone || '', vehicle: c.vehicle || '', sid: c.lcrId, station: (reg[c.lcrId] && reg[c.lcrId].name) || c.lcrId, disabled: !!a.disabled, mustChange: !!a.mustChange, onJob: job ? { id: job.id, status: st(job.r) } : null }; });
+        const pend = Object.values(kvGet(UNIT_PENDING, {})).filter(x => x.kind === kind).map(x => ({ badge: x.cred.badge, name: x.cred.name, phone: x.cred.phone, rank: x.cred.rank, sid: x.cred.lcrId, station: (reg[x.cred.lcrId] && reg[x.cred.lcrId].name) || x.cred.lcrId, requestedAt: x.requestedAt }));
+        return json(res, 200, { kind, crews: list, pending: pend });
+      }
+      if (p === '/api/agency/crew/update' && req.method === 'POST') {          // disable, enable or move one crew member
+        const b = await readBody(req), badge = String(b.badge || ''), act = String(b.action || ''), list = (kvGet(U.key, []) || []).slice(), i = list.findIndex(x => x.badge === badge);
+        if (i < 0) return json(res, 404, { error: 'No such crew member' }); const id = kind + ':' + badge, ua = Object.assign({}, kvGet(UNIT_AUTH, {})), cur = ua[id] || {};
+        if (act === 'disable' || act === 'enable') {
+          if (act === 'disable') ua[id] = Object.assign({}, cur, { disabled: Date.now(), disabledBy: ses.user, changed: Date.now() + 1 }); else { ua[id] = Object.assign({}, cur); delete ua[id].disabled; delete ua[id].disabledBy; }
+          kvSet(UNIT_AUTH, ua); staffLog(ses, 'crew.' + act + 'd', id, list[i].name, list[i].lcrId); return json(res, 200, { ok: true });
+        }
+        if (act === 'move') {
+          const to = String(b.toSid || ''), reg = kvGet('registry:stations', {}) || {}; if (!reg[to] || reg[to].disabled) return json(res, 404, { error: 'Unknown destination station' }); const was = list[i].lcrId;
+          list[i] = Object.assign({}, list[i], { lcrId: to }); ua[id] = Object.assign({}, cur, { changed: Date.now() + 1 }); kvSet(U.key, list); kvSet(UNIT_AUTH, ua);
+          staffLog(ses, 'crew.moved', id, was + ' → ' + to, to); return json(res, 200, { ok: true, note: 'They are signed out and must sign in again to work for the new station.' });
+        }
+        return json(res, 400, { error: 'Unknown action' });
+      }
+      if (p === '/api/agency/report' && req.method === 'GET') {
+        const days = Math.min(Math.max(parseInt(u.searchParams.get('days'), 10) || 30, 1), 400), from = Date.now() - days * 86400000, reg = kvGet('registry:stations', {}) || {};
+        const byType = {}, byPrio = {}, byStatus = {}, byHour = Array(24).fill(0), per = {}, acc = [], arr = [], tTransit = [], tPickup = []; let total = 0, reassigned = 0, tCount = 0, tDone = 0;
+        for (const { sid, id, r } of incs()) {
+          const t = tOf(r); if (t < from) continue; total++; const s = st(r); if (r.reassignedFrom) reassigned++;
+          const ty = String(r.type || 'unknown').slice(0, 40); byType[ty] = (byType[ty] || 0) + 1; byPrio[r.priority || 'unknown'] = (byPrio[r.priority || 'unknown'] || 0) + 1; byStatus[s] = (byStatus[s] || 0) + 1; byHour[new Date(t).getUTCHours()]++;
+          const o = per[sid] || (per[sid] = { sid, station: (reg[sid] && reg[sid].name) || sid, n: 0, accepted: [], onScene: [] }); o.n++;
+          const sv = r.srv || {}; if (isObj(r.transfer)) { tCount++; if (s === 'complete') tDone++; if (sv.pickedUp && sv.completed && sv.completed >= sv.pickedUp) tTransit.push((sv.completed - sv.pickedUp) / 60000); if (sv.accepted && sv.onScene && sv.onScene >= sv.accepted) tPickup.push((sv.onScene - sv.accepted) / 60000); }
+          if (sv.accepted && sv.forwarded) { const d = (sv.accepted - sv.forwarded) / 1000; if (d >= 0) { acc.push(d); o.accepted.push(d); } } if (sv.onScene && sv.forwarded) { const d = (sv.onScene - sv.forwarded) / 1000; if (d >= 0) { arr.push(d); o.onScene.push(d); } }
+        }
+        const esc = Object.values(kvGet('registry:agencyEscalations', {}) || {}).filter(e => e.kind === kind && e.flaggedAt >= from);
+        return json(res, 200, { schema: 'geams.agencyreport.v1', kind, generatedAt: new Date().toISOString(), windowDays: days,
+          alerts: { forwarded: total, reassignedBetweenStations: reassigned, byType, byPriority: byPrio, byStatus, byHourUTC: byHour },
+          speed: { secondsToAcceptMedian: median(acc), secondsToAcceptP90: pctl(acc, 0.9), measuredAccept: acc.length, secondsToOnSceneMedian: median(arr), measuredOnScene: arr.length },
+          transfers: kind === 'ambulance' ? { created: tCount, delivered: tDone, minutesToReachPickupMedian: median(tPickup), minutesInTransitMedian: median(tTransit), measuredInTransit: tTransit.length } : undefined,
+          unansweredWarnings: { total: esc.length, stillOpen: esc.filter(e => e.open).length },
+          stations: Object.values(per).map(o => ({ sid: o.sid, station: o.station, forwarded: o.n, secondsToAcceptMedian: median(o.accepted), measuredAccept: o.accepted.length })).sort((a, b) => b.forwarded - a.forwarded),
+          crewAccounts: (kvGet(U.key, []) || []).length,
+          notMeasured: ['Alerts that no control room forwarded to ' + label.toLowerCase() + ' crews (for example a call handled by phone only).', 'Whether help arrived in time or the outcome for the patient or property: GEAMS records only what staff tap.', 'Times before the server stamped them (older records show no figures instead of a guess).'] });
+      }
+      if (p === '/api/agency/log' && req.method === 'GET') {
+        const l = kvGet('registry:staffLog', []).filter(x => x.role === ses.role || (x.ref && String(x.ref).startsWith(kind + ':')) || String(x.action).startsWith('agency_' + kind) || (x.action === 'incident.update' && false));
+        return json(res, 200, { total: l.length, items: l.slice().reverse().slice(0, Math.min(+u.searchParams.get('limit') || 200, 1000)) });
+      }
+      if (p === '/api/agency/chat') {
+        const all = kvGet(CHAT_KEY, {}) || {}, badge = u.searchParams.get('badge');
+        if (req.method === 'GET' && !badge) {
+          const crews = kvGet(U.key, []) || [], reg = kvGet('registry:stations', {}) || {};
+          const threads = Object.entries(all).filter(([k]) => k.startsWith(kind + ':')).map(([k, t]) => { const b = k.slice(kind.length + 1), c = crews.find(x => x.badge === b), last = t.items[t.items.length - 1]; return { badge: b, name: c ? c.name : b, station: c ? ((reg[c.lcrId] && reg[c.lcrId].name) || c.lcrId) : '', last: last ? { at: last.at, from: last.from, text: last.text.slice(0, 80) } : null, unread: t.items.filter(m => m.from === 'crew' && m.at > (t.hqReadAt || 0)).length }; }).sort((a, b) => ((b.last && b.last.at) || 0) - ((a.last && a.last.at) || 0));
+          return json(res, 200, { threads, unread: threads.reduce((n, t) => n + t.unread, 0) });
+        }
+        if (req.method === 'GET') { if (!(kvGet(U.key, []) || []).some(x => x.badge === badge)) return json(res, 404, { error: 'No such crew member' }); const t = chatThread(kind, badge), c = Object.assign({}, all);
+          if (u.searchParams.get('read') === '1' && all[kind + ':' + badge]) { c[kind + ':' + badge] = Object.assign({}, t, { hqReadAt: Date.now() }); kvSet(CHAT_KEY, c); } return json(res, 200, chatOut(t, 'hq')); }
+        if (req.method === 'POST') { const b = await readBody(req), bd = String(b.badge || ''), text = clean(b.message, 500); if (!(kvGet(U.key, []) || []).some(x => x.badge === bd)) return json(res, 404, { error: 'No such crew member' }); if (text.length < 1) return json(res, 400, { error: 'Write a message' });
+          if (!bump('hqm|' + ses.user, 120, 600000)) return json(res, 429, { error: 'Too many messages. Wait a few minutes.' });
+          const t = chatPost(kind, bd, 'hq', ses.name || ses.user, text, 'hqReadAt'); return json(res, 200, Object.assign({ ok: true }, chatOut(t, 'hq'))); }
+        return json(res, 405, { error: 'GET or POST only' });
+      }
+      if (p === '/api/agency/transfer/create' && req.method === 'POST') {      // Ambulance HQ: collect a patient at one hospital and deliver them to another
+        if (kind !== 'ambulance') return json(res, 403, { error: 'Patient transfers are an Ambulance HQ function' });
+        const b = await readBody(req), sid = String(b.sid || ''), reg = kvGet('registry:stations', {}) || {}; if (!reg[sid] || reg[sid].disabled) return json(res, 404, { error: 'Choose the ambulance station whose crew will do the transfer' });
+        const hosp = (h, what) => { h = isObj(h) ? h : {}; const o = { name: clean(h.name, 100), address: clean(h.address, 160), lat: Number(h.lat), lng: Number(h.lng) }; if (o.name.length < 2) return { error: 'Name the ' + what + ' hospital' }; if (!Number.isFinite(o.lat) || !Number.isFinite(o.lng) || Math.abs(o.lat) > 90 || Math.abs(o.lng) > 180 || (o.lat === 0 && o.lng === 0)) return { error: 'The ' + what + ' hospital needs a position on the map, so the ambulance can be tracked to it' }; return o; };
+        const from = hosp(b.from, 'pickup'); if (from.error) return json(res, 400, { error: from.error }); const to = hosp(b.to, 'destination'); if (to.error) return json(res, 400, { error: to.error });
+        const dx = (from.lat - to.lat) * 111000, dy = (from.lng - to.lng) * 111000 * Math.cos(from.lat * Math.PI / 180); if (Math.hypot(dx, dy) < 100 && from.name.toLowerCase() === to.name.toLowerCase()) return json(res, 400, { error: 'Pickup and destination are the same place' });
+        if (!bump('agt|' + ses.user, 30, 3600000)) return json(res, 429, { error: 'Too many transfers created. Try again later.' });
+        const pr = ['critical', 'high', 'medium', 'low'].includes(b.priority) ? b.priority : 'medium', now = Date.now(), id = 'HQ-AMB-T' + now.toString(36).toUpperCase() + crypto.randomBytes(2).toString('hex').toUpperCase(), nm = (reg[sid] && reg[sid].name) || sid;
+        const cur = Object.assign({}, kvGet(KEY(sid), {}) || {});
+        cur[id] = { id, type: 'Patient transfer', priority: pr, location: 'Pickup: ' + from.name + (from.address ? ', ' + from.address : ''), lat: from.lat, lng: from.lng, civilianName: null, civilianPhone: null, notes: 'Deliver to ' + to.name + (to.address ? ', ' + to.address : ''), transfer: { from, to, patient: clean(b.patient, 120), needs: clean(b.needs, 200), contact: clean(b.contact, 40) }, leg: 'to_pickup', forwardedAt: now, forwardedBy: 'Ambulance HQ (' + (ses.name || ses.user) + ')', stationId: sid, stationName: nm, serviceStatus: 'new', unitName: null, unitBadge: null, unitETA: null, unitLat: null, unitLng: null, createdByHq: ses.user, srv: { forwarded: now } };
+        kvSet(KEY(sid), cur); staffLog(ses, 'agency_ambulance.transfer_created', id, from.name + ' → ' + to.name + ' · ' + pr, sid);
+        return json(res, 200, { ok: true, id, station: nm, note: 'Sent to ' + nm + ' ambulance crews. The first crew to accept it collects the patient from ' + from.name + ' and delivers to ' + to.name + '.' });
+      }
+      if (p === '/api/agency/incident/create' && req.method === 'POST') {      // the HQ raises an alert straight to one station's crews, without a control room
+        const b = await readBody(req), sid = String(b.sid || ''), reg = kvGet('registry:stations', {}) || {}; if (!reg[sid] || reg[sid].disabled) return json(res, 404, { error: 'Choose a station' });
+        const type = clean(b.type, 40), loc = clean(b.location, 160), notes = clean(b.notes, 400), pr = ['critical', 'high', 'medium', 'low'].includes(b.priority) ? b.priority : 'high';
+        if (type.length < 2) return json(res, 400, { error: 'Choose what kind of alert this is' }); if (loc.length < 3) return json(res, 400, { error: 'Describe where it is' });
+        if (!bump('agi|' + ses.user, 30, 3600000)) return json(res, 429, { error: 'Too many alerts created. Try again later.' });
+        const lat = Number(b.lat), lng = Number(b.lng), hasPos = Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180 && !(lat === 0 && lng === 0);
+        const now = Date.now(), id = 'HQ-' + kind.toUpperCase().slice(0, 3) + '-' + now.toString(36).toUpperCase() + crypto.randomBytes(2).toString('hex').toUpperCase(), nm = (reg[sid] && reg[sid].name) || sid;
+        const cur = Object.assign({}, kvGet(KEY(sid), {}) || {});
+        cur[id] = { id, type, priority: pr, location: loc, lat: hasPos ? lat : null, lng: hasPos ? lng : null, civilianName: null, civilianPhone: null, notes, forwardedAt: now, forwardedBy: label + ' HQ (' + (ses.name || ses.user) + ')', stationId: sid, stationName: nm, serviceStatus: 'new', unitName: null, unitBadge: null, unitETA: null, unitLat: null, unitLng: null, createdByHq: ses.user, srv: { forwarded: now } };
+        kvSet(KEY(sid), cur); staffLog(ses, 'agency_' + kind + '.incident_created', id, type + ' · ' + pr, sid);
+        return json(res, 200, { ok: true, id, station: nm, note: 'Sent to ' + nm + ' crews. It did not come through a control room, so the control room does not have it on its own screen.' });
+      }
+      if (p === '/api/agency/backup' && req.method === 'POST') {            // a file of this agency's own data, encrypted with a passphrase only the HQ knows
+        const b = await readBody(req), pass = String(b.passphrase || ''); if (pass.length < 10) return json(res, 400, { error: 'Choose a passphrase of at least 10 characters. You will need it to open the file.' });
+        if (!bump('agbk|' + ses.user, 6, 3600000)) return json(res, 429, { error: 'Too many backups requested. Try again later.' });
+        const reg = kvGet('registry:stations', {}) || {}, inc = {}; for (const k of Object.keys(store)) { const m = /^(fire|ambulance):([^:]+):incidents$/.exec(k); if (m && m[1] === kind) inc[m[2]] = store[k].value; }
+        const doc = { schema: 'geams.agencybackup.v1', kind, takenAt: new Date().toISOString(), by: ses.user, stations: Object.fromEntries(Object.entries(reg).map(([id, r]) => [id, { name: r.name, region: r.region, town: r.town }])),
+          crews: (kvGet(U.key, []) || []), incidents: inc, broadcasts: kvGet('agency:' + kind + ':broadcast', null) };
+        const salt = crypto.randomBytes(16), iv = crypto.randomBytes(12), key = crypto.scryptSync(pass, salt, 32), c = crypto.createCipheriv('aes-256-gcm', key, iv), enc = Buffer.concat([c.update(Buffer.from(JSON.stringify(doc), 'utf8')), c.final()]), tag = c.getAuthTag();
+        const out = Buffer.concat([Buffer.from('GEAMSAG1'), salt, iv, tag, enc]); staffLog(ses, 'agency_' + kind + '.backup', null, Math.round(out.length / 1024) + ' KB');
+        res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': out.length, 'Content-Disposition': 'attachment; filename="geams-' + kind + '-hq-backup-' + new Date().toISOString().replace(/[-:]/g, '').slice(0, 13) + 'Z.enc"', 'Cache-Control': 'no-store' });
+        return res.end(out);
+      }
+      return json(res, 404, { error: 'Unknown HQ endpoint' });
     }
     // ── Civilian account recovery: a code only the owner holds moves the account to a new phone ──
     if (p === '/api/civilian/recovery/create' && req.method === 'POST') {
@@ -1721,13 +1980,15 @@ const server = http.createServer(async (req, res) => {
     }
     // ── Crew approvals: a control room approves its own crews, HQ can approve any ──
     if (p === '/api/lcr/pending' && req.method === 'GET') {
-      const ses = sessionOf(req); if (!ses || !['lcr', 'hq'].includes(ses.role)) return json(res, 401, { error: 'Sign in as a control room or HQ' });
-      const list = Object.values(kvGet(UNIT_PENDING, {})).filter(x => ses.role === 'hq' || x.cred.lcrId === ses.sid).map(x => ({ kind: x.kind, badge: x.cred.badge, name: x.cred.name, rank: x.cred.rank, phone: x.cred.phone, vehicle: x.cred.vehicle, lcrId: x.cred.lcrId, requestedAt: x.requestedAt }));
+      const ses = sessionOf(req); if (!ses || !['lcr', 'hq', ...AGENCY_ROLES].includes(ses.role)) return json(res, 401, { error: 'Sign in as a control room or HQ' });
+      if (ses.mc) return json(res, 403, { error: 'Choose your own password first' });
+      const list = Object.values(kvGet(UNIT_PENDING, {})).filter(x => ses.role === 'hq' || (agencyOf(ses) ? x.kind === agencyOf(ses) : x.cred.lcrId === ses.sid)).map(x => ({ kind: x.kind, badge: x.cred.badge, name: x.cred.name, rank: x.cred.rank, phone: x.cred.phone, vehicle: x.cred.vehicle, lcrId: x.cred.lcrId, requestedAt: x.requestedAt }));
       return json(res, 200, { pending: list });
     }
     if (p === '/api/lcr/approve' && req.method === 'POST') {
-      const ses = sessionOf(req); if (!ses || !['lcr', 'hq'].includes(ses.role)) return json(res, 401, { error: 'Sign in as a control room or HQ' });
-      const b = await readBody(req), id = String(b.kind) + ':' + String(b.badge), pend = Object.assign({}, kvGet(UNIT_PENDING, {})), x = pend[id];
+      const ses = sessionOf(req); if (!ses || !['lcr', 'hq', ...AGENCY_ROLES].includes(ses.role)) return json(res, 401, { error: 'Sign in as a control room or HQ' });
+      if (ses.mc) return json(res, 403, { error: 'Choose your own password first' });
+      const b = await readBody(req), id = (agencyOf(ses) || String(b.kind)) + ':' + String(b.badge), pend = Object.assign({}, kvGet(UNIT_PENDING, {})), x = pend[id];
       if (!x) return json(res, 404, { error: 'No such request (it may already have been handled)' });
       if (ses.role === 'lcr' && x.cred.lcrId !== ses.sid) return json(res, 403, { error: 'That crew belongs to another control room' });
       delete pend[id]; kvSet(UNIT_PENDING, pend);
@@ -1985,6 +2246,40 @@ function escalationSweep() {
   if (changed) kvSet('registry:escalations', map);
 }
 setInterval(() => { try { escalationSweep(); } catch (e) { console.log('escalation sweep failed: ' + e.message); } }, Math.max(500, +process.env.GEAMS_ESCALATE_TICK_MS || 10000)).unref();
+
+/* Agency escalation: a forwarded fire or ambulance alert that no crew has taken after the set time is flagged for that agency's HQ.
+ * It also copies the later progress of a reassigned alert back to the first station so its control room still sees it. Warnings only: people must act. */
+const AG_ESC = () => ({ secs: process.env.GEAMS_AGENCY_ESCALATE_SECS === undefined ? 120 : +process.env.GEAMS_AGENCY_ESCALATE_SECS });
+function agencySweep() {
+  const c = AG_ESC(); const now = Date.now(), cur = kvGet('registry:agencyEscalations', {}), map = isObj(cur) ? cur : {}; let changed = false; const live = new Set();
+  for (const k of Object.keys(store)) {
+    const m = /^(fire|ambulance):([^:]+):incidents$/.exec(k); if (!m || !isObj(store[k].value)) continue; const kind = m[1], sid = m[2];
+    for (const [id, r] of Object.entries(store[k].value)) {
+      if (!isObj(r) || r.drill) continue;
+      if (r.reassignedTo) {   // mirror progress from the station that took it, so the first control room still sees it
+        const d = store[kind + ':' + r.reassignedTo + ':incidents'], dr = d && isObj(d.value) ? d.value[id] : null;
+        if (dr && dr.serviceStatus && dr.serviceStatus !== 'new' && (dr.serviceStatus !== r.serviceStatus || dr.unitName !== r.unitName || dr.unitETA !== r.unitETA)) {
+          const v = Object.assign({}, store[k].value); v[id] = Object.assign({}, r, { serviceStatus: dr.serviceStatus, unitName: dr.unitName || null, unitBadge: dr.unitBadge || null, unitETA: dr.unitETA || null }); kvSet(k, v); }
+        continue;
+      }
+      if (!c.secs || (r.serviceStatus || 'new') !== 'new') continue;
+      const since = (r.srv && r.srv.forwarded) || r.forwardedAt || 0; if (!since) continue; const waited = (now - since) / 1000; if (waited < c.secs) continue;
+      const key = kind + ':' + sid + ':' + id; live.add(key); const e = map[key];
+      if (!e) { map[key] = { key, kind, sid, station: stationMeta(sid).name, ref: id, type: String(r.type || '').slice(0, 40), priority: String(r.priority || '').slice(0, 12), since, flaggedAt: now, reason: 'unanswered', waitedSecs: Math.round(waited), neighbours: nearestOthers(sid, 3), open: true };
+        staffLog({ role: 'system', user: 'server' }, 'agency_' + kind + '.flagged', id, 'unanswered after ' + Math.round(waited) + 's', sid); changed = true; }
+      else if (e.open) { e.waitedSecs = Math.round(waited); e.neighbours = nearestOthers(sid, 3); changed = true; }
+    }
+  }
+  for (const [key, e] of Object.entries(map)) {
+    if (!e.open || live.has(key)) continue;
+    const d = store[e.kind + ':' + e.sid + ':incidents'], r = d && isObj(d.value) ? d.value[e.ref] : null;
+    e.open = false; e.clearedAt = now; e.outcome = !r ? 'removed' : r.serviceStatus === 'reassigned' ? 'reassigned' : 'taken'; changed = true;
+    staffLog({ role: 'system', user: 'server' }, 'agency_' + e.kind + '.cleared', e.ref, e.outcome, e.sid);
+  }
+  const keys = Object.keys(map); if (keys.length > 500) { keys.filter(k => !map[k].open).sort((a, b) => (map[a].clearedAt || 0) - (map[b].clearedAt || 0)).slice(0, keys.length - 500).forEach(k => delete map[k]); changed = true; }
+  if (changed) kvSet('registry:agencyEscalations', map);
+}
+setInterval(() => { try { agencySweep(); } catch (e) { console.log('agency sweep failed: ' + e.message); } }, Math.max(500, +process.env.GEAMS_ESCALATE_TICK_MS || 10000)).unref();
 
 /* ── Data retention: anonymise, then purge, closed incidents after the periods the operator sets ──
  * 0 (the default) means keep forever. Only closed incidents are touched; an incident on legal hold never is. */

@@ -922,7 +922,7 @@ const AmbulanceApp = (() => {
       return `<div class="call-card" style="border-color:${color}">
         <div class="call-card-type" style="color:${color}">${rec.type}</div>
         <div class="call-card-meta">
-          📍 ${rec.location}<br>
+          ${rec.transfer ? '🏥 Transfer: ' + rec.transfer.from.name + ' → ' + rec.transfer.to.name + '<br>' + (rec.transfer.patient ? '🛏 ' + rec.transfer.patient + '<br>' : '') : ''}📍 ${rec.location}<br>
           🧭 GPS: ${rec.lat?.toFixed(5)}, ${rec.lng?.toFixed(5)}<br>
           ${rec.civilianName ? '👤 Reported by: ' + rec.civilianName + (rec.civilianPhone ? ' · ' + rec.civilianPhone : '') + '<br>' : ''}
           ${rec.notes ? '📝 ' + rec.notes + '<br>' : ''}
@@ -946,11 +946,12 @@ const AmbulanceApp = (() => {
       lat: rec.lat, lng: rec.lng, civilianName: rec.civilianName, civilianPhone: rec.civilianPhone,
       notes: rec.notes, status: 'accepted', acceptedAt: Date.now(),
       unitLat: station.lat, unitLng: station.lng, unitETA: null,
+      transfer: rec.transfer || null, leg: rec.transfer ? 'to_pickup' : null,   // a hospital-to-hospital transfer raised by the Ambulance HQ
     };
     AmbulanceData.setCurrentJob(job);
     GeamsAmbulanceSync.pushUpdate(crew.lcrId, incId, {
       serviceStatus: 'accepted', unitName: crew.name, unitBadge: crew.badge,
-      unitLat: station.lat, unitLng: station.lng,
+      unitLat: station.lat, unitLng: station.lng, ...(rec.transfer ? { leg: 'to_pickup' } : {}),
     });
     const dot = document.getElementById('topbar-dot');
     if (dot) dot.classList.remove('busy');
@@ -971,41 +972,77 @@ const AmbulanceApp = (() => {
   }
   function stopGps() {
     if (gpsWatch != null && navigator.geolocation) { navigator.geolocation.clearWatch(gpsWatch); }
-    gpsWatch = null;
+    gpsWatch = null; if (hbTimer) { clearInterval(hbTimer); hbTimer = null; } lastFix = null;
+  }
+  /* ── LIVE POSITION AND ETA ──
+   * Position is this device's real GPS. ETA is the remaining ROAD time when the routing service answers (re-fetched every ~15 s or when the unit
+   * has moved), otherwise a straight-line estimate with a detour allowance, and the app says which one it is using. A heartbeat re-sends the fix every
+   * 10 s even when the vehicle is stationary, and the server stamps when each position arrived, so the HQ can see how old it is. */
+  let lastFix = null, hbTimer = null;
+  const road = { at: 0, fromLat: null, fromLng: null, toLat: null, toLng: null, durS: null, distM: null, pts: [], pending: false, failAt: 0 };
+  function legTarget(job) {
+    if (job.transfer && job.leg === 'to_destination') return { lat: job.transfer.to.lat, lng: job.transfer.to.lng, name: job.transfer.to.name, kind: 'destination' };
+    return { lat: job.lat, lng: job.lng, name: job.transfer ? job.transfer.from.name : 'the scene', kind: job.transfer ? 'pickup' : 'scene' };
+  }
+  function roadFresh(t) { return road.distM != null && Date.now() - road.at < 60000 && distM(road.toLat, road.toLng, t.lat, t.lng) < 80; }
+  async function fetchRoad(lat, lng, t) {
+    const now = Date.now(); if (road.pending || now - road.failAt < 30000) return;
+    const movedFrom = road.fromLat == null ? 1e9 : distM(road.fromLat, road.fromLng, lat, lng), movedTo = road.toLat == null ? 1e9 : distM(road.toLat, road.toLng, t.lat, t.lng);
+    if (now - road.at < 15000 || (movedFrom < 30 && movedTo < 30 && now - road.at < 45000)) return;
+    road.pending = true; const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 7000);
+    try {
+      const url = `${((window.GEAMS_CONFIG || {}).routeUrl || 'https://router.project-osrm.org')}/route/v1/driving/${lng},${lat};${t.lng},${t.lat}?overview=full&geometries=geojson`;
+      const r = await fetch(url, { signal: ctl.signal }), j = await r.json(); if (!j.routes || !j.routes[0]) throw new Error('no route');
+      const rt = j.routes[0]; road.pts = rt.geometry.coordinates.map(c => [c[1], c[0]]); road.distM = rt.distance; road.durS = rt.duration; road.at = Date.now(); road.fromLat = lat; road.fromLng = lng; road.toLat = t.lat; road.toLng = t.lng; road.failAt = 0;
+    } catch (e) { road.failAt = Date.now(); } finally { clearTimeout(to); road.pending = false; }
+  }
+  function etaFor(lat, lng, speed, t) {
+    const straight = distM(lat, lng, t.lat, t.lng);
+    if (roadFresh(t)) { const rem = Math.max(straight, road.distM - distM(road.fromLat, road.fromLng, lat, lng)); return { min: Math.max(0, Math.round((road.durS * rem / road.distM) / 60)), src: 'road', km: rem / 1000 }; }
+    const v = (speed && speed > 2) ? speed : 30 / 3.6; return { min: Math.max(0, Math.round((straight * 1.3) / v / 60)), src: 'straight-line', km: straight * 1.3 / 1000 };
+  }
+  function reportFix(fix) {
+    const cj = AmbulanceData.currentJob; if (!cj || cj.status !== 'en_route') return;
+    const t = legTarget(cj); if (t.lat == null || t.lng == null) return;
+    fetchRoad(fix.lat, fix.lng, t);
+    const e = etaFor(fix.lat, fix.lng, fix.speed, t);
+    cj.unitLat = fix.lat; cj.unitLng = fix.lng; cj.unitETA = e.min; cj.etaSrc = e.src; cj.etaKm = e.km;
+    GeamsAmbulanceSync.pushUpdate(AmbulanceData.crew.lcrId, cj.id, { unitLat: fix.lat, unitLng: fix.lng, unitETA: e.min, etaSource: e.src, etaTarget: t.kind, etaKm: Math.round(e.km * 10) / 10, unitAt: Date.now(), gpsAcc: fix.acc != null ? Math.round(fix.acc) : null });
+    if (cj.mutualAidRequestId) AmbulanceMutualAid.pushUnitUpdate(cj.mutualAidRequestId, { unitLat: fix.lat, unitLng: fix.lng, unitETA: e.min });
+    if (unitMarker) unitMarker.setLatLng([fix.lat, fix.lng]);
+    if (routeLine) routeLine.setLatLngs(roadFresh(t) ? [[fix.lat, fix.lng], ...road.pts, [t.lat, t.lng]] : [[fix.lat, fix.lng], [t.lat, t.lng]]);
+    if (currentScreen === 'job') updateStatBar();
+    if (distM(fix.lat, fix.lng, t.lat, t.lng) < 50 && cj._arrivalFor !== t.kind) { cj._arrivalFor = t.kind; showToast('info', 'Arriving', 'You are within 50 m of ' + t.name + ' — mark arrived', 5000); }
   }
   function startRoute(station, job) {
-    routeCoords = [[station.lat, station.lng], [job.lat, job.lng]]; // straight line only
+    routeCoords = [[station.lat, station.lng], [job.lat, job.lng]];
     routeStep = 0;
     if (routeTimer) { clearInterval(routeTimer); routeTimer = null; }
     stopGps();
     if (!navigator.geolocation) {
-      showToast('error', 'GPS unavailable', 'This device has no geolocation — your position cannot be shared with the Control Room', 7000);
+      showToast('error', 'GPS unavailable', 'This device has no geolocation — your position cannot be shared with the Control Room or HQ', 7000);
       return;
     }
     let warned = false;
     gpsWatch = navigator.geolocation.watchPosition((pos) => {
       const cj = AmbulanceData.currentJob;
       if (!cj || cj.status === 'complete') { stopGps(); return; }
-      if (cj.status !== 'en_route') return; // only report while en route
-      const lat = pos.coords.latitude, lng = pos.coords.longitude;
-      cj.unitLat = lat; cj.unitLng = lng;
-      const dM = distM(lat, lng, job.lat, job.lng);
-      const v = (pos.coords.speed && pos.coords.speed > 2) ? pos.coords.speed : 30/3.6;
-      cj.unitETA = Math.max(0, Math.round(dM / v / 60));
-      GeamsAmbulanceSync.pushUpdate(AmbulanceData.crew.lcrId, job.id, { unitLat: lat, unitLng: lng, unitETA: cj.unitETA });
-      if (job.mutualAidRequestId) {
-        AmbulanceMutualAid.pushUnitUpdate(job.mutualAidRequestId, { unitLat: lat, unitLng: lng, unitETA: cj.unitETA });
-      }
-      if (unitMarker) unitMarker.setLatLng([lat, lng]);
-      if (currentScreen === 'job') updateStatBar();
-      if (dM < 50 && !cj._arrivalToasted) {
-        cj._arrivalToasted = true;
-        showToast('info', 'Arriving', 'You are within 50 m of the scene — mark On Scene', 5000);
-      }
+      lastFix = { lat: pos.coords.latitude, lng: pos.coords.longitude, speed: pos.coords.speed, acc: pos.coords.accuracy };
+      reportFix(lastFix);
     }, (err) => {
       if (warned) return; warned = true;
-      showToast('warning', 'GPS', err && err.code === 1 ? 'Location permission is blocked — allow it so the Control Room can see your real position.' : 'No GPS fix yet — still trying.', 7000);
+      showToast('warning', 'GPS', err && err.code === 1 ? 'Location permission is blocked — allow it so the Control Room and HQ can see your real position.' : 'No GPS fix yet — still trying.', 7000);
     }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 });
+    hbTimer = setInterval(() => { if (lastFix) reportFix(lastFix); }, 10000);
+  }
+
+  function loadPatient() {          // transfer only: the patient is on board, head for the destination hospital
+    const job = AmbulanceData.currentJob; if (!job || !job.transfer || job.leg === 'to_destination') return;
+    job.leg = 'to_destination'; job.status = 'en_route'; job.unitETA = null; job.etaSrc = null; job._arrivalFor = null; road.at = 0; road.distM = null; road.failAt = 0;
+    GeamsAmbulanceSync.pushUpdate(AmbulanceData.crew.lcrId, job.id, { serviceStatus: 'en_route', leg: 'to_destination', pickedUpAt: Date.now(), unitETA: null, etaTarget: 'destination' });
+    showToast('success', 'Patient on board', 'Heading to ' + job.transfer.to.name, 4000);
+    if (lastFix) reportFix(lastFix);
+    renderJob();
   }
 
   function setStatus(status) {
@@ -1013,7 +1050,7 @@ const AmbulanceApp = (() => {
     if (!job) return;
     job.status = status;
     GeamsAmbulanceSync.pushUpdate(AmbulanceData.crew.lcrId, job.id, { serviceStatus: status });
-    const labels = { en_route:'En Route', on_scene:'On Scene', complete:'Call Complete' };
+    const labels = job.transfer ? { en_route: job.leg === 'to_destination' ? 'En route to ' + job.transfer.to.name : 'En route to ' + job.transfer.from.name, on_scene: job.leg === 'to_destination' ? 'At ' + job.transfer.to.name : 'At ' + job.transfer.from.name, complete: 'Patient delivered' } : { en_route:'En Route', on_scene:'On Scene', complete:'Call Complete' };
     showToast('success', labels[status] || status, job.id, 4000);
     if (status === 'complete') {
       if (routeTimer) { clearInterval(routeTimer); routeTimer = null; }
@@ -1180,15 +1217,21 @@ const AmbulanceApp = (() => {
     el.innerHTML = `
       <div id="incident-map"></div>
       <div class="stat-row" style="margin-top:14px">
-        <div class="stat-box"><div class="stat-val" id="stat-eta">${job.unitETA ?? '—'}</div><div class="stat-key">Min ETA</div></div>
+        <div class="stat-box"><div class="stat-val" id="stat-eta">${job.unitETA ?? '—'}</div><div class="stat-key">Min ETA${job.transfer ? ' · ' + (job.leg === 'to_destination' ? 'to destination' : 'to pickup') : ''}</div></div>
         <div class="stat-box"><div class="stat-val" style="color:var(--red)">${(job.priority||'').toUpperCase()}</div><div class="stat-key">Priority</div></div>
-        <div class="stat-box"><div class="stat-val" style="font-size:0.75rem;color:var(--cyan)" id="stat-status">${statusLabel(job.status)}</div><div class="stat-key">Status</div></div>
+        <div class="stat-box"><div class="stat-val" style="font-size:0.75rem;color:var(--cyan)" id="stat-status">${statusLabel(job.status, job)}</div><div class="stat-key">Status</div></div>
         <div class="stat-box"><div class="stat-val" style="font-size:0.7rem">${job.id}</div><div class="stat-key">Ref</div></div>
       </div>
       <div class="job-detail">
         ${job.isMutualAid ? `<div class="job-detail-row" style="color:var(--cyan);font-weight:700">🤝 Mutual Aid — responding for ${job.mutualAidOrigin}</div>` : ''}
         <div class="job-detail-row"><b>${job.type}</b></div>
+        ${job.transfer ? `<div class="job-detail-row" style="color:var(--cyan);font-weight:700">🏥 From ${job.transfer.from.name} → ${job.transfer.to.name}</div>
+        ${job.transfer.patient ? `<div class="job-detail-row">🛏 Patient: ${job.transfer.patient}</div>` : ''}
+        ${job.transfer.needs ? `<div class="job-detail-row">⚕️ Needs: ${job.transfer.needs}</div>` : ''}
+        ${job.transfer.contact ? `<div class="job-detail-row">📞 Pickup contact: ${job.transfer.contact}</div>` : ''}
+        <div class="job-detail-row">📍 Destination: ${job.transfer.to.name}${job.transfer.to.address ? ', ' + job.transfer.to.address : ''}</div>` : ''}
         <div class="job-detail-row">📍 ${job.location}</div>
+        <div class="job-detail-row" id="live-line" style="color:var(--text-muted);font-size:0.72rem">${liveLine(job)}</div>
         <div class="job-detail-row">🧭 GPS: ${job.lat?.toFixed(5)}, ${job.lng?.toFixed(5)}</div>
         ${job.civilianName ? `<div class="job-detail-row">👤 ${job.civilianName}${job.civilianPhone ? ' · ' + job.civilianPhone : ''}</div>` : ''}
         ${job.notes ? `<div class="job-detail-row">📝 ${job.notes}</div>` : ''}
@@ -1198,8 +1241,9 @@ const AmbulanceApp = (() => {
       <div class="action-bar">
         ${!job.isMutualAid ? `<button class="btn btn-cyan" onclick="AmbulanceApp.toggleAidPicker()">🤝 ${aidPickerOpen ? 'Hide' : 'Request Mutual Aid'}</button>` : ''}
         ${job.status === 'accepted' ? `<button class="btn btn-primary btn-full" onclick="AmbulanceApp.setStatus('en_route')">🚨 Depart — En Route</button>` : ''}
-        ${job.status === 'en_route' ? `<button class="btn btn-warning btn-full" onclick="AmbulanceApp.setStatus('on_scene')">📍 Mark On Scene</button>` : ''}
-        ${job.status === 'on_scene' ? `<button class="btn btn-success btn-full" onclick="AmbulanceApp.setStatus('complete')">✅ Complete Call</button>` : ''}
+        ${job.status === 'en_route' ? `<button class="btn btn-warning btn-full" onclick="AmbulanceApp.setStatus('on_scene')">${job.transfer ? '📍 Arrived at ' + (job.leg === 'to_destination' ? job.transfer.to.name : job.transfer.from.name) : '📍 Mark On Scene'}</button>` : ''}
+        ${job.status === 'on_scene' && job.transfer && job.leg !== 'to_destination' ? `<button class="btn btn-primary btn-full" onclick="AmbulanceApp.loadPatient()">🛏 Patient on board — depart to ${job.transfer.to.name}</button>` : ''}
+        ${job.status === 'on_scene' && (!job.transfer || job.leg === 'to_destination') ? `<button class="btn btn-success btn-full" onclick="AmbulanceApp.setStatus('complete')">${job.transfer ? '✅ Patient handed over — Complete' : '✅ Complete Call'}</button>` : ''}
       </div>`;
     setTimeout(initMap, 60);
   }
@@ -1229,13 +1273,20 @@ const AmbulanceApp = (() => {
       </div>`;
   }
 
-  function statusLabel(s) {
+  function statusLabel(s, job) {
+    if (job && job.transfer) return { accepted:'Accepted', en_route: job.leg === 'to_destination' ? 'To destination' : 'To pickup', on_scene: job.leg === 'to_destination' ? 'At destination' : 'At pickup', complete:'Delivered' }[s] || s;
     return { accepted:'Accepted', en_route:'En Route', on_scene:'On Scene', complete:'Complete' }[s] || s;
   }
 
+  function liveLine(job) {
+    if (job.status !== 'en_route') return job.status === 'accepted' ? 'Tap Depart to start sharing your live position and ETA.' : '';
+    if (!lastFix) return '⏳ Waiting for a GPS fix. Your position is not being shared yet.';
+    return '🛰 Live position shared every few seconds' + (job.etaSrc ? ' · ETA by ' + (job.etaSrc === 'road' ? 'road route' : 'straight line (road data unavailable)') : '') + (job.etaKm != null ? ' · about ' + job.etaKm.toFixed(1) + ' km to go' : '');
+  }
   function updateStatBar() {
-    const eta = document.getElementById('stat-eta');
-    if (eta && AmbulanceData.currentJob) eta.textContent = AmbulanceData.currentJob.unitETA ?? '—';
+    const eta = document.getElementById('stat-eta'), j = AmbulanceData.currentJob;
+    if (eta && j) eta.textContent = j.unitETA ?? '—';
+    const ll = document.getElementById('live-line'); if (ll && j) ll.textContent = liveLine(j);
   }
 
   let backupMarker = null;
@@ -1255,8 +1306,10 @@ const AmbulanceApp = (() => {
     unitMarker = L.marker([job.unitLat || job.lat, job.unitLng || job.lng], { icon: L.divIcon({
       html:'<div style="font-size:22px">🚑</div>', className:'', iconSize:[26,26], iconAnchor:[13,13] }) })
       .addTo(map).bindPopup(AmbulanceData.crew.name);
-    routeLine = L.polyline(routeCoords.length ? routeCoords : [[job.lat,job.lng]], { color:'#ef4444', weight:3, dashArray:'8 6' }).addTo(map);
+    const tg = legTarget(job);
+    routeLine = L.polyline([[job.unitLat||job.lat, job.unitLng||job.lng],[tg.lat, tg.lng]], { color:'#ef4444', weight:3, dashArray:'8 6' }).addTo(map);
     const bounds = [[job.lat,job.lng],[job.unitLat||job.lat, job.unitLng||job.lng]];
+    if (job.transfer) { L.marker([job.transfer.to.lat, job.transfer.to.lng], { icon: L.divIcon({ html:'<div style="font-size:22px">🏥</div>', className:'', iconSize:[26,26], iconAnchor:[13,13] }) }).addTo(map).bindPopup('Destination: ' + job.transfer.to.name); bounds.push([job.transfer.to.lat, job.transfer.to.lng]); }
 
     // Live backup-unit marker: shown on the origin's map once another
     // jurisdiction accepts, and on the responder's own map (their own unit,
@@ -1284,7 +1337,7 @@ const AmbulanceApp = (() => {
 
   return {
     showSignup, showLogin, doLogin, doSignup, endShift, navigate,
-    onNewCall, acceptCall, setStatus, showToast,
+    onNewCall, acceptCall, setStatus, loadPatient, showToast,
     toggleAidPicker, requestMutualAid, cancelMutualAidRequest,
     acceptMutualAid, declineMutualAid,
     onIncomingMutualAid, onMutualAidStatusChanged, onMutualAidRecordUpdated, refreshMutualAidTab,

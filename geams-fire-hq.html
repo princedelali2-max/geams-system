@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1220">
+<title>GEAMS · Fire HQ</title>
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+<script src="vendor/leaflet/leaflet.js"></script>
+<script src="vendor/geams-map.js"></script>
+<script src="config.js"></script>
+<style>
+:root{--bg:#0b1220;--panel:#111a2e;--line:#22304d;--tx:#e8edf7;--mut:#93a1bd;--ac:#dc2626;--ok:#22c55e;--warn:#f59e0b;--bad:#ef4444;--r:12px}
+*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+body{min-height:100vh;padding-bottom:40px}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer;border:1px solid var(--line);background:#16223c;border-radius:8px;padding:8px 12px;min-height:38px}
+button.p{background:var(--ac);border-color:var(--ac);color:#fff;font-weight:600}button.d{border-color:var(--bad);color:#fecaca}button:disabled{opacity:.5;cursor:default}
+input,select,textarea{width:100%;background:#0d1628;border:1px solid var(--line);border-radius:8px;padding:9px 10px;min-height:40px}
+label{display:block;font-size:.8rem;color:var(--mut);margin:10px 0 4px}
+.wrap{max-width:1150px;margin:0 auto;padding:0 14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:14px;margin:12px 0}
+h1{font-size:1.15rem;margin:0}h2{font-size:1rem;margin:0 0 8px}h3{font-size:.9rem;margin:12px 0 6px;color:var(--mut);text-transform:uppercase;letter-spacing:.04em}
+.top{position:sticky;top:0;z-index:50;background:rgba(11,18,32,.96);border-bottom:1px solid var(--line);backdrop-filter:blur(6px)}
+.top .wrap{display:flex;align-items:center;gap:10px;padding-top:10px;padding-bottom:10px;flex-wrap:wrap}
+.top .sp{flex:1}.sub{color:var(--mut);font-size:.8rem}
+.tabs{display:flex;gap:6px;overflow-x:auto;padding:0 14px 8px;max-width:1150px;margin:0 auto;-webkit-overflow-scrolling:touch}
+.tabs button{white-space:nowrap;background:transparent}.tabs button.on{background:var(--ac);border-color:var(--ac);color:#fff}
+.grid{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+.stat{background:#0d1628;border:1px solid var(--line);border-radius:10px;padding:10px}.stat b{display:block;font-size:1.6rem;line-height:1.1}.stat span{color:var(--mut);font-size:.8rem}
+.tbl{width:100%;border-collapse:collapse;font-size:.88rem}.tbl th{text-align:left;color:var(--mut);font-weight:600;padding:6px 8px;border-bottom:1px solid var(--line)}.tbl td{padding:7px 8px;border-bottom:1px solid #1a2744;vertical-align:top}
+.scroll{overflow-x:auto}
+.pill{display:inline-block;border-radius:99px;padding:1px 9px;font-size:.75rem;border:1px solid var(--line)}
+.pill.new{background:#7f1d1d;border-color:#ef4444}.pill.accepted,.pill.en_route{background:#78350f;border-color:#f59e0b}.pill.on_scene{background:#14532d;border-color:#22c55e}.pill.complete{background:#1f2937}.pill.reassigned{background:#312e81;border-color:#6366f1}
+.pill.critical{background:#7f1d1d}.pill.high{background:#78350f}
+.warn{border-color:var(--bad);background:#2a1216}
+.note{color:var(--mut);font-size:.8rem}.err{color:#fca5a5;min-height:1.3em;font-size:.85rem}.okmsg{color:#86efac}
+#map{height:320px;border-radius:10px;border:1px solid var(--line)}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.row>*{flex:0 0 auto}.row .g{flex:1 1 180px}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:200;display:flex;align-items:center;justify-content:center;padding:14px}
+.modal>div{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px;width:min(560px,100%);max-height:90vh;overflow:auto}
+.bar{height:10px;background:var(--ac);border-radius:3px;min-width:2px}
+.login{max-width:420px;margin:8vh auto 0}
+.hide{display:none!important}
+@media(max-width:640px){.tbl th:nth-child(n+5),.tbl td:nth-child(n+5){display:none}.tbl.keep th,.tbl.keep td{display:table-cell!important}}
+@media print{.top,.tabs,button{display:none!important}body{background:#fff;color:#000}.card{border:1px solid #999;background:#fff}}
+</style>
+</head>
+<body>
+<div id="login" class="wrap login">
+  <div class="card">
+    <h1>🚒 Fire HQ</h1>
+    <p class="note">National command screen for the fire service. Control rooms keep receiving every alert and forward it to the nearest fire station; this screen shows that forwarded copy live. Accounts are created by the national HQ owner.</p>
+    <div id="l-in">
+      <label for="u">Username</label><input id="u" autocomplete="username" autocapitalize="off" spellcheck="false">
+      <label for="pw">Password</label><input id="pw" type="password" autocomplete="current-password">
+      <div class="err" id="l-err" role="alert"></div>
+      <button class="p" id="l-go" style="width:100%">Sign in</button>
+    </div>
+    <div id="l-chg" class="hide">
+      <p><b>Choose your own password.</b> The one you were given is temporary and works only once.</p>
+      <label for="np1">New password (at least 10 characters)</label><input id="np1" type="password" autocomplete="new-password">
+      <label for="np2">Type it again</label><input id="np2" type="password" autocomplete="new-password">
+      <div class="err" id="c-err" role="alert"></div>
+      <button class="p" id="c-go" style="width:100%">Save and continue</button>
+    </div>
+  </div>
+</div>
+
+<div id="app" class="hide">
+  <div class="top">
+    <div class="wrap">
+      <h1>🚒 Fire HQ</h1>
+      <span class="sub" id="who"></span><span class="sp"></span>
+      <span class="sub" id="upd" aria-live="polite"></span>
+      <button id="out">Sign out</button>
+    </div>
+    <div class="tabs" role="tablist">
+      <button data-t="live" class="on">Live</button><button data-t="cmd">Command</button><button data-t="msg" id="tabmsg">Messages</button><button data-t="people">People</button><button data-t="rep">Reports</button><button data-t="bk">Backup &amp; log</button>
+    </div>
+  </div>
+  <div class="wrap">
+    <div id="banner" class="card warn hide" role="alert"></div>
+
+    <section id="t-live">
+      <div class="card"><div class="grid" id="stats"></div><p class="note" id="lnote"></p></div>
+      <div class="card warn hide" id="escbox"><h2>⚠ Not taken yet</h2><div class="scroll"><table class="tbl keep" id="esc"></table></div><p class="note">A warning only tells you; someone must act (phone the station, or move the alert on the Command tab).</p></div>
+      <div class="card" id="movebox"><h2>🛰 On the move now</h2><div class="scroll"><table class="tbl keep" id="mv"></table></div><p class="note" id="mvnote"></p></div>
+      <div class="card"><h2>Map</h2><div id="map"></div><p class="note">Station dot: red = alerts waiting, amber = jobs under way, green = quiet, grey = control room screen not open. Pins are alert locations.</p></div>
+      <div class="card"><h2>Stations (control room areas)</h2><div class="scroll"><table class="tbl keep" id="stn"></table></div></div>
+      <div class="card"><h2>Alerts forwarded to fire crews</h2><div class="row"><select id="af" style="max-width:220px"><option value="">All</option><option value="new">Waiting</option><option value="live">Under way</option><option value="complete">Completed (last 6 h)</option></select></div><div class="scroll"><table class="tbl" id="inc"></table></div></div>
+    </section>
+
+    <section id="t-cmd" class="hide">
+
+      <div class="card"><h2>Create an alert for your crews</h2>
+        <p class="note">Sends a new alert straight to one station's fire crews, without going through a control room. Use it for something your HQ learns of directly. The control room does not get it on its own screen.</p>
+        <div class="row"><div class="g"><label for="ns">Station</label><select id="ns"></select></div><div class="g"><label for="nt">Kind of alert</label><select id="nt"><option>Structure fire</option><option>Bush fire</option><option>Vehicle fire</option><option>Rescue</option><option>Other</option></select></div><div class="g"><label for="np">Priority</label><select id="np"><option value="critical">Critical</option><option value="high" selected>High</option><option value="medium">Medium</option><option value="low">Low</option></select></div></div>
+        <label for="nl">Where (street, landmark, town)</label><input id="nl" maxlength="160">
+        <div class="row"><button id="ngps" type="button">Use this device's position</button><span class="note" id="ngpst"></span></div>
+        <label for="nn">What the crew should know (optional)</label><textarea id="nn" rows="2" maxlength="400"></textarea>
+        <div class="err" id="n-err" role="alert"></div><button class="p" id="n-go">Send alert to crews</button></div>
+      <div class="card"><h2>Message your crews</h2>
+        <label for="bm">Message (up to 300 characters)</label><textarea id="bm" rows="3" maxlength="300"></textarea>
+        <div class="row"><div class="g"><label for="bs">To</label><select id="bs"></select></div><div class="g"><label for="bp">Priority</label><select id="bp"><option value="info">Information</option><option value="urgent">Urgent</option></select></div></div>
+        <div class="err" id="b-err" role="alert"></div><button class="p" id="b-go">Send to crews</button>
+        <p class="note">Crews see this banner while their fire app is open and connected. It is not an SMS and does not ring a phone that is closed.</p>
+        <h3>Recently sent</h3><div id="bh"></div></div>
+      <div class="card"><h2>Alerts waiting for a crew</h2><p class="note">Move one to another station if its own crews are not answering. A crew that has already taken an alert cannot be moved.</p><div class="scroll"><table class="tbl keep" id="wait"></table></div></div>
+    </section>
+
+    <section id="t-msg" class="hide">
+      <div class="card"><h2>Messages with your crews</h2><p class="note">Administrative matters only (shifts, kit, leave, accounts). Crews see these while their app is open and connected; this screen checks about every 5 seconds. For an emergency, use alerts or the phone.</p>
+        <div class="row"><div class="g"><label for="mw">Start or open a conversation with</label><select id="mw"></select></div><button id="mo" style="margin-top:22px">Open</button></div></div>
+      <div class="grid" style="grid-template-columns:minmax(220px,1fr) minmax(260px,2fr)">
+        <div class="card" style="margin:0"><h3 style="margin-top:0">Conversations</h3><div id="mth"></div></div>
+        <div class="card" style="margin:0"><h3 style="margin-top:0" id="mtt">Choose a conversation</h3><div id="mbox" style="max-height:52vh;overflow:auto"></div>
+          <div class="row hide" id="mform" style="margin-top:8px;flex-wrap:nowrap"><input id="mt" class="g" maxlength="500" placeholder="Write a message" aria-label="Message"><button class="p" id="msd">Send</button></div><div class="err" id="m-err" role="alert"></div></div></div>
+    </section>
+
+    <section id="t-people" class="hide">
+      <div class="card hide" id="pendbox"><h2>Sign-ups waiting for approval</h2><div class="scroll"><table class="tbl keep" id="pend"></table></div></div>
+      <div class="card"><h2>Add people</h2>
+        <div class="row"><div class="g"><label for="as">Control room area</label><select id="as"></select></div></div>
+        <label for="ac">Paste a list (one person per line: name, phone, rank, vehicle)</label><textarea id="ac" rows="5" placeholder="Kofi Mensah, 0244000001, Fireman, Tender 1"></textarea>
+        <div class="err" id="a-err" role="alert"></div>
+        <div class="row"><button id="a-pre">Preview</button><button class="p hide" id="a-go">Create accounts</button></div><div id="a-out"></div>
+        <p class="note">Each person gets a one-time temporary password, shown once on this screen. Print it and hand it over; they choose their own at first sign-in.</p></div>
+      <div class="card"><h2>Your people</h2><div class="row"><input id="ps" class="g" placeholder="Search name, phone or station" aria-label="Search people"></div><div class="scroll"><table class="tbl keep" id="ppl"></table></div>
+        <p class="note">Crew counts are accounts, not who is on shift. “On a job” appears only while a forwarded alert is assigned to that person.</p></div>
+    </section>
+
+    <section id="t-rep" class="hide">
+      <div class="card"><div class="row"><label for="rd" style="margin:0">Period</label><select id="rd" style="max-width:160px"><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option><option value="365">1 year</option></select><button id="rcsv">Download CSV</button><button id="rprint">Print</button></div></div>
+      <div id="rep"></div>
+    </section>
+
+    <section id="t-bk" class="hide">
+      <div class="card"><h2>Backup of your data</h2><p class="note">A file with your crew list and every alert forwarded to your crews, encrypted with a passphrase only you know. GEAMS cannot recover the passphrase: if it is lost, the file cannot be opened. Keep the file somewhere safe off this device. This does not include police records.</p>
+        <label for="bpw">Passphrase (at least 10 characters)</label><input id="bpw" type="password" autocomplete="new-password">
+        <div class="err" id="bk-err" role="alert"></div><button class="p" id="bk-go">Download encrypted backup</button>
+        <p class="note">To open it: <code>node tools/open-agency-backup.js file.enc</code> (in the GEAMS folder) and type the passphrase.</p></div>
+      <div class="card"><h2>What happened (your actions and your crews)</h2><div class="scroll"><table class="tbl keep" id="log"></table></div><p class="note">Names and phone numbers of the public are never written to this log.</p></div>
+    </section>
+  </div>
+</div>
+
+<script>
+(function(){'use strict';
+const KIND='fire',LABEL='Fire',TK='geams_agency_'+KIND+'_token';
+const $=id=>document.getElementById(id);
+const esc=t=>String(t==null?'':t).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let token='',O=null,tab='live',timer=null,map=null,layer=null,crewData=null,repData=null,tried=false;
+try{token=sessionStorage.getItem(TK)||''}catch(e){}
+function save(t){token=t;try{t?sessionStorage.setItem(TK,t):sessionStorage.removeItem(TK)}catch(e){}}
+async function api(path,opt){opt=opt||{};const h={'Content-Type':'application/json'};if(token)h.Authorization='Bearer '+token;
+  let r;try{r=await fetch(path,{method:opt.method||'GET',headers:h,body:opt.body?JSON.stringify(opt.body):undefined,credentials:'same-origin'})}catch(e){return{s:0,j:{error:'No connection to the GEAMS server. This screen will keep trying.'}}}
+  let j={};try{j=await r.json()}catch(e){}
+  if(r.status===401&&token&&!opt.noKick){save('');showLogin('Your session ended. Please sign in again.')}
+  return{s:r.status,j,raw:r}}
+const when=t=>t?new Date(t).toLocaleString([], {day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}):'';
+const mins=s=>s==null?'':s<90?Math.round(s)+' s':s<5400?Math.round(s/60)+' min':(s/3600).toFixed(1)+' h';
+const pill=(s)=>'<span class="pill '+esc(s)+'">'+esc(({new:'Waiting',accepted:'Accepted',en_route:'En route',on_scene:'On scene',complete:'Completed',reassigned:'Moved'})[s]||s)+'</span>';
+
+function showLogin(msg){$('app').classList.add('hide');$('login').classList.remove('hide');$('l-in').classList.remove('hide');$('l-chg').classList.add('hide');$('l-err').textContent=msg||'';if(timer){clearInterval(timer);timer=null}}
+$('l-go').onclick=async()=>{$('l-err').textContent='';const b=$('l-go');b.disabled=true;
+  const r=await api('/api/agency/login',{method:'POST',noKick:true,body:{kind:KIND,username:$('u').value,password:$('pw').value}});b.disabled=false;
+  if(r.s!==200){$('l-err').textContent=r.j.error||'Could not sign in';return}
+  save(r.j.token);if(r.j.mustChange){$('l-in').classList.add('hide');$('l-chg').classList.remove('hide');window._cur=$('pw').value;return}$('pw').value='';start()};
+$('pw').onkeydown=e=>{if(e.key==='Enter')$('l-go').click()};
+$('c-go').onclick=async()=>{$('c-err').textContent='';const a=$('np1').value,b=$('np2').value;if(a!==b){$('c-err').textContent='The two passwords are not the same';return}
+  const r=await api('/api/agency/password',{method:'POST',body:{current:window._cur,password:a}});if(r.s!==200){$('c-err').textContent=r.j.error||'Could not change it';return}
+  save(r.j.token);window._cur='';$('pw').value='';$('np1').value='';$('np2').value='';start()};
+$('out').onclick=async()=>{await api('/api/agency/logout',{method:'POST',noKick:true});save('');showLogin('')};
+
+document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{tab=b.dataset.t;document.querySelectorAll('.tabs button').forEach(x=>x.classList.toggle('on',x===b));
+  for(const t of['live','cmd','msg','people','rep','bk'])$('t-'+t).classList.toggle('hide',t!==tab);
+  if(tab==='live'&&map)setTimeout(()=>map.invalidateSize(),50);if(tab==='people')loadPeople();if(tab==='rep')loadRep();if(tab==='bk')loadLog();if(tab==='cmd')renderCmd();if(tab==='msg')loadMsgs()});
+
+async function start(){$('login').classList.add('hide');$('app').classList.remove('hide');await refresh();if(timer)clearInterval(timer);timer=setInterval(()=>{if(!document.hidden)refresh()},5000)}
+async function refresh(){const r=await api('/api/agency/overview');
+  if(r.s!==200){$('upd').textContent=r.s===0?'Offline: retrying…':(r.j.error||'Error');if(r.s===0||r.s>=500){$('banner').classList.remove('hide');$('banner').textContent=r.s===0?'No connection to the GEAMS server. What you see below is the last information received, and it may be out of date.':(r.j.error||'Server error')}return}
+  $('banner').classList.add('hide');O=r.j;$('who').textContent=(O.name||O.user)+' · '+LABEL+' HQ';$('upd').textContent='Updated '+new Date(O.now).toLocaleTimeString()+' · refreshes every '+O.refreshesEverySecs+' s';
+  renderLive();if(tab==='cmd')renderCmd();$('tabmsg').textContent='Messages'+(O.unreadChat?' ('+O.unreadChat+')':'');if(tab==='msg')loadMsgs(true)}
+
+function renderLive(){const t=O.totals;
+  $('stats').innerHTML=[['Stations online',t.stationsOnline+' / '+t.stations],['Waiting for a crew',t.waiting],['Under way',t.active],['Crew accounts',t.crewAccounts]].map(x=>'<div class="stat"><b>'+esc(x[1])+'</b><span>'+esc(x[0])+'</span></div>').join('');
+  $('lnote').textContent=O.note;
+  $('escbox').classList.toggle('hide',!O.escalations.length);
+  $('esc').innerHTML='<tr><th>Station</th><th>Alert</th><th>Waiting</th><th>Nearest other stations</th><th></th></tr>'+O.escalations.map(e=>'<tr><td>'+esc(e.station)+'</td><td>'+esc(e.type)+' · '+esc(e.priority)+'<br><span class="note">'+esc(e.id)+'</span></td><td>'+esc(mins(e.waitedSecs))+'</td><td>'+(e.neighbours||[]).map(n=>esc(n.name)+' ('+esc(n.km)+' km'+(n.phone?', '+esc(n.phone):'')+')').join('<br>')+'</td><td>'+(e.ackBy?'<span class="note">Seen by '+esc(e.ackBy)+'</span>':'<button data-ack="'+esc(e.key)+'">I am on it</button>')+' <button data-mv="'+esc(e.sid)+'|'+esc(e.id)+'">Move</button></td></tr>').join('');
+  $('stn').innerHTML='<tr><th>Station</th><th>Region</th><th>Control room</th><th>Waiting</th><th>Under way</th><th>Done 24 h</th><th>Crews</th></tr>'+O.stations.map(s=>'<tr><td>'+esc(s.name)+'</td><td>'+esc(s.region)+'</td><td>'+(s.lcrOnline?'🟢 screen open':'⚪ not open')+'</td><td>'+(s.waiting?'<b style="color:#fca5a5">'+s.waiting+'</b>':0)+'</td><td>'+s.active+'</td><td>'+s.doneToday+'</td><td>'+s.crews+(s.crewsDisabled?' ('+s.crewsDisabled+' off)':'')+'</td></tr>').join('');
+  const f=$('af').value,rows=O.incidents.filter(i=>!f||(f==='new'?i.status==='new':f==='complete'?(i.status==='complete'||i.status==='reassigned'):!['new','complete','reassigned'].includes(i.status)));
+  $('inc').innerHTML='<tr><th>Alert</th><th>Station</th><th>Status</th><th>Crew</th><th>Where</th><th>Sent</th></tr>'+(rows.length?rows.map(i=>'<tr><td>'+esc(i.type)+' <span class="pill '+esc(i.priority)+'">'+esc(i.priority)+'</span><br><span class="note">'+esc(i.id)+'</span></td><td>'+esc(i.station)+(i.reassignedFrom?'<br><span class="note">moved here</span>':'')+'</td><td>'+pill(i.status)+(i.status==='new'?'<br><span class="note">'+esc(mins(i.waitedSecs))+'</span>':'')+'</td><td>'+esc(i.unit||'')+(i.status==='en_route'&&i.eta!=null?'<br><span class="note">ETA '+esc(i.eta)+' min · '+esc(ago(i.posAgeSecs))+'</span>':'')+(i.transfer?'<br><span class="note">'+esc(i.transfer.from.name)+' → '+esc(i.transfer.to.name)+'</span>':'')+'</td><td>'+esc(i.location)+'</td><td>'+esc(when(i.forwardedAt))+'</td></tr>').join(''):'<tr><td colspan="6" class="note">Nothing here right now.</td></tr>');
+  renderMove();drawMap()}
+function ago(sec){return sec==null?'no position yet':sec<5?'just now':sec<90?sec+' s ago':Math.round(sec/60)+' min ago'}
+function renderMove(){const l=O.incidents.filter(i=>i.status==='en_route'),stale=l.filter(i=>i.positionStale);
+  $('movebox').classList.toggle('hide',!l.length);
+  $('mv').innerHTML='<tr><th>Alert</th><th>Crew</th><th>Heading to</th><th>ETA</th><th>Position</th></tr>'+l.map(i=>{const t=i.transfer;const to=i.etaTarget==='destination'&&t?t.to.name:t&&i.leg!=='to_destination'?t.from.name:(i.location||'the scene');
+    return '<tr><td>'+esc(i.type)+(t?'<br><span class="note">'+esc(t.from.name)+' → '+esc(t.to.name)+'</span>':'')+'<br><span class="note">'+esc(i.id)+'</span></td><td>'+esc(i.unit||'')+'<br><span class="note">'+esc(i.station)+'</span></td><td>'+esc(to)+(i.leg==='to_destination'?'<br><span class="pill on_scene">patient on board</span>':'')+'</td><td>'+(i.eta!=null?'<b>'+esc(i.eta)+' min</b>':'–')+(i.etaKm!=null?'<br><span class="note">'+esc(i.etaKm)+' km · '+(i.etaSource==='road'?'road route':i.etaSource?'straight line':'')+'</span>':'')+'</td><td>'+(i.positionStale?'<b style="color:#fca5a5">⚠ '+esc(ago(i.posAgeSecs))+'</b>':esc(ago(i.posAgeSecs)))+'</td></tr>'}).join('');
+  $('mvnote').textContent=stale.length?'⚠ '+stale.length+' crew '+(stale.length>1?'positions have':'position has')+' not updated for over a minute: the phone may have lost GPS or signal, or the app was closed. Phone the crew.':'Positions and ETAs are the crews\' real GPS readings, checked here every few seconds. ETA by road route when the routing service answers, otherwise a straight-line estimate (marked).'}
+$('af').onchange=()=>O&&renderLive();
+function drawMap(){if(typeof L==='undefined'||!$('map'))return;
+  if(!map){map=L.map('map',{scrollWheelZoom:false}).setView([7.9,-1.0],6);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18,attribution:'&copy; OpenStreetMap contributors'}).addTo(map);layer=L.layerGroup().addTo(map)}
+  layer.clearLayers();const pts=[];
+  O.stations.forEach(s=>{if(s.lat==null)return;const c=!s.lcrOnline?'#9ca3af':s.waiting?'#ef4444':s.active?'#f59e0b':'#22c55e';pts.push([s.lat,s.lng]);L.circleMarker([s.lat,s.lng],{radius:8,color:'#fff',weight:2,fillColor:c,fillOpacity:1}).bindPopup('<b>'+esc(s.name)+'</b><br>Waiting '+s.waiting+' · Under way '+s.active).addTo(layer)});
+  O.incidents.filter(i=>i.lat!=null&&i.status!=='complete'&&i.status!=='reassigned').forEach(i=>{pts.push([i.lat,i.lng]);L.marker([i.lat,i.lng]).bindPopup(esc(i.type)+' · '+esc(i.status)+'<br>'+esc(i.location)).addTo(layer);
+    if(i.transfer&&i.transfer.to&&typeof i.transfer.to.lat==='number'){L.circleMarker([i.transfer.to.lat,i.transfer.to.lng],{radius:7,color:'#fff',weight:2,fillColor:'#6366f1',fillOpacity:1}).bindPopup('Destination: '+esc(i.transfer.to.name)).addTo(layer)}
+    if(i.status==='en_route'&&i.unitLat!=null){const tg=(i.etaTarget==='destination'&&i.transfer)?i.transfer.to:{lat:i.lat,lng:i.lng};L.polyline([[i.unitLat,i.unitLng],[tg.lat,tg.lng]],{color:'#f59e0b',weight:2,dashArray:'6 6'}).addTo(layer);L.circleMarker([i.unitLat,i.unitLng],{radius:6,color:'#000',weight:1,fillColor:i.positionStale?'#9ca3af':'#f59e0b',fillOpacity:1}).bindPopup('🚑 '+esc(i.unit||'')+' · ETA '+esc(i.eta==null?'–':i.eta+' min')+'<br>'+esc(ago(i.posAgeSecs))).addTo(layer)}});
+  if(pts.length&&!tried){tried=true;try{map.fitBounds(pts,{padding:[30,30],maxZoom:12})}catch(e){}}}
+
+function stationOptions(sel,skip){return O.stations.filter(s=>s.sid!==skip).map(s=>'<option value="'+esc(s.sid)+'">'+esc(s.name)+(s.region?' · '+esc(s.region):'')+'</option>').join('')}
+function renderCmd(){if(!O)return;if($('ts')){const v=$('ts').value;$('ts').innerHTML=stationOptions();if(v)$('ts').value=v}const nsv=$('ns').value;$('ns').innerHTML=stationOptions();if(nsv)$('ns').value=nsv;const cur=$('bs').value;$('bs').innerHTML='<option value="">All stations</option>'+stationOptions();$('bs').value=cur;
+  $('bh').innerHTML=O.broadcasts.length?O.broadcasts.map(b=>'<div style="padding:6px 0;border-bottom:1px solid var(--line)"><b>'+(b.priority==='urgent'?'🔴 Urgent':'ℹ️')+'</b> '+esc(b.message)+'<br><span class="note">'+esc(when(b.at))+' · '+esc(b.by)+' · '+esc(b.sidName||'all stations')+'</span></div>').join(''):'<p class="note">Nothing sent yet.</p>';
+  const w=O.incidents.filter(i=>i.status==='new');
+  $('wait').innerHTML='<tr><th>Alert</th><th>Station</th><th>Waiting</th><th></th></tr>'+(w.length?w.map(i=>'<tr><td>'+esc(i.type)+' · '+esc(i.priority)+'<br><span class="note">'+esc(i.id)+' · '+esc(i.location)+'</span></td><td>'+esc(i.station)+'</td><td>'+esc(mins(i.waitedSecs))+'</td><td><button data-mv="'+esc(i.sid)+'|'+esc(i.id)+'">Move to another station</button></td></tr>').join(''):'<tr><td colspan="4" class="note">No alert is waiting.</td></tr>')}
+$('b-go').onclick=async()=>{$('b-err').textContent='';const r=await api('/api/agency/broadcast',{method:'POST',body:{message:$('bm').value,priority:$('bp').value,sid:$('bs').value}});
+  if(r.s!==200){$('b-err').textContent=r.j.error||'Not sent';return}$('bm').value='';$('b-err').innerHTML='<span class="okmsg">Sent.</span>';refresh()};
+
+document.addEventListener('click',async e=>{const t=e.target.closest('button');if(!t)return;
+  if(t.dataset.ack){const note=prompt('Optional note (for example who you phoned):','')||'';const r=await api('/api/agency/escalation/ack',{method:'POST',body:{key:t.dataset.ack,note}});if(r.s!==200)alert(r.j.error||'Failed');refresh()}
+  if(t.dataset.mv){const [sid,id]=t.dataset.mv.split('|');moveDialog(sid,id)}
+  if(t.dataset.pa){const[ap,b]=t.dataset.pa.split('|');const r=await api('/api/lcr/approve',{method:'POST',body:{kind:KIND,badge:b,approve:ap==='1'}});if(r.s!==200)alert(r.j.error||'Failed');loadPeople()}
+  if(t.dataset.cu){const[act,b]=t.dataset.cu.split('|');crewAct(act,b)}});
+function modal(html){const m=document.createElement('div');m.className='modal';m.setAttribute('role','dialog');m.setAttribute('aria-modal','true');m.innerHTML='<div>'+html+'</div>';document.body.appendChild(m);m.addEventListener('click',e=>{if(e.target===m)m.remove()});return m}
+function moveDialog(sid,id){const i=O.incidents.find(x=>x.sid===sid&&x.id===id),e=O.escalations.find(x=>x.sid===sid&&x.id===id);
+  const m=modal('<h2>Move this alert to another station</h2><p>'+esc(i?i.type+' · '+i.location:id)+'<br><span class="note">Now at '+esc(i?i.station:sid)+'</span></p>'+((e&&e.neighbours&&e.neighbours.length)?'<p class="note">Nearest other stations: '+e.neighbours.map(n=>esc(n.name)+' ('+esc(n.km)+' km)').join(', ')+'</p>':'')+'<label for="mvt">Move to</label><select id="mvt">'+stationOptions(null,sid)+'</select><div class="err" id="mv-err" role="alert"></div><div class="row"><button class="p" id="mvg">Move it</button><button id="mvx">Cancel</button></div><p class="note">The new station\'s crews see it as a new alert at once. The first control room is shown that it was moved and sees progress.</p>');
+  m.querySelector('#mvx').onclick=()=>m.remove();m.querySelector('#mvg').onclick=async()=>{const r=await api('/api/agency/reassign',{method:'POST',body:{sid,id,toSid:m.querySelector('#mvt').value}});if(r.s!==200){m.querySelector('#mv-err').textContent=r.j.error||'Failed';return}m.remove();refresh()}}
+
+
+
+
+let gps=null;$('ngps').onclick=()=>{if(!navigator.geolocation){$('ngpst').textContent='This device cannot give its position';return}$('ngpst').textContent='Finding…';navigator.geolocation.getCurrentPosition(p=>{gps={lat:p.coords.latitude,lng:p.coords.longitude};$('ngpst').textContent='Position added (accuracy about '+Math.round(p.coords.accuracy)+' m)'},e=>{gps=null;$('ngpst').textContent='Could not get the position: '+(e.message||'denied')},{enableHighAccuracy:true,timeout:15000})};
+$('n-go').onclick=async()=>{$('n-err').textContent='';const b=$('n-go');b.disabled=true;const r=await api('/api/agency/incident/create',{method:'POST',body:{sid:$('ns').value,type:$('nt').value,priority:$('np').value,location:$('nl').value,notes:$('nn').value,lat:gps&&gps.lat,lng:gps&&gps.lng}});b.disabled=false;
+  if(r.s!==200){$('n-err').textContent=r.j.error||'Not sent';return}$('n-err').innerHTML='<span class="okmsg">Sent to '+esc(r.j.station)+'. Reference '+esc(r.j.id)+'.</span>';$('nl').value='';$('nn').value='';gps=null;$('ngpst').textContent='';refresh()};
+
+let thread=null,tname='';
+async function loadMsgs(quiet){const r=await api('/api/agency/chat');if(r.s!==200)return;
+  $('mth').innerHTML=r.j.threads.length?r.j.threads.map(t=>'<div style="padding:8px 0;border-bottom:1px solid var(--line);cursor:pointer" data-th="'+esc(t.badge)+'" tabindex="0" role="button"><b>'+esc(t.name)+'</b>'+(t.unread?' <span class="pill new">'+t.unread+' new</span>':'')+'<br><span class="note">'+esc(t.station)+' · '+esc(t.last?(t.last.from==='hq'?'You: ':'')+t.last.text:'')+'</span></div>').join(''):'<p class="note">No conversations yet.</p>';
+  if(!$('mw').options.length||!quiet){const c=await api('/api/agency/crew');if(c.s===200)$('mw').innerHTML=c.j.crews.map(x=>'<option value="'+esc(x.badge)+'">'+esc(x.name)+' · '+esc(x.station)+'</option>').join('')}
+  if(thread)openThread(thread,tname,true)}
+async function openThread(badge,name,keep){thread=badge;tname=name||tname;const r=await api('/api/agency/chat?badge='+encodeURIComponent(badge)+'&read=1');if(r.s!==200)return;$('mtt').textContent=tname;$('mform').classList.remove('hide');
+  const box=$('mbox'),atEnd=box.scrollTop+box.clientHeight>=box.scrollHeight-30;
+  box.innerHTML=r.j.items.length?r.j.items.map(m=>'<div style="margin:6px 0;text-align:'+(m.from==='hq'?'right':'left')+'"><span style="display:inline-block;max-width:85%;text-align:left;padding:6px 10px;border-radius:10px;background:'+(m.from==='hq'?'var(--ac)':'#16223c')+'">'+esc(m.text)+'</span><br><span class="note">'+esc(m.by)+' · '+esc(when(m.at))+'</span></div>').join(''):'<p class="note">No messages yet. Write the first one below.</p>';
+  if(!keep||atEnd)box.scrollTop=box.scrollHeight}
+document.addEventListener('click',e=>{const t=e.target.closest('[data-th]');if(t){const n=t.querySelector('b');openThread(t.dataset.th,n&&n.textContent)}});
+document.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.dataset&&e.target.dataset.th)e.target.click();if(e.key==='Enter'&&e.target.id==='mt')$('msd').click()});
+$('mo').onclick=()=>{const o=$('mw').selectedOptions[0];if(o)openThread(o.value,o.textContent.split(' · ')[0])};
+$('msd').onclick=async()=>{$('m-err').textContent='';const v=$('mt').value.trim();if(!v||!thread)return;const r=await api('/api/agency/chat',{method:'POST',body:{badge:thread,message:v}});if(r.s!==200){$('m-err').textContent=r.j.error||'Not sent';return}$('mt').value='';openThread(thread,tname);loadMsgs(true)};
+
+async function loadPeople(){const r=await api('/api/agency/crew');if(r.s!==200)return;crewData=r.j;
+  if(O)$('as').innerHTML=stationOptions();
+  $('pendbox').classList.toggle('hide',!r.j.pending.length);
+  $('pend').innerHTML='<tr><th>Name</th><th>Phone</th><th>Area</th><th></th></tr>'+r.j.pending.map(p=>'<tr><td>'+esc(p.name)+'<br><span class="note">'+esc(p.rank||'')+'</span></td><td>'+esc(p.phone)+'</td><td>'+esc(p.station)+'</td><td><button class="p" data-pa="1|'+esc(p.badge)+'">Approve</button> <button class="d" data-pa="0|'+esc(p.badge)+'">Reject</button></td></tr>').join('');drawPeople()}
+function drawPeople(){if(!crewData)return;const q=$('ps').value.toLowerCase();
+  const l=crewData.crews.filter(c=>!q||(c.name+' '+c.phone+' '+c.station+' '+c.badge).toLowerCase().includes(q));
+  $('ppl').innerHTML='<tr><th>Name</th><th>Area</th><th>Status</th><th></th></tr>'+(l.length?l.map(c=>'<tr><td>'+esc(c.name)+'<br><span class="note">'+esc(c.badge)+' · '+esc(c.rank)+' · '+esc(c.phone)+(c.vehicle?' · '+esc(c.vehicle):'')+'</span></td><td>'+esc(c.station)+'</td><td>'+(c.disabled?'<span class="pill">Disabled</span>':c.onJob?'<span class="pill '+esc(c.onJob.status)+'">On a job</span>':'Active')+(c.mustChange?'<br><span class="note">has not set own password</span>':'')+'</td><td><button data-cu="reset|'+esc(c.badge)+'">Reset password</button> <button data-cu="move|'+esc(c.badge)+'">Move</button> <button class="'+(c.disabled?'':'d')+'" data-cu="'+(c.disabled?'enable':'disable')+'|'+esc(c.badge)+'">'+(c.disabled?'Enable':'Disable')+'</button></td></tr>').join(''):'<tr><td colspan="4" class="note">No people yet. Add some above.</td></tr>')}
+$('ps').oninput=drawPeople;
+async function crewAct(act,badge){const c=crewData.crews.find(x=>x.badge===badge);if(!c)return;
+  if(act==='reset'){if(!confirm('Make a new temporary password for '+c.name+'? Their current password stops working.'))return;const r=await api('/api/lcr/unit/reset',{method:'POST',body:{badge}});if(r.s!==200){alert(r.j.error||'Failed');return}
+    const m=modal('<h2>Temporary password</h2><p>'+esc(c.name)+'</p><p style="font-size:1.4rem;font-family:monospace;letter-spacing:.05em"><b>'+esc(r.j.password)+'</b></p><p class="note">Shown once. Give it to them in person or by phone. They must choose their own at next sign-in.</p><button class="p" id="okx">Done</button>');m.querySelector('#okx').onclick=()=>{m.remove();loadPeople()};return}
+  if(act==='disable'){if(!confirm('Disable '+c.name+'? They are signed out now and cannot sign in until you enable them again.'))return}
+  if(act==='move'){const m=modal('<h2>Move '+esc(c.name)+'</h2><p class="note">Now under '+esc(c.station)+'. They are signed out and must sign in again to work for the new area.</p><label for="mvc">New control room area</label><select id="mvc">'+stationOptions(null,c.sid)+'</select><div class="err" id="mc-err"></div><div class="row"><button class="p" id="mcg">Move</button><button id="mcx">Cancel</button></div>');
+    m.querySelector('#mcx').onclick=()=>m.remove();m.querySelector('#mcg').onclick=async()=>{const r=await api('/api/agency/crew/update',{method:'POST',body:{badge,action:'move',toSid:m.querySelector('#mvc').value}});if(r.s!==200){m.querySelector('#mc-err').textContent=r.j.error||'Failed';return}m.remove();loadPeople()};return}
+  const r=await api('/api/agency/crew/update',{method:'POST',body:{badge,action:act}});if(r.s!==200)alert(r.j.error||'Failed');loadPeople()}
+
+function parseRows(t){return t.split(/\r?\n/).map(l=>l.trim()).filter(Boolean).map(l=>{const p=l.split(/\s*[,;\t]\s*/);return{name:p[0]||'',phone:p[1]||'',rank:p[2]||'',vehicle:p[3]||''}})}
+let preRows=null;
+$('a-pre').onclick=async()=>{$('a-err').textContent='';$('a-out').innerHTML='';$('a-go').classList.add('hide');const rows=parseRows($('ac').value);if(!rows.length){$('a-err').textContent='Paste at least one line';return}
+  const r=await api('/api/lcr/crew/bulk',{method:'POST',body:{stationId:$('as').value,rows,dry:true}});if(r.s!==200){$('a-err').textContent=r.j.error||'Failed';return}preRows=rows;
+  $('a-out').innerHTML='<p><b>'+r.j.created.length+' will be created</b> under '+esc(r.j.station.name)+'.'+(r.j.skipped.length?' <b style="color:#fca5a5">'+r.j.skipped.length+' skipped:</b>':'')+'</p>'+r.j.skipped.map(s=>'<div class="note">Line '+s.row+' ('+esc(s.name)+'): '+esc(s.reason)+'</div>').join('');if(r.j.created.length)$('a-go').classList.remove('hide')};
+$('a-go').onclick=async()=>{$('a-go').disabled=true;const r=await api('/api/lcr/crew/bulk',{method:'POST',body:{stationId:$('as').value,rows:preRows}});$('a-go').disabled=false;if(r.s!==200){$('a-err').textContent=r.j.error||'Failed';return}
+  $('a-go').classList.add('hide');$('ac').value='';const st=r.j.station.name;
+  $('a-out').innerHTML='<div class="card"><h2>Login sheet: print it now</h2><p class="note">These passwords are shown once and are not stored in readable form. '+esc(st)+'</p><table class="tbl keep"><tr><th>Name</th><th>Phone</th><th>Badge</th><th>Temporary password</th></tr>'+r.j.created.map(c=>'<tr><td>'+esc(c.name)+'</td><td>'+esc(c.phone)+'</td><td>'+esc(c.badge)+'</td><td style="font-family:monospace"><b>'+esc(c.tempPassword)+'</b></td></tr>').join('')+'</table>'+(r.j.skipped.length?'<p class="note">'+r.j.skipped.length+' line(s) skipped.</p>':'')+'<button onclick="window.print()">Print</button></div>';loadPeople()};
+
+async function loadRep(){const d=$('rd').value,r=await api('/api/agency/report?days='+d);if(r.s!==200){$('rep').innerHTML='<div class="card err">'+esc(r.j.error||'Failed')+'</div>';return}repData=r.j;const R=r.j,mx=Math.max(1,...R.alerts.byHourUTC);
+  const kv=o=>Object.entries(o).sort((a,b)=>b[1]-a[1]).map(([k,v])=>'<tr><td>'+esc(k)+'</td><td>'+v+'</td></tr>').join('')||'<tr><td class="note">None</td></tr>';
+  $('rep').innerHTML='<div class="card"><div class="grid"><div class="stat"><b>'+R.alerts.forwarded+'</b><span>alerts forwarded to your crews</span></div><div class="stat"><b>'+esc(R.speed.secondsToAcceptMedian==null?'–':mins(R.speed.secondsToAcceptMedian))+'</b><span>median time until a crew accepted ('+R.speed.measuredAccept+' measured)</span></div><div class="stat"><b>'+esc(R.speed.secondsToAcceptP90==null?'–':mins(R.speed.secondsToAcceptP90))+'</b><span>slowest 1 in 10</span></div><div class="stat"><b>'+esc(R.speed.secondsToOnSceneMedian==null?'–':mins(R.speed.secondsToOnSceneMedian))+'</b><span>median until on scene ('+R.speed.measuredOnScene+')</span></div><div class="stat"><b>'+R.unansweredWarnings.total+'</b><span>not-taken warnings</span></div><div class="stat"><b>'+R.alerts.reassignedBetweenStations+'</b><span>moved between stations</span></div></div></div>'
+   +(R.transfers?'<div class="card"><h2>Patient transfers</h2><div class="grid"><div class="stat"><b>'+R.transfers.created+'</b><span>transfers in this period</span></div><div class="stat"><b>'+R.transfers.delivered+'</b><span>delivered</span></div><div class="stat"><b>'+esc(R.transfers.minutesToReachPickupMedian==null?'–':Math.round(R.transfers.minutesToReachPickupMedian)+' min')+'</b><span>median accept to arrival at pickup</span></div><div class="stat"><b>'+esc(R.transfers.minutesInTransitMedian==null?'–':Math.round(R.transfers.minutesInTransitMedian)+' min')+'</b><span>median patient on board to delivered ('+R.transfers.measuredInTransit+' measured)</span></div></div></div>':'')
+   +'<div class="card"><h2>By station</h2><div class="scroll"><table class="tbl keep"><tr><th>Station</th><th>Forwarded</th><th>Median to accept</th></tr>'+R.stations.map(s=>'<tr><td>'+esc(s.station)+'</td><td>'+s.forwarded+'</td><td>'+esc(s.secondsToAcceptMedian==null?'–':mins(s.secondsToAcceptMedian))+'</td></tr>').join('')+'</table></div></div>'
+   +'<div class="grid"><div class="card"><h2>By type</h2><table class="tbl keep">'+kv(R.alerts.byType)+'</table></div><div class="card"><h2>By priority</h2><table class="tbl keep">'+kv(R.alerts.byPriority)+'</table></div><div class="card"><h2>By outcome</h2><table class="tbl keep">'+kv(R.alerts.byStatus)+'</table></div></div>'
+   +'<div class="card"><h2>By hour of day (UTC; Ghana is the same)</h2>'+R.alerts.byHourUTC.map((n,h)=>'<div class="row" style="gap:6px;flex-wrap:nowrap"><span class="note" style="width:28px">'+String(h).padStart(2,'0')+'</span><div class="bar" style="width:'+Math.round(n/mx*70)+'%"></div><span class="note">'+n+'</span></div>').join('')+'</div>'
+   +'<div class="card"><h2>What this does not measure</h2><ul>'+R.notMeasured.map(x=>'<li class="note">'+esc(x)+'</li>').join('')+'</ul></div>'}
+$('rd').onchange=loadRep;$('rprint').onclick=()=>window.print();
+$('rcsv').onclick=()=>{if(!repData)return;const R=repData,q=v=>'"'+String(v==null?'':v).replace(/"/g,'""')+'"',L=[['section','name','value']];
+  L.push(['summary','period_days',R.windowDays],['summary','alerts_forwarded',R.alerts.forwarded],['summary','median_seconds_to_accept',R.speed.secondsToAcceptMedian],['summary','measured_accept',R.speed.measuredAccept],['summary','moved_between_stations',R.alerts.reassignedBetweenStations],['summary','not_taken_warnings',R.unansweredWarnings.total]);
+  for(const k of['byType','byPriority','byStatus'])for(const[a,b]of Object.entries(R.alerts[k]))L.push([k,a,b]);R.alerts.byHourUTC.forEach((n,h)=>L.push(['byHourUTC',h,n]));R.stations.forEach(s=>L.push(['station',s.station,s.forwarded+' forwarded; median accept '+(s.secondsToAcceptMedian==null?'':s.secondsToAcceptMedian)+' s']));
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([L.map(r=>r.map(q).join(',')).join('\n')],{type:'text/csv'}));a.download='geams-'+KIND+'-hq-report-'+R.windowDays+'d.csv';a.click()};
+
+async function loadLog(){const r=await api('/api/agency/log?limit=200');if(r.s!==200)return;
+  $('log').innerHTML='<tr><th>When</th><th>Who</th><th>What</th><th>Detail</th></tr>'+(r.j.items.length?r.j.items.map(x=>'<tr><td>'+esc(when(x.at))+'</td><td>'+esc(x.by)+'</td><td>'+esc(x.action)+'</td><td>'+esc((x.ref?x.ref+' ':'')+(x.detail||''))+'</td></tr>').join(''):'<tr><td colspan="4" class="note">Nothing yet.</td></tr>')}
+$('bk-go').onclick=async()=>{$('bk-err').textContent='';const p=$('bpw').value;if(p.length<10){$('bk-err').textContent='Choose a passphrase of at least 10 characters';return}
+  let r;try{r=await fetch('/api/agency/backup',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify({passphrase:p})})}catch(e){$('bk-err').textContent='No connection to the server';return}
+  if(!r.ok){let j={};try{j=await r.json()}catch(e){}$('bk-err').textContent=j.error||'Backup failed';return}
+  const b=await r.blob(),a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=(/filename="([^"]+)"/.exec(r.headers.get('Content-Disposition')||'')||[])[1]||'geams-'+KIND+'-backup.enc';a.click();$('bpw').value='';$('bk-err').innerHTML='<span class="okmsg">Downloaded. Keep the passphrase safe: it cannot be recovered.</span>'};
+
+if(token){api('/api/agency/overview',{noKick:true}).then(r=>{if(r.s===200)start();else{save('');showLogin('')}})}else showLogin('');
+})();
+</script>
+</body>
+</html>

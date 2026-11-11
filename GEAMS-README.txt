@@ -56,7 +56,7 @@ exact position on site (Settings → Verify Station Location).
 SERVER-SIDE PERMISSIONS  (who may read and write what)
 ─────────────────────────────────────────────────────
 Every sign-in now returns a signed token, and the server decides access from it.
-Roles: HQ, control room (LCR), officer, fire crew, ambulance crew, civilian.
+Roles: HQ, control room (LCR), officer, fire crew, ambulance crew, civilian, Fire HQ, Ambulance HQ.
 
   GEAMS_TOKEN_SECRET         (recommended) a long random string used to sign tokens.
                              If missing, the server creates one and saves it next to
@@ -87,8 +87,8 @@ What changed for people
 Honest limits
   * A record is one shared map, so the server decides by ROLE (and a control room's
     own roster by station), not field by field.
-  * Officers, fire and ambulance crews are not yet fenced to their own station on
-    the server.
+  * Officers, fire and ambulance crews are fenced to their own control room's records on
+    the server (another area answers 403); within one area, access is by role.
   * Civilian tokens prove a device, not a person.
   * Tokens last 12 hours (HQ, control rooms, crews) or 7 days (civilians).
   * Photos and video open in the page through a cookie that only works when the app
@@ -96,6 +96,30 @@ Honest limits
 
 CREW FENCING, FIELD CHECKS, APPROVAL AND PHONE CODES
 ----------------------------------------------------
+FIRE HQ and AMBULANCE HQ (stand-alone; they do not report to Police)
+  Open geams-fire-hq.html or geams-ambulance-hq.html. The HQ owner creates the accounts: HQ dashboard > "Fire & Ambulance HQ accounts"
+  (shows a one-time password; the person must choose their own at first sign-in). Control rooms are unchanged: they still receive every
+  alert and forward it to the nearest fire or ambulance station. The agency HQ then sees that forwarded copy live (refreshes about every
+  5 seconds; it is not a push alert). Crews stay attached to control-room areas; the HQs have no stations of their own.
+  Each HQ can: see all its stations, alerts and crew accounts; be warned when a forwarded alert is not taken (GEAMS_AGENCY_ESCALATE_SECS, default 120);
+  move a waiting alert to another station; message its crews (shown in the crew app while it is open); add, reset, disable, enable, move and approve its
+  own people; pull reports (CSV or print) with server-stamped times; download an encrypted backup of its own data
+  (open with: node tools/open-agency-backup.js file.enc); read its own action log.
+  Also: the HQ can create an alert for one station's crews directly (Command tab). It goes straight to those crews and does not pass through a
+  control room, so the control room does not have it on its own screen. And crews and their HQ can exchange administrative messages (Messages tab
+  on the HQ; a 💬 button inside the fire and ambulance crew apps). Delivered while both sides have the app open; checked every 5-6 seconds; not an SMS,
+  not for emergencies; the last 200 messages per person are kept, on the server only.
+  AMBULANCE HQ ONLY: patient transfer. Collect a patient at one hospital and deliver them to another (Command tab: pick both hospitals by search or by
+  clicking the map, choose the station whose crew does it). The crew app guides to the pickup, then (button: Patient on board) to the destination, and
+  the HQ sees both legs live. En route and ETA are real: position is the crew phone's GPS, sent every few seconds and re-sent every 10 s while stationary;
+  ETA is by road route when the routing service answers (GEAMS_CONFIG.routeUrl) and otherwise a straight-line estimate that says so. The server stamps when
+  each position arrived; if none arrives for 60 s the HQ screen warns to phone the crew. GEAMS does not contact the hospitals.
+  FIRE CREWS: the fire crew app works the same way for alerts (including HQ-created ones): live GPS position every few seconds and every 10 s while
+  stationary, ETA to the scene by road route when available (otherwise a labelled straight-line estimate), and the Fire HQ gets the same 60 s warning.
+  Limits: a warning only tells people, someone must act. Crew counts are accounts, not who is on shift. A call handled only by phone never reaches it.
+  An HQ can never read police records, and Fire and Ambulance cannot read each other. The pages are generated from tools/agency-hq.template.html by
+  tools/make-agency-hq.js (run it after editing the template). Tests: t_agency.js (server), t_agency_ui.js (screens).
+
 Fencing: officers, fire and ambulance crews can only read or write their own station's incidents, roster and queues.
 Field checks (server refuses with HTTP 422 and logs "REFUSED ..."):
   - a civilian can raise a new alert, update their own position, add reporters and cancel an alert nobody has taken; nothing else
