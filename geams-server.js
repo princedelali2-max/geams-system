@@ -1434,7 +1434,7 @@ const server = http.createServer(async (req, res) => {
           if (s === 'new') { o.waiting++; o.oldestWaitingSecs = Math.max(o.oldestWaitingSecs, Math.round((now - t) / 1000)); }
           else if (s !== 'complete' && s !== 'reassigned') o.active++;
           else if (s === 'complete' && ((r.srv && r.srv.completed) || t) >= day) o.doneToday++;
-          if (s !== 'complete' && s !== 'reassigned' ? true : t >= now - 6 * 3600000) list.push({ sid, station: o.name, id, type: String(r.type || '').slice(0, 40), priority: String(r.priority || '').slice(0, 12), location: String(r.location || '').slice(0, 120), lat: typeof r.lat === 'number' ? r.lat : null, lng: typeof r.lng === 'number' ? r.lng : null, status: s, unit: r.unitName || null, unitBadge: r.unitBadge || null, eta: r.unitETA || null, forwardedAt: t, acceptedAt: (r.srv && r.srv.accepted) || null, reassignedTo: r.reassignedTo || null, reassignedFrom: r.reassignedFrom || null, waitedSecs: s === 'new' ? Math.round((now - t) / 1000) : null,
+          if (s !== 'complete' && s !== 'reassigned' ? true : t >= now - 6 * 3600000) list.push({ sid, station: o.name, id, type: String(r.type || '').slice(0, 40), priority: String(r.priority || '').slice(0, 12), location: String(r.location || '').slice(0, 120), lat: typeof r.lat === 'number' ? r.lat : null, lng: typeof r.lng === 'number' ? r.lng : null, status: s, unit: r.unitName || null, unitBadge: r.unitBadge || null, eta: r.unitETA || null, forwardedAt: t, acceptedAt: (r.srv && r.srv.accepted) || null, reassignedTo: r.reassignedTo || null, reassignedFrom: r.reassignedFrom || null, closeReason: r.closeReason || null, closedBy: r.closedByHq ? 'HQ' : r.closedByCrew ? 'crew' : null, waitedSecs: s === 'new' ? Math.round((now - t) / 1000) : null,
             unitLat: typeof r.unitLat === 'number' ? r.unitLat : null, unitLng: typeof r.unitLng === 'number' ? r.unitLng : null, etaSource: r.etaSource || null, etaTarget: r.etaTarget || null, etaKm: typeof r.etaKm === 'number' ? r.etaKm : null, leg: r.leg || null, posAt: (r.srv && r.srv.posAt) || null, posAgeSecs: (r.srv && r.srv.posAt) ? Math.round((now - r.srv.posAt) / 1000) : null, positionStale: s === 'en_route' && (!(r.srv && r.srv.posAt) || now - r.srv.posAt > 60000), departedAt: (r.srv && r.srv.departed) || null, pickedUpAt: (r.srv && r.srv.pickedUp) || null,
             transfer: isObj(r.transfer) ? { from: r.transfer.from, to: r.transfer.to, patient: r.transfer.patient || '', needs: r.transfer.needs || '', contact: r.transfer.contact || '' } : null });
         }
@@ -1457,6 +1457,16 @@ const server = http.createServer(async (req, res) => {
         const s2 = Object.assign({}, src); s2[id] = Object.assign({}, rec, { serviceStatus: 'reassigned', reassignedTo: to, reassignedToName: nm, reassignedBy: ses.user, reassignedAt: now });
         kvSet(KEY(to), dest); kvSet(KEY(from), s2); staffLog(ses, 'agency.reassign', id, kind + ' → ' + to, from);
         return json(res, 200, { ok: true, id, from, to, toName: nm });
+      }
+      if (p === '/api/agency/incident/close' && req.method === 'POST') {          // the HQ resolves or closes an alert: done, false alarm, duplicate or cancelled
+        const b = await readBody(req), sid = String(b.sid || ''), id = String(b.id || ''), reason = String(b.reason || '');
+        if (!['resolved', 'false_alarm', 'duplicate', 'cancelled'].includes(reason)) return json(res, 400, { error: 'Choose a reason: resolved, false alarm, duplicate or cancelled' });
+        const map = kvGet(KEY(sid), null), rec = isObj(map) ? map[id] : null; if (!isObj(rec)) return json(res, 404, { error: 'That alert was not found' });
+        if (['complete', 'reassigned'].includes(st(rec))) return json(res, 409, { error: 'That alert is already ' + (st(rec) === 'complete' ? 'closed' : 'moved to another station') });
+        const now = Date.now(), n = Object.assign({}, map), sv = Object.assign({}, isObj(rec.srv) ? rec.srv : {}); if (!sv.completed) sv.completed = now; if (!sv.accepted && st(rec) !== 'new') sv.accepted = now;
+        n[id] = Object.assign({}, rec, { serviceStatus: 'complete', closedByHq: true, closeReason: reason, closeNote: clean(b.note, 200), closedBy: ses.user, closedAt: now, srv: sv });
+        kvSet(KEY(sid), n); staffLog(ses, 'agency.close', id, kind + ' ' + reason + (b.note ? ' (note)' : ''), sid);
+        return json(res, 200, { ok: true, id, reason });
       }
       if (p === '/api/agency/escalation/ack' && req.method === 'POST') {
         const b = await readBody(req), map = Object.assign({}, kvGet('registry:agencyEscalations', {}) || {}), e = map[String(b.key || '')]; if (!e || e.kind !== kind) return json(res, 404, { error: 'Unknown warning' });
