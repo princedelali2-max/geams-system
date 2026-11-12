@@ -84,6 +84,11 @@
   .action-bar{display:flex;gap:8px;padding:14px}
   .job-detail{padding:14px}
   .job-detail-row{font-size:0.8rem;color:var(--text-muted);margin-bottom:6px;line-height:1.5}
+  #incoming-call{display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.78);align-items:flex-end;justify-content:center}
+  .ic-card{width:100%;max-width:520px;background:var(--bg-raised);border:2px solid var(--red);border-radius:18px 18px 0 0;padding:18px 16px calc(18px + env(safe-area-inset-bottom));animation:icpulse 1.2s ease-in-out infinite}
+  @keyframes icpulse{50%{box-shadow:0 0 0 6px rgba(239,68,68,.35)}}
+  .ic-card h2{font-size:1.05rem;margin-bottom:6px}.ic-card .ic-meta{font-size:.82rem;line-height:1.6;color:var(--text-muted);margin-bottom:12px}
+  .ic-card .btn{min-height:54px;font-size:1rem}
   .toast{position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:9999;background:var(--bg-raised);border:1px solid var(--border-mid);border-radius:var(--r-md);padding:11px 16px;font-size:0.8rem;max-width:90%;box-shadow:0 6px 20px rgba(0,0,0,0.5);display:flex;gap:8px;align-items:flex-start}
   .toast.success{border-color:var(--green)} .toast.error{border-color:var(--red)}
   .toast.warning{border-color:var(--orange)} .toast.info{border-color:var(--cyan)}
@@ -172,6 +177,7 @@
   </div>
 
   <div id="toast-container"></div>
+  <div id="incoming-call" role="alertdialog" aria-live="assertive" aria-label="Incoming call"></div>
 </div>
 
 <script>
@@ -889,12 +895,32 @@ const FireApp = (() => {
   }
 
   /* ── INCOMING QUEUE ── */
+  /* ── INCOMING CALL: a full-screen alert with one big button that accepts and opens the route ── */
+  const escH = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  function alertCrew() {
+    try { if (navigator.vibrate) navigator.vibrate([400, 150, 400, 150, 400]); } catch (e) {}
+    try { const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return; const ac = new AC(), o = ac.createOscillator(), g = ac.createGain(); o.connect(g); g.connect(ac.destination); o.frequency.value = 880; g.gain.value = 0.15; o.start(); o.stop(ac.currentTime + 0.5); } catch (e) {}
+  }
+  function showIncoming() {
+    const el = document.getElementById('incoming-call'); if (!el) return;
+    const j = FireData.currentJob;
+    if (!queue.length || (j && j.status !== 'complete')) { el.style.display = 'none'; el.innerHTML = ''; return; }
+    const rec = queue[0], more = queue.length - 1;
+    el.innerHTML = `<div class="ic-card"><h2 style="color:var(--red)">🚨 NEW CALL — ${escH((rec.priority || '').toUpperCase())}</h2>
+      <div class="ic-meta"><b style="color:var(--text)">${escH(rec.type)}</b><br>${rec.transfer ? '🏥 ' + escH(rec.transfer.from.name) + ' → ' + escH(rec.transfer.to.name) + '<br>' : ''}📍 ${escH(rec.location)}${rec.notes ? '<br>📝 ' + escH(rec.notes) : ''}${more > 0 ? '<br><b>+' + more + ' more waiting in Calls</b>' : ''}</div>
+      <button class="btn btn-primary btn-full" onclick="FireApp.acceptCall('${escH(rec.id)}')">✅ Accept and navigate</button>
+      <button class="btn btn-full" style="margin-top:8px" onclick="FireApp.dismissIncoming()">Later — keep in Calls</button></div>`;
+    el.style.display = 'flex';
+  }
+  function dismissIncoming() { const el = document.getElementById('incoming-call'); if (el) { el.style.display = 'none'; el.innerHTML = ''; } navigate('queue'); }
+
   function onNewCall(rec) {
     queue.unshift(rec);
     const dot = document.getElementById('topbar-dot');
     if (dot) dot.classList.add('busy');
     showToast('error', '🚨 New Call — ' + rec.priority.toUpperCase(), `${rec.type} · ${rec.location}`, 7000);
     if (currentScreen === 'queue') renderQueue();
+    alertCrew(); showIncoming();
   }
 
   function renderQueue() {
@@ -947,6 +973,7 @@ const FireApp = (() => {
       unitLat: null, unitLng: null, unitETA: null,   // the crew is somewhere in the control room's area, not at the control room: position comes only from this phone's GPS
     };
     FireData.setCurrentJob(job);
+    showIncoming();
     GeamsFireSync.pushUpdate(crew.lcrId, incId, {
       serviceStatus: 'accepted', unitName: crew.name, unitBadge: crew.badge,
     });
@@ -977,6 +1004,28 @@ const FireApp = (() => {
    * 10 s even when the vehicle is stationary, and the server stamps when each position arrived, so the HQ can see how old it is. */
   let lastFix = null, hbTimer = null;
   const road = { at: 0, fromLat: null, fromLng: null, toLat: null, toLng: null, durS: null, distM: null, pts: [], pending: false, failAt: 0 };
+  let fittedFor = null;
+  /* draw the route from this phone's GPS to the current target and zoom the map to it, once when the line first appears and once when the road geometry arrives (never fighting the crew's own panning) */
+  function drawRoute(fix, t) {
+    if (!map || !routeLine || !map._container || !document.body.contains(map._container)) return;   // the screen was redrawn: the old map is gone
+    const pts = roadFresh(t) ? [[fix.lat, fix.lng], ...road.pts, [t.lat, t.lng]] : [[fix.lat, fix.lng], [t.lat, t.lng]];
+    routeLine.setLatLngs(pts);
+    const key = t.kind + (roadFresh(t) ? ':road' : ':line');
+    if (fittedFor !== key) { fittedFor = key; try { map.fitBounds(L.latLngBounds(pts), { padding: [40, 40], animate: false }); } catch (e) {} }
+  }
+  /* before departing: show the route and ETA locally so the crew sees where they are going the moment they accept (nothing about this is sent as "en route") */
+  function previewRoute(fix) {
+    const cj = FireData.currentJob; if (!cj || cj.status !== 'accepted') return;
+    const t = legTarget(cj); if (t.lat == null || t.lng == null) return;
+    fetchRoad(fix.lat, fix.lng, t);
+    const e = etaFor(fix.lat, fix.lng, fix.speed, t); cj.unitETA = e.min; cj.etaSrc = e.src; cj.etaKm = e.km;
+    drawRoute(fix, t); if (currentScreen === 'job') updateStatBar();
+  }
+  /* hand the current leg to the phone's own maps app for turn-by-turn voice navigation */
+  function openNav() {
+    const j = FireData.currentJob; if (!j) return; const t = legTarget(j);
+    window.open('https://www.google.com/maps/dir/?api=1' + (lastFix ? '&origin=' + lastFix.lat + ',' + lastFix.lng : '') + '&destination=' + t.lat + ',' + t.lng + '&travelmode=driving', '_blank', 'noopener');
+  }
   function legTarget(job) { return { lat: job.lat, lng: job.lng, name: 'the scene', kind: 'scene' }; }
   function roadFresh(t) { return road.distM != null && Date.now() - road.at < 60000 && distM(road.toLat, road.toLng, t.lat, t.lng) < 80; }
   async function fetchRoad(lat, lng, t) {
@@ -988,6 +1037,7 @@ const FireApp = (() => {
       const url = `${((window.GEAMS_CONFIG || {}).routeUrl || 'https://router.project-osrm.org')}/route/v1/driving/${lng},${lat};${t.lng},${t.lat}?overview=full&geometries=geojson`;
       const r = await fetch(url, { signal: ctl.signal }), j = await r.json(); if (!j.routes || !j.routes[0]) throw new Error('no route');
       const rt = j.routes[0]; road.pts = rt.geometry.coordinates.map(c => [c[1], c[0]]); road.distM = rt.distance; road.durS = rt.duration; road.at = Date.now(); road.fromLat = lat; road.fromLng = lng; road.toLat = t.lat; road.toLng = t.lng; road.failAt = 0;
+      const cj = FireData.currentJob; if (cj && lastFix) drawRoute(lastFix, legTarget(cj));
     } catch (e) { road.failAt = Date.now(); } finally { clearTimeout(to); road.pending = false; }
   }
   function etaFor(lat, lng, speed, t) {
@@ -1004,7 +1054,7 @@ const FireApp = (() => {
     GeamsFireSync.pushUpdate(FireData.crew.lcrId, cj.id, { unitLat: fix.lat, unitLng: fix.lng, unitETA: e.min, etaSource: e.src, etaTarget: t.kind, etaKm: Math.round(e.km * 10) / 10, unitAt: Date.now(), gpsAcc: fix.acc != null ? Math.round(fix.acc) : null });
     if (cj.mutualAidRequestId) FireMutualAid.pushUnitUpdate(cj.mutualAidRequestId, { unitLat: fix.lat, unitLng: fix.lng, unitETA: e.min });
     if (unitMarker) { unitMarker.setLatLng([fix.lat, fix.lng]); if (map && !map.hasLayer(unitMarker)) unitMarker.addTo(map); }
-    if (routeLine) routeLine.setLatLngs(roadFresh(t) ? [[fix.lat, fix.lng], ...road.pts, [t.lat, t.lng]] : [[fix.lat, fix.lng], [t.lat, t.lng]]);
+    drawRoute(fix, t);
     if (currentScreen === 'job') updateStatBar();
     if (distM(fix.lat, fix.lng, t.lat, t.lng) < 50 && !cj._arrivalToasted) { cj._arrivalToasted = true; showToast('info', 'Arriving', 'You are within 50 m of the scene — mark On Scene', 5000); }
   }
@@ -1023,12 +1073,13 @@ const FireApp = (() => {
       if (!cj || cj.status === 'complete') { stopGps(); return; }
       lastFix = { lat: pos.coords.latitude, lng: pos.coords.longitude, speed: pos.coords.speed, acc: pos.coords.accuracy };
       if (cj.status === 'accepted' && !cj._startSent) { cj._startSent = true; cj.unitLat = lastFix.lat; cj.unitLng = lastFix.lng; GeamsFireSync.pushUpdate(FireData.crew.lcrId, cj.id, { unitLat: lastFix.lat, unitLng: lastFix.lng, unitAt: Date.now() }); if (unitMarker && map) { unitMarker.setLatLng([lastFix.lat, lastFix.lng]); if (!map.hasLayer(unitMarker)) unitMarker.addTo(map); } }
+      previewRoute(lastFix);
       reportFix(lastFix);
     }, (err) => {
       if (warned) return; warned = true;
       showToast('warning', 'GPS', err && err.code === 1 ? 'Location permission is blocked — allow it so the Control Room and HQ can see your real position.' : 'No GPS fix yet — still trying.', 7000);
     }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 });
-    hbTimer = setInterval(() => { if (lastFix) reportFix(lastFix); }, 10000);
+    hbTimer = setInterval(() => { if (lastFix) { previewRoute(lastFix); reportFix(lastFix); } }, 10000);
   }
 
   function setStatus(status) {
@@ -1222,6 +1273,7 @@ const FireApp = (() => {
       ${!job.isMutualAid ? renderAidPicker() : ''}
       <div class="action-bar">
         ${!job.isMutualAid ? `<button class="btn btn-cyan" onclick="FireApp.toggleAidPicker()">🤝 ${aidPickerOpen ? 'Hide' : 'Request Mutual Aid'}</button>` : ''}
+        ${job.status === 'accepted' || job.status === 'en_route' ? `<button class="btn btn-cyan btn-full" onclick="FireApp.openNav()">🧭 Navigate in Maps app → the scene</button>` : ''}
         ${job.status === 'accepted' ? `<button class="btn btn-primary btn-full" onclick="FireApp.setStatus('en_route')">🚨 Depart — En Route</button>` : ''}
         ${job.status === 'en_route' ? `<button class="btn btn-warning btn-full" onclick="FireApp.setStatus('on_scene')">📍 Mark On Scene</button>` : ''}
         ${job.status === 'on_scene' ? `<button class="btn btn-success btn-full" onclick="FireApp.setStatus('complete')">✅ Complete Call</button>` : ''}
@@ -1259,7 +1311,7 @@ const FireApp = (() => {
   }
 
   function liveLine(job) {
-    if (job.status !== 'en_route') return job.status === 'accepted' ? 'Tap Depart to start sharing your live position and ETA.' : '';
+    if (job.status !== 'en_route') return job.status === 'accepted' ? (lastFix ? '🧭 Route to ' + legTarget(job).name + ' shown from your GPS' + (job.etaSrc ? ' (' + (job.etaSrc === 'road' ? 'road route' : 'straight line') + ')' : '') + '. Tap Depart to share your live position and ETA with the HQ.' : '⏳ Waiting for a GPS fix to draw your route. Allow location for this app.') : '';
     if (!lastFix) return '⏳ Waiting for a GPS fix. Your position is not being shared yet.';
     return '🛰 Live position shared every few seconds' + (job.etaSrc ? ' · ETA by ' + (job.etaSrc === 'road' ? 'road route' : 'straight line (road data unavailable)') : '') + (job.etaKm != null ? ' · about ' + job.etaKm.toFixed(1) + ' km to go' : '');
   }
@@ -1288,7 +1340,8 @@ const FireApp = (() => {
       .bindPopup(FireData.crew.name);
     if (job.unitLat != null && job.unitLng != null) unitMarker.addTo(map);   // never draw the unit where it is not: no GPS fix yet means no marker
     routeLine = L.polyline(routeCoords.length ? routeCoords : [[job.lat,job.lng]], { color:'#ef4444', weight:3, dashArray:'8 6' }).addTo(map);
-    const bounds = [[job.lat,job.lng],[job.unitLat||job.lat, job.unitLng||job.lng]];
+    fittedFor = null; const tgt = legTarget(job);
+    const bounds = [[tgt.lat, tgt.lng]]; if (job.unitLat != null && job.unitLng != null) bounds.push([job.unitLat, job.unitLng]);
 
     // Live backup-unit marker: shown on the origin's map once another
     // jurisdiction accepts, and on the responder's own map (their own unit,
@@ -1300,7 +1353,8 @@ const FireApp = (() => {
         .addTo(map).bindPopup(`${aidRec.acceptedByName} — ${aidRec.targetStationName} (mutual aid)`);
       bounds.push([aidRec.unitLat, aidRec.unitLng]);
     }
-    map.fitBounds(L.latLngBounds(bounds), { padding:[40,40] });
+    if (bounds.length === 1) map.setView(bounds[0], 15); else map.fitBounds(L.latLngBounds(bounds), { padding:[40,40] });
+    if (lastFix) drawRoute(lastFix, tgt);
   }
 
   function updateBackupMarker(rec) {
@@ -1315,7 +1369,7 @@ const FireApp = (() => {
   }
 
   return {
-    showSignup, showLogin, doLogin, doSignup, endShift, navigate,
+    showSignup, showLogin, doLogin, doSignup, endShift, navigate, openNav, dismissIncoming,
     onNewCall, acceptCall, setStatus, showToast,
     toggleAidPicker, requestMutualAid, cancelMutualAidRequest,
     acceptMutualAid, declineMutualAid,
