@@ -22,7 +22,7 @@ B. STRONGLY RECOMMENDED
 C. OPTIONAL
     GHANAPOST_LOOKUP_URL / _METHOD / GHANAPOST_API_KEY / _HEADER   Ghana Post GPS lookup (needs your agreement with them)
     GEAMS_TSA_URL / GEAMS_TSA_CA   outside timestamp on evidence seals
-    GEAMS_AUTO_APPROVE_UNITS (leave OFF: control rooms should approve crews)
+    GEAMS_AUTO_APPROVE_UNITS (leave OFF: control rooms approve police officers; Fire HQ and Ambulance HQ approve their own crews. If it is ON, anyone who registers can sign in at once)
     GEAMS_DB_MAX_FILE_MB (default 64), GEAMS_DATA / GEAMS_BLOBS / GEAMS_BACKUP_DIR (paths)
 
 D. FIRST RUN

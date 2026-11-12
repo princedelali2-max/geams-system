@@ -106,7 +106,7 @@
     <div class="login-security-bar"><div class="login-security-dot"></div><div class="login-security-txt">SECURE CHANNEL · CREW LOGIN REQUIRED</div></div>
 
     <div class="login-field">
-      <label class="login-label" for="login-name">Firefighter Name</label>
+      <label class="login-label" for="login-name">Name, phone number or badge</label>
       <input class="login-input" id="login-name" type="text" placeholder="Your full name as registered" autocomplete="username">
       <div class="login-error" id="err-name">Name is required</div>
     </div>
@@ -137,7 +137,7 @@
       <input class="login-input" id="su-phone" placeholder="+233-24-0000000"></div>
     <div class="login-field"><label class="login-label">Engine / Unit Number</label>
       <input class="login-input" id="su-vehicle" placeholder="e.g. Engine 12"></div>
-    <div class="login-field"><label class="login-label">Assigned Jurisdiction (LCR coverage area)</label>
+    <div class="login-field"><label class="login-label">Police control room (LCR) covering your area</label>
       <select class="login-input" id="su-lcr"><!-- populated by JS from STATION_DIRECTORY --></select></div>
     <div class="login-field"><label class="login-label">Create Password</label>
       <input class="login-input" id="su-pass" type="password" placeholder="At least 6 characters"></div>
@@ -847,8 +847,8 @@ const FireApp = (() => {
     if (btn) { btn.disabled = false; btn.textContent = label; }
     if (cred && cred.pending) {
       if (typeof showLogin === 'function') showLogin();
-      showToast('success', 'Waiting for approval', cred.message || 'Your control room must approve you before you can sign in.', 9000);
-      const le = document.getElementById('login-err') || document.getElementById('err-general'); if (le) { le.textContent = cred.message || 'Waiting for your control room to approve your account.'; le.classList.add('show'); }
+      showToast('success', 'Waiting for approval', cred.message || 'Your HQ must approve you before you can sign in.', 9000);
+      const le = document.getElementById('login-err') || document.getElementById('err-general'); if (le) { le.textContent = cred.message || 'Waiting for your HQ to approve your account.'; le.classList.add('show'); }
       return;
     }
     enterApp(cred);
@@ -944,16 +944,15 @@ const FireApp = (() => {
       id: rec.id, type: rec.type, priority: rec.priority, location: rec.location,
       lat: rec.lat, lng: rec.lng, civilianName: rec.civilianName, civilianPhone: rec.civilianPhone,
       notes: rec.notes, status: 'accepted', acceptedAt: Date.now(),
-      unitLat: station.lat, unitLng: station.lng, unitETA: null,
+      unitLat: null, unitLng: null, unitETA: null,   // the crew is somewhere in the control room's area, not at the control room: position comes only from this phone's GPS
     };
     FireData.setCurrentJob(job);
     GeamsFireSync.pushUpdate(crew.lcrId, incId, {
       serviceStatus: 'accepted', unitName: crew.name, unitBadge: crew.badge,
-      unitLat: station.lat, unitLng: station.lng,
     });
     const dot = document.getElementById('topbar-dot');
     if (dot) dot.classList.remove('busy');
-    showToast('success', 'Call Accepted', `${job.type} — navigating from ${station.name}`, 5000);
+    showToast('success', 'Call Accepted', `${job.type} — your position comes from this phone's GPS (allow location)`, 5000);
     navigate('job');
     startRoute(station, job);
   }
@@ -1004,13 +1003,13 @@ const FireApp = (() => {
     cj.unitLat = fix.lat; cj.unitLng = fix.lng; cj.unitETA = e.min; cj.etaSrc = e.src; cj.etaKm = e.km;
     GeamsFireSync.pushUpdate(FireData.crew.lcrId, cj.id, { unitLat: fix.lat, unitLng: fix.lng, unitETA: e.min, etaSource: e.src, etaTarget: t.kind, etaKm: Math.round(e.km * 10) / 10, unitAt: Date.now(), gpsAcc: fix.acc != null ? Math.round(fix.acc) : null });
     if (cj.mutualAidRequestId) FireMutualAid.pushUnitUpdate(cj.mutualAidRequestId, { unitLat: fix.lat, unitLng: fix.lng, unitETA: e.min });
-    if (unitMarker) unitMarker.setLatLng([fix.lat, fix.lng]);
+    if (unitMarker) { unitMarker.setLatLng([fix.lat, fix.lng]); if (map && !map.hasLayer(unitMarker)) unitMarker.addTo(map); }
     if (routeLine) routeLine.setLatLngs(roadFresh(t) ? [[fix.lat, fix.lng], ...road.pts, [t.lat, t.lng]] : [[fix.lat, fix.lng], [t.lat, t.lng]]);
     if (currentScreen === 'job') updateStatBar();
     if (distM(fix.lat, fix.lng, t.lat, t.lng) < 50 && !cj._arrivalToasted) { cj._arrivalToasted = true; showToast('info', 'Arriving', 'You are within 50 m of the scene — mark On Scene', 5000); }
   }
   function startRoute(station, job) {
-    routeCoords = [[station.lat, station.lng], [job.lat, job.lng]];
+    routeCoords = [];
     routeStep = 0;
     if (routeTimer) { clearInterval(routeTimer); routeTimer = null; }
     stopGps();
@@ -1023,6 +1022,7 @@ const FireApp = (() => {
       const cj = FireData.currentJob;
       if (!cj || cj.status === 'complete') { stopGps(); return; }
       lastFix = { lat: pos.coords.latitude, lng: pos.coords.longitude, speed: pos.coords.speed, acc: pos.coords.accuracy };
+      if (cj.status === 'accepted' && !cj._startSent) { cj._startSent = true; cj.unitLat = lastFix.lat; cj.unitLng = lastFix.lng; GeamsFireSync.pushUpdate(FireData.crew.lcrId, cj.id, { unitLat: lastFix.lat, unitLng: lastFix.lng, unitAt: Date.now() }); if (unitMarker && map) { unitMarker.setLatLng([lastFix.lat, lastFix.lng]); if (!map.hasLayer(unitMarker)) unitMarker.addTo(map); } }
       reportFix(lastFix);
     }, (err) => {
       if (warned) return; warned = true;
@@ -1283,9 +1283,10 @@ const FireApp = (() => {
     incMarker = L.marker([job.lat, job.lng], { icon: L.divIcon({
       html:'<div style="font-size:22px">🔥</div>', className:'', iconSize:[26,26], iconAnchor:[13,13] }) })
       .addTo(map).bindPopup(job.type);
-    unitMarker = L.marker([job.unitLat || job.lat, job.unitLng || job.lng], { icon: L.divIcon({
+    unitMarker = L.marker([job.unitLat != null ? job.unitLat : job.lat, job.unitLng != null ? job.unitLng : job.lng], { icon: L.divIcon({
       html:'<div style="font-size:22px">🚒</div>', className:'', iconSize:[26,26], iconAnchor:[13,13] }) })
-      .addTo(map).bindPopup(FireData.crew.name);
+      .bindPopup(FireData.crew.name);
+    if (job.unitLat != null && job.unitLng != null) unitMarker.addTo(map);   // never draw the unit where it is not: no GPS fix yet means no marker
     routeLine = L.polyline(routeCoords.length ? routeCoords : [[job.lat,job.lng]], { color:'#ef4444', weight:3, dashArray:'8 6' }).addTo(map);
     const bounds = [[job.lat,job.lng],[job.unitLat||job.lat, job.unitLng||job.lng]];
 

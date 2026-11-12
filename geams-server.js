@@ -110,7 +110,7 @@ const MIME = { '.html':'text/html; charset=utf-8', '.js':'text/javascript', '.cs
 const buildOf = (file) => { try { return crypto.createHash('sha1').update(fs.readFileSync(file)).digest('hex').slice(0, 8); } catch (e) { return ''; } };
 function injectBuild(file, buf) {
   const b = buildOf(file), s = buf.toString('utf8');
-  return Buffer.from(s.replace(/<\/head>/i, '<script>window.GEAMS_BUILD="' + b + '";window.GEAMS_FILE=' + JSON.stringify(path.basename(file)) + ';</script><script src="vendor/geams-diag.js"></script>' + (/vendor\/geams-i18n\.js/.test(s) ? '' : '<script src="vendor/geams-i18n.js"></script>') + '<script src="vendor/geams-guide.js"></script><script src="vendor/geams-a11y.js"></script>' + (/geams-(dispatch-app|fire-service|ambulance-service)\.html$/.test(file) ? '<script src="vendor/geams-roster.js"></script>' : '') + (/geams-(station|hq)-dashboard__1_\.html$/.test(file) ? '<script src="vendor/geams-bulk.js"></script>' : '') + (/geams-hq-dashboard__1_\.html$/.test(file) ? '<script src="vendor/geams-agency-admin.js"></script>' : '') + (/geams-(fire|ambulance)-service\.html$/.test(file) ? '<script src="vendor/geams-agency-banner.js"></script>' : '') + '</head>'), 'utf8');
+  return Buffer.from(s.replace(/<\/head>/i, '<script>window.GEAMS_BUILD="' + b + '";window.GEAMS_FILE=' + JSON.stringify(path.basename(file)) + ';</script><script src="vendor/geams-diag.js"></script>' + (/vendor\/geams-i18n\.js/.test(s) ? '' : '<script src="vendor/geams-i18n.js"></script>') + '<script src="vendor/geams-guide.js"></script><script src="vendor/geams-a11y.js"></script><script src="vendor/geams-loginclear.js"></script>' + (/geams-(dispatch-app|fire-service|ambulance-service)\.html$/.test(file) ? '<script src="vendor/geams-roster.js"></script>' : '') + (/geams-(station|hq)-dashboard__1_\.html$/.test(file) ? '<script src="vendor/geams-bulk.js"></script>' : '') + (/geams-hq-dashboard__1_\.html$/.test(file) ? '<script src="vendor/geams-agency-admin.js"></script>' : '') + (/geams-(fire|ambulance)-service\.html$/.test(file) ? '<script src="vendor/geams-agency-banner.js"></script>' : '') + '</head>'), 'utf8');
 }
 
 /* Staff action log: who changed what and when. It records field names and status words, never names, phones or locations. */
@@ -346,6 +346,7 @@ function newPassphrase() { const b = crypto.randomBytes(12); const c = [...b].ma
 
 const AUTO_APPROVE = process.env.GEAMS_AUTO_APPROVE_UNITS === '1';       // 1 = crews work at once, without approval
 const REQUIRE_VERIFIED = process.env.GEAMS_REQUIRE_VERIFIED_CIVILIANS === '1'; // 1 = civilian accounts need a verified phone
+function approverName(kind) { return kind === 'fire' ? 'your Fire HQ' : kind === 'ambulance' ? 'your Ambulance HQ' : 'your control room'; }
 function normPhone(p) {                                                    // Ghana numbers: 024xxxxxxx / 233xxxxxxxxx / +233...
   let d = String(p || '').replace(/[^\d+]/g, '').replace(/^\+/, '');
   if (/^0\d{9}$/.test(d)) d = '233' + d.slice(1);
@@ -1251,7 +1252,7 @@ const server = http.createServer(async (req, res) => {
       if (!AUTO_APPROVE) {                                                  // wait for the control room (or HQ) to approve
         const pend = Object.assign({}, kvGet(UNIT_PENDING, {})); pend[kind + ':' + badge] = { kind, cred, requestedAt: Date.now() };
         kvSet(UNIT_PENDING, pend);
-        return json(res, 202, { pending: true, message: 'Registered. Your control room must approve you before you can sign in.' });
+        return json(res, 202, { pending: true, message: 'Registered. ' + approverName(kind).replace(/^your/, 'Your') + ' must approve you before you can sign in. You will not be able to sign in until then.' });
       }
       list.push(cred); kvSet(U.key, list);
       return json(res, 200, { token: unitToken(res, req, kind, cred), cred });
@@ -1262,10 +1263,12 @@ const server = http.createServer(async (req, res) => {
       const name = clean(b.name, 60), k = clientIp(req) + '|' + kind + '|' + name.toLowerCase();
       const wait = lockedOut(k); if (wait) return json(res, 429, { error: 'Too many failed attempts. Try again in ' + Math.ceil(wait / 60) + ' min.' });
       const list = Array.isArray(kvGet(U.key, null)) ? kvGet(U.key, []) : [];
-      const hit = list.filter(x => String(x.name).toLowerCase() === name.toLowerCase()).find(x => unitOk({ kind, cred: x }, name, String(b.password || '')));
+      // a crew member may type the name, the phone number or the badge printed on their login sheet
+      const who = (x) => String(x.name).toLowerCase() === name.toLowerCase() || String(x.badge).toLowerCase() === name.toLowerCase() || (name.replace(/\D/g, '').length >= 9 && normPhone(x.phone) === normPhone(name));
+      const hit = list.filter(who).find(x => unitOk({ kind, cred: x }, x.name, String(b.password || '')));
       if (!hit) {
-        const pend = Object.values(kvGet(UNIT_PENDING, {})).find(x => x.kind === kind && String(x.cred.name).toLowerCase() === name.toLowerCase() && unitOk({ kind, cred: x.cred }, name, String(b.password || '')));
-        if (pend) return json(res, 403, { error: 'Your registration is waiting for approval by your control room.' });
+        const pend = Object.values(kvGet(UNIT_PENDING, {})).find(x => x.kind === kind && who(x.cred) && unitOk({ kind, cred: x.cred }, x.cred.name, String(b.password || '')));
+        if (pend) return json(res, 403, { error: 'Your registration is waiting for approval by ' + approverName(kind) + '.' });
         noteFail(k); return json(res, 401, { error: 'Invalid name or password' });
       }
       fails.delete(k);
@@ -1439,6 +1442,7 @@ const server = http.createServer(async (req, res) => {
         const esc = Object.values(kvGet('registry:agencyEscalations', {}) || {}).filter(e => e.kind === kind && e.open).map(e => ({ key: e.key, sid: e.sid, station: e.station, id: e.ref, type: e.type, priority: e.priority, since: e.since, flaggedAt: e.flaggedAt, waitedSecs: e.waitedSecs || null, reason: e.reason, neighbours: e.neighbours || [], ackBy: e.ackBy || null, ackAt: e.ackAt || null }));
         const bc = kvGet('agency:' + kind + ':broadcast', null);
         return json(res, 200, { kind, label, user: ses.user, name: ses.name, now, refreshesEverySecs: 3, stations: Object.values(by).sort((a, b) => (b.waiting - a.waiting) || (b.active - a.active) || a.name.localeCompare(b.name)), incidents: list.slice(0, 400), escalations: esc, thresholdSecs: AG_ESC().secs, broadcasts: bc && Array.isArray(bc.items) ? bc.items.slice(-5).reverse() : [],
+          pendingSignups: Object.values(kvGet(UNIT_PENDING, {}) || {}).filter(x => x.kind === kind).length,
           unreadChat: Object.entries(kvGet(CHAT_KEY, {}) || {}).filter(([k]) => k.startsWith(kind + ':')).reduce((n, [, t]) => n + t.items.filter(m => m.from === 'crew' && m.at > (t.hqReadAt || 0)).length, 0), totals: { stations: Object.keys(by).length, stationsOnline: Object.values(by).filter(x => x.lcrOnline).length, crewAccounts: crews.length, waiting: list.filter(x => x.status === 'new').length, active: list.filter(x => !['new', 'complete', 'reassigned'].includes(x.status)).length },
           note: 'Counts come from alerts that control rooms forwarded to ' + label.toLowerCase() + ' crews. Crew numbers are accounts, not who is on shift. This screen refreshes about every 3 seconds; it is not a push alert, so keep it open or use the escalation warnings.' });
       }
@@ -1982,7 +1986,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/lcr/pending' && req.method === 'GET') {
       const ses = sessionOf(req); if (!ses || !['lcr', 'hq', ...AGENCY_ROLES].includes(ses.role)) return json(res, 401, { error: 'Sign in as a control room or HQ' });
       if (ses.mc) return json(res, 403, { error: 'Choose your own password first' });
-      const list = Object.values(kvGet(UNIT_PENDING, {})).filter(x => ses.role === 'hq' || (agencyOf(ses) ? x.kind === agencyOf(ses) : x.cred.lcrId === ses.sid)).map(x => ({ kind: x.kind, badge: x.cred.badge, name: x.cred.name, rank: x.cred.rank, phone: x.cred.phone, vehicle: x.cred.vehicle, lcrId: x.cred.lcrId, requestedAt: x.requestedAt }));
+      const list = Object.values(kvGet(UNIT_PENDING, {})).filter(x => ses.role === 'hq' || (agencyOf(ses) ? x.kind === agencyOf(ses) : (x.kind === 'officer' && x.cred.lcrId === ses.sid))).map(x => ({ kind: x.kind, badge: x.cred.badge, name: x.cred.name, rank: x.cred.rank, phone: x.cred.phone, vehicle: x.cred.vehicle, lcrId: x.cred.lcrId, requestedAt: x.requestedAt }));
       return json(res, 200, { pending: list });
     }
     if (p === '/api/lcr/approve' && req.method === 'POST') {
@@ -1991,6 +1995,7 @@ const server = http.createServer(async (req, res) => {
       const b = await readBody(req), id = (agencyOf(ses) || String(b.kind)) + ':' + String(b.badge), pend = Object.assign({}, kvGet(UNIT_PENDING, {})), x = pend[id];
       if (!x) return json(res, 404, { error: 'No such request (it may already have been handled)' });
       if (ses.role === 'lcr' && x.cred.lcrId !== ses.sid) return json(res, 403, { error: 'That crew belongs to another control room' });
+      if (ses.role === 'lcr' && x.kind !== 'officer') return json(res, 403, { error: 'Fire and ambulance sign-ups are approved by their own HQ' });
       delete pend[id]; kvSet(UNIT_PENDING, pend);
       if (b.approve) { const U = UNIT[x.kind], list = Array.isArray(kvGet(U.key, null)) ? kvGet(U.key, []).slice() : []; list.push(x.cred); kvSet(U.key, list); }
       else { const ua = Object.assign({}, kvGet(UNIT_AUTH, {})); delete ua[id]; kvSet(UNIT_AUTH, ua); }

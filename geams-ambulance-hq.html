@@ -84,6 +84,7 @@ h1{font-size:1.15rem;margin:0}h2{font-size:1rem;margin:0 0 8px}h3{font-size:.9re
 
     <section id="t-live">
       <div class="card"><div class="grid" id="stats"></div><p class="note" id="lnote"></p></div>
+      <div class="card warn hide" id="signbox"><h2>⏳ Crew sign-ups waiting for your approval</h2><p id="signtxt"></p><div class="row"><button class="p" id="signgo">Review and approve</button></div><p class="note">These people registered themselves in the crew app. They cannot sign in until you approve them under People.</p></div>
       <div class="card warn hide" id="escbox"><h2>⚠ Not taken yet</h2><div class="scroll"><table class="tbl keep" id="esc"></table></div><p class="note">A warning only tells you; someone must act (phone the station, or move the alert on the Command tab).</p></div>
       <div class="card" id="movebox"><h2>🛰 On the move now</h2><div class="scroll"><table class="tbl keep" id="mv"></table></div><p class="note" id="mvnote"></p></div>
       <div class="card"><h2>Map</h2><div id="map"></div><p class="note">Station dot: red = alerts waiting, amber = jobs under way, green = quiet, grey = control room screen not open. Pins are alert locations.</p></div>
@@ -191,7 +192,7 @@ async function start(){$('login').classList.add('hide');$('app').classList.remov
 async function refresh(){const r=await api('/api/agency/overview');
   if(r.s!==200){$('upd').textContent=r.s===0?'Offline: retrying…':(r.j.error||'Error');if(r.s===0||r.s>=500){$('banner').classList.remove('hide');$('banner').textContent=r.s===0?'No connection to the GEAMS server. What you see below is the last information received, and it may be out of date.':(r.j.error||'Server error')}return}
   $('banner').classList.add('hide');O=r.j;$('who').textContent=(O.name||O.user)+' · '+LABEL+' HQ';$('upd').textContent='Updated '+new Date(O.now).toLocaleTimeString()+' · refreshes every '+O.refreshesEverySecs+' s';
-  renderLive();if(tab==='cmd')renderCmd();$('tabmsg').textContent='Messages'+(O.unreadChat?' ('+O.unreadChat+')':'');if(tab==='msg')loadMsgs(true)}
+  renderLive();if(tab==='cmd')renderCmd();$('tabmsg').textContent='Messages'+(O.unreadChat?' ('+O.unreadChat+')':'');{const n=O.pendingSignups||0;$('signbox').classList.toggle('hide',!n);$('signtxt').textContent=n+(n===1?' crew member has':' crew members have')+' registered and cannot sign in until you approve '+(n===1?'them':'them')+'.';document.querySelector('[data-t=people]').textContent='People'+(n?' ('+n+')':'')}if(tab==='msg')loadMsgs(true)}
 
 function renderLive(){const t=O.totals;
   $('stats').innerHTML=[['Stations online',t.stationsOnline+' / '+t.stations],['Waiting for a crew',t.waiting],['Under way',t.active],['Crew accounts',t.crewAccounts]].map(x=>'<div class="stat"><b>'+esc(x[1])+'</b><span>'+esc(x[0])+'</span></div>').join('');
@@ -277,6 +278,7 @@ async function openThread(badge,name,keep){thread=badge;tname=name||tname;const 
   if(!keep||atEnd)box.scrollTop=box.scrollHeight}
 document.addEventListener('click',e=>{const t=e.target.closest('[data-th]');if(t){const n=t.querySelector('b');openThread(t.dataset.th,n&&n.textContent)}});
 document.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.dataset&&e.target.dataset.th)e.target.click();if(e.key==='Enter'&&e.target.id==='mt')$('msd').click()});
+$('signgo').onclick=()=>document.querySelector('[data-t=people]').click();
 $('mo').onclick=()=>{const o=$('mw').selectedOptions[0];if(o)openThread(o.value,o.textContent.split(' · ')[0])};
 $('msd').onclick=async()=>{$('m-err').textContent='';const v=$('mt').value.trim();if(!v||!thread)return;const r=await api('/api/agency/chat',{method:'POST',body:{badge:thread,message:v}});if(r.s!==200){$('m-err').textContent=r.j.error||'Not sent';return}$('mt').value='';openThread(thread,tname);loadMsgs(true)};
 

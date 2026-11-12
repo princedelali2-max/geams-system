@@ -126,8 +126,9 @@ Field checks (server refuses with HTTP 422 and logs "REFUSED ..."):
   - an officer can change only incidents assigned to them and only their own roster entry
   - HQ orders are stamped with the signed-in HQ user; stations must lie in Ghana and hold no password fields
   - a control room can only change its own entry in shared station maps; values over 3 MB are refused
-Crew approval: new officers, fire and ambulance crews wait until their control room (or HQ) approves them
-  (Officers page). Set GEAMS_AUTO_APPROVE_UNITS=1 to switch approval off (demos only).
+Crew approval: new police officers wait until their control room approves them (Officers page). New fire crews wait for the Fire HQ and
+  new ambulance crews for the Ambulance HQ (People tab; the HQ's Live screen shows a banner and the People tab a count while any are waiting). The national
+  HQ can approve any. A crew member signs in with name, phone number or badge plus password. Set GEAMS_AUTO_APPROVE_UNITS=1 to switch approval off (demos only).
 Phone codes for civilians (SMS gateway needed; without one the app says so and numbers show "unverified"):
   GEAMS_SMS_URL      gateway address; {to}, {to_local} and {message} are filled in
   GEAMS_SMS_METHOD   POST (default) or GET
@@ -323,11 +324,14 @@ PRIVACY NOTICE, CONSENT AND RETENTION
 - Load and soak test: t_load.js. Pilot documents: docs/.
 
 FEEDBACK / DRILLS / OFFLINE QUEUE / LANGUAGES
-- Feedback: all apps, read by HQ. Drills: station "Drill" button. Offline queue: crew apps. Language: civilian app (Profile > Language, and a button on the sign-in screen).
+- Feedback: all apps, read by HQ. Drills: station "Drill" button. Offline queue: crew apps. Language: civilian app (Profile > Language, and a button on the sign-in screen; about 90 phrases in Twi/Hausa/Ewe, fewer in Ga). All translations are unchecked drafts until a native speaker verifies them with docs/translation-sheet*.csv and make-lang.js. Anything not in a word list stays in English.
 
 PILOT SUPPORT: app errors and version banner, staff action log, duplicate alert warning, false-alarm flag/block (all in HQ or the control room), restore by phone number.
 
-NEW IN THIS VERSION: display settings and screen-reader names (all apps), shift handover notes saved on the server, crew roster with self-set availability, staff-app language picker (few words translated), guided tour in every app, make-lang.js to turn filled translation sheets into language files. See GEAMS-DEPLOY-CHECKLIST.txt section K.
+NEW IN THIS VERSION: display settings and screen-reader names (all apps), shift handover notes saved on the server, crew roster with self-set availability, staff-app language picker (Aa button; about 100 button and label words in Twi and Hausa, about 40 in Ewe), guided tour in every app, make-lang.js to turn filled translation sheets into language files. See GEAMS-DEPLOY-CHECKLIST.txt section K.
 
 PILOT READINESS: unanswered-alert warnings to HQ and neighbours, pilot strip and HQ pause switch, honest "sent / not sent" in the civilian app, server save-failure and damaged-file handling, deployment kit (deploy/), bulk crew and control-room setup with printable login sheets, HQ pilot report. See GEAMS-DEPLOY-CHECKLIST.txt section L.
 
+SIGN-IN BOXES: vendor/geams-loginclear.js (loaded on every app) empties the username, password, passphrase, Station ID and recovery boxes whenever a sign-in screen appears and after sign-in, and tells the browser not to remember them. It never clears a box being typed in. Test: tests/t_loginclear.js. A browser's own saved-password manager is the person's setting; this stops the apps from leaving values behind.
+
+CREW POSITION AND MAPS: a fire or ambulance crew is not at the Police control room (LCR) it signs up under; the LCR only decides which alerts the crew receives. After accepting a call the crew's position is this phone's own GPS (never the control room's coordinates); until the first GPS fix there is no position and no map marker. Map pictures from OpenStreetMap (and your own tile server, if set in config.js) are asked for with this site's address as the Referer, because their tile policy returns 403 without one; Esri satellite pictures send none. Test: tests/t_crewposition.js.
