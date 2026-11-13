@@ -2291,6 +2291,13 @@ const GeamsStationSync = (() => {
           if (rec.civilianLat != null && rec.civilianLat !== inc.civilianLat) { inc.civilianLat = rec.civilianLat; moved = true; }
           if (rec.civilianLng != null && rec.civilianLng !== inc.civilianLng) { inc.civilianLng = rec.civilianLng; moved = true; }
           if (moved) StationData.emit('civilian_location_update', inc);
+          // the phone replaced a guessed position with a real GPS fix: the incident itself moves (location text, map, nearest station)
+          if (rec.lat != null && rec.lng != null && (rec.lat !== inc.lat || rec.lng !== inc.lng || rec.location !== inc.location)) {
+            inc.lat = rec.lat; inc.lng = rec.lng; if (rec.location) inc.location = rec.location; inc.locationApprox = !!rec.locationApprox;
+            try { StationMap.refresh(); } catch (e) {}
+            StationData.emit('civilian_location_update', inc);
+          }
+          inc.civilianAccuracyM = rec.civilianAccuracyM; inc.locationApprox = !!rec.locationApprox;
 
           // Mirror the officer's REAL position once the Dispatch App starts
           // pushing it (rec.officerStatus becomes 'en_route'/'arrived').
@@ -7070,6 +7077,44 @@ const StationComms = (() => {
   let liveMessages = {};   // incId -> array of real synced messages (civilian/officer)
   let chatWatchStop = null;
 
+  // ── Every live incident's chat is followed in the background ──
+  // A message from the civilian or the officer raises an unread count on Communications, a toast and a tone, even when the
+  // control room is looking at another incident or another page. Opening that incident's chat marks it as read.
+  const chatWatchers = {};     // incId -> { stop, first, n (messages from others seen), readN }
+  function chatNav() {
+    const el = document.querySelector('.nav-item[data-page="comms"] .nav-label'); if (!el) return;
+    const n = Object.values(chatWatchers).reduce((a, w) => a + Math.max(0, w.n - w.readN), 0);
+    el.innerHTML = 'Communications' + (n ? ' <span class="nav-badge orange" style="margin-left:6px">' + n + '</span>' : '');
+  }
+  const fromOthers = (msgs) => (msgs || []).filter(m => m && m.from !== 'police' && m.from !== 'system');
+  function chatBeep() {
+    try { const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return; const ac = new AC(), o = ac.createOscillator(), g = ac.createGain(); o.connect(g); g.connect(ac.destination); o.frequency.value = 880; g.gain.value = 0.15; if (ac.resume) ac.resume(); o.start(); o.stop(ac.currentTime + 0.4); o.onended = () => { try { ac.close(); } catch (e) {} }; } catch (e) {}
+  }
+  function chatMarkRead(incId) { const w = chatWatchers[incId]; if (w) { w.readN = w.n; chatNav(); } }
+  function chatFollow() {
+    if (!GeamsSync.token || typeof GeamsStationSync === 'undefined') {
+      Object.keys(chatWatchers).forEach(id => { try { chatWatchers[id].stop(); } catch (e) {} delete chatWatchers[id]; }); return;
+    }
+    (StationData.incidents || []).forEach(inc => {
+      if (inc.source !== 'civilian-app' || chatWatchers[inc.id]) return;
+      const w = chatWatchers[inc.id] = { first: true, n: 0, readN: 0, stop: null };
+      w.stop = GeamsStationSync.watchChat(inc.id, (msgs) => {
+        if (!Array.isArray(msgs)) return;
+        liveMessages[inc.id] = msgs;
+        const o = fromOthers(msgs), grew = o.length > w.n, backlog = w.first; w.first = false; w.n = o.length;
+        const open = activeIncId === inc.id && document.getElementById('page-comms')?.classList.contains('active');
+        if (open) { w.readN = w.n; render(); }
+        else if (grew && !backlog) {
+          const m = o[o.length - 1];
+          try { StationApp.showToast('info', '💬 ' + (m.name || 'New message') + ' · ' + inc.id, String(m.text || '').slice(0, 90), 6000); } catch (e) {}
+          chatBeep();
+        }
+        chatNav();
+      });
+    });
+  }
+  setInterval(chatFollow, 2000);
+
   // ── Live civilian video (real WebRTC + snapshot fallback) ──
   let live = null; // { incId, viewer, snapStop, snap, status, kind }
   function stopLive() { if (!live) return; try { live.viewer.stop(); } catch (e) {} try { live.snapStop(); } catch (e) {} live = null; }
@@ -7106,6 +7151,7 @@ const StationComms = (() => {
     if (!el) return;
     const inc = activeIncId ? StationData.incidents.find(i=>i.id===activeIncId) : StationData.incidents[0];
     if (inc && !activeIncId) activeIncId = inc.id;
+    if (inc) chatMarkRead(inc.id);   // the controller is looking at this chat now
 
     el.innerHTML = `
       <div class="section-header">
@@ -7275,16 +7321,7 @@ const StationComms = (() => {
 
   function openChat(incId) {
     activeIncId = incId;
-    if (chatWatchStop) { chatWatchStop(); chatWatchStop = null; }
-    const inc = StationData.incidents.find(i => i.id === incId);
-    if (inc && inc.source === 'civilian-app' && typeof GeamsStationSync !== 'undefined') {
-      if (!liveMessages[incId]) liveMessages[incId] = [];
-      chatWatchStop = GeamsStationSync.watchChat(incId, (msgs) => {
-        if (!Array.isArray(msgs)) return;
-        liveMessages[incId] = msgs;
-        if (activeIncId === incId && document.getElementById('page-comms')?.classList.contains('active')) render();
-      });
-    }
+    chatFollow(); chatMarkRead(incId);   // the background watcher already carries this incident's messages
     if (document.getElementById('page-comms')?.classList.contains('active')) {
       render();
     } else {

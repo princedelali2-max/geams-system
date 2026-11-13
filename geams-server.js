@@ -738,7 +738,7 @@ function parseImport(body, format) {
 
 const MAX_VALUE = 3 * 1024 * 1024;
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-const CIV_FIELDS = ['civilianLat', 'civilianLng', 'trackLocation', 'civilianTracking', 'additionalReporters', 'civilianCancelled', 'cancelReason', 'cancelledAt', 'resolvedAt', 'notes', 'evidencePhoto', 'lastCivilianUpdate'];
+const CIV_FIELDS = ['civilianLat', 'civilianLng', 'trackLocation', 'civilianTracking', 'additionalReporters', 'civilianCancelled', 'cancelReason', 'cancelledAt', 'resolvedAt', 'notes', 'evidencePhoto', 'lastCivilianUpdate', 'lat', 'lng', 'location', 'locationApprox', 'civilianAccuracyM', 'civilianFixAt'];   // the last six let the phone replace a guessed position with its real GPS fix
 const OP_TYPES = ['cordon', 'curfew', 'wanted', 'command', 'mobilise', 'caselink', 'emergency', 'broadcast'];
 const inGhana = (lat, lng) => typeof lat === 'number' && typeof lng === 'number' && lat > 3.5 && lat < 12 && lng > -4 && lng < 2;
 function validateWrite(key, prevV, nextV, ses, m) {
@@ -876,6 +876,8 @@ function validateWrite(key, prevV, nextV, ses, m) {
             if (k === 'status') { if (!(rec.status === 'cancelled' && old.status === 'new')) return { error: 'A civilian can only cancel an alert that no one has taken yet' }; continue; }
             if (k === 'additionalReporters') { const a = old[k] || [], b = rec[k] || []; if (!Array.isArray(b) || b.length < a.length || !same(a, b.slice(0, a.length))) return { error: 'Reporters can only be added' }; continue; }
             if (!CIV_FIELDS.includes(k)) return { error: 'A civilian cannot change "' + k + '" on an alert' };
+            if ((k === 'lat' || k === 'lng') && !inGhana(rec.lat, rec.lng)) return { error: 'The alert position is outside Ghana' };
+            if (k === 'location') rec.location = String(rec.location || '').slice(0, 300);
           }
         }
       } else if (role === 'officer' && old) {

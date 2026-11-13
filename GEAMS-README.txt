@@ -359,3 +359,27 @@ DISPATCH: SOUND FOR AN INCOMING JOB
   and Ambulance crew apps give, and shows the "New Job Available" toast. It also sounds if the officer is busy on another case.
 - Limits: browsers allow sound only after the person has tapped something on the page (signing in counts), phones that are muted or in
   silent mode stay silent, and a locked or closed page cannot play it. Vibration is not available on iPhones. Test: tests/t_dispatchsound.js (7 checks).
+
+MESSAGING ACROSS CONTROL ROOM, DISPATCH AND CIVILIAN (fix)
+- Problem found: Dispatch only listened to an incident's chat once the Comms screen had been opened, so a control-room message
+  reached the Civilian but not the officer (and nothing told the officer). The control room had the same gap: it only listened to the
+  chat of the incident it had open.
+- Now Dispatch follows the chat from the moment a job is loaded, on every screen: unread badge on Comms, a toast, the alert tone and
+  vibration. The control room follows every live incident's chat in the background: unread count on Communications, a toast and a tone.
+  Opening the chat marks it read. Message text is shown as text (never as markup) in Dispatch.
+- The Accept sheet in Dispatch no longer shows a fixed "1.8 km / ~6 min"; it shows the real distance and ETA, or says they appear
+  once the device has a GPS fix.
+- Test: tests/t_messaging.js (14 checks, real Civilian, Dispatch and control-room apps).
+
+INCIDENT POSITION (fix)
+- Problem found: an alert raised before the phone had a GPS fix used the registered/estimated place (the town's station) with no warning,
+  and a later real fix moved only the live pin, not the incident itself. The place text on the alert was the registered home address, not
+  where the person was. The emergency screen showed a fixed "±8m".
+- Now: the alert carries the phone's real GPS position, its real accuracy and a place text built from that GPS fix (the registered address
+  is kept separately). With no fix, an area-only choice, a fix worse than 200 m or older than 10 minutes, the alert says "LOCATION NOT CONFIRMED:
+  ask the caller where they are", the control room and the officer both see a warning, and a fresh GPS reading is requested at once.
+  When a real (or at least twice as accurate) fix arrives, the alert itself moves, the flag clears, and the control room and the officer's job follow.
+  The server lets a phone refine only its own alert, and only inside Ghana. The emergency screen shows the real accuracy.
+- Limits: GEAMS can only be as exact as the phone's GPS; indoors or with location switched off it may be coarse or missing, and it then says so.
+  There is no street-address lookup from the GPS position (needs a geocoder); the text shows the coordinates.
+- Test: tests/t_location.js (17 checks).

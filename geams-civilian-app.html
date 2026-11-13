@@ -1676,12 +1676,20 @@ const Pilot = (() => {
 })();
 document.addEventListener('DOMContentLoaded', () => { Pilot.start(); });
 
+// The place written on an alert. It is the phone's own GPS position, never the registered address (the person may be somewhere else).
+// With no confirmed position it says so plainly, so the control room asks the caller instead of sending a crew to a guess.
+function alertLocationText(em) {
+  const u = CivilianData.user, c = (em.lat != null && em.lng != null) ? em.lat.toFixed(5) + ', ' + em.lng.toFixed(5) : '';
+  if (u.areaOnly) return 'Area only: ' + (u.areaName || '') + ' [AREA ONLY, NO GPS: ask the caller where they are]';
+  if (em.locationApprox) return (em.accuracyM != null ? 'GPS ' + c + ' (only accurate to ' + em.accuracyM + ' m)' : 'No GPS fix yet; last known position ' + c) + ' [LOCATION NOT CONFIRMED: ask the caller where they are]';
+  return 'GPS ' + c + (em.accuracyM != null ? ' (±' + em.accuracyM + ' m)' : '');
+}
 function startEmergencySync(em, notes, skipCreate) {
   let sent;
   if (!skipCreate) {
     sent = SosOutbox.submit({ id: em.id, stationId: em.stationId, stationName: em.stationName, type: em.type, record: {
         id: em.id, type: em.type, priority: 'critical', status: 'new',
-        location: (CivilianData.user.address || '') + (CivilianData.user.areaOnly ? ' [AREA ONLY, NO GPS: ask the caller where they are]' : ''), locationApprox: !!CivilianData.user.areaOnly, lat: em.lat, lng: em.lng,
+        location: alertLocationText(em), homeAddress: CivilianData.user.address || '', locationApprox: !!em.locationApprox, civilianAccuracyM: em.accuracyM != null ? em.accuracyM : null, civilianFixAt: em.fixAt || null, lat: em.lat, lng: em.lng,
         civilianId: CivilianData.user.id, civilianName: CivilianData.user.name,
         civilianPhone: CivilianData.user.phone, civilianLat: em.lat, civilianLng: em.lng,
         createdAt: em.startTime.toISOString(), source: 'civilian-app',
@@ -1917,6 +1925,7 @@ const CivilianData = (() => {
       stationId:   nearestLcr.id,
       distanceM,
       caseId:      newIncId(),
+      locationApprox: fixInfo().approx, accuracyM: fixInfo().accM, fixAt: user.gpsAt || null,
     };
     emergencyTimer = setInterval(() => {
       emergencySeconds++;
@@ -2111,6 +2120,14 @@ const CivilianData = (() => {
   function currentLatLng() {
     return { lat: user.gpsLat || user.lat, lng: user.gpsLng || user.lng };
   }
+  // How far the position can be trusted. 'approx' is true when there has never been a real GPS fix on this phone (the position is then
+  // the registered town or a chosen area), when only an area was chosen, when the fix is coarse (worse than 200 m) or older than 10 minutes.
+  function fixInfo() {
+    const hasGps = user.gpsLat != null && !user.areaOnly;   // a fix saved by an older version has no time or accuracy: still a real fix
+    const accM = user.gpsAcc != null ? Math.round(user.gpsAcc) : null;
+    const ageS = user.gpsAt ? Math.round((Date.now() - user.gpsAt) / 1000) : null;
+    return { hasGps, accM, ageS, areaOnly: !!user.areaOnly, approx: !hasGps || (accM != null && accM > 200) || (ageS != null && ageS > 600) };
+  }
 
   // Used when this civilian's report matches an EXISTING active incident at
   // the same location (see findNearbyActiveIncident) — links this device to
@@ -2145,7 +2162,7 @@ const CivilianData = (() => {
     user, activeEmergency: () => activeEmergency,
     incidentHistory, chatHistory, safeRoutes,
     startEmergency, startLinkedEmergency, stopEmergency, getContactAlerts, contactSmsHref,
-    rnd, fmt, fmtDate, onUpdate, emit, startGPS, stopGPS, isLocationSharingOn, nearestStation, currentLatLng,
+    rnd, fmt, fmtDate, onUpdate, emit, startGPS, stopGPS, isLocationSharingOn, nearestStation, currentLatLng, fixInfo,
     loadAccount, saveAccount, registerUser, haversineM,
     loadPendingReports, addPendingReport, resolvePendingReport, getPendingReports, dismissReport,
     get stationDirectory() { return liveDirectory(); },
@@ -2168,9 +2185,18 @@ CivilianData.onUpdate((event, data) => {
   // on the LCR/Dispatch maps that had already been correctly removed.
   if (!em || em.status === 'resolved' || em.status === 'cancelled') return;
   GeamsArchive.track(em.id, 'civ', data.lat, data.lng);
+  // A real GPS fix replaces a guessed or coarse position on the alert itself (not only the live pin): the alert's place is what
+  // the control room, the nearest-station routing and the crews use. Area-only positions (no accuracy) never overwrite it.
+  const acc = data.acc != null ? Math.round(data.acc) : null;
+  const refine = acc != null && (em.locationApprox || (em.accuracyM != null && acc < em.accuracyM * 0.5));
+  if (refine) { em.lat = data.lat; em.lng = data.lng; em.accuracyM = acc; em.locationApprox = acc > 200; em.fixAt = Date.now(); }
   GeamsSync.mergeShared('lcr:' + em.stationId + ':incidents', {}, (m) => {
     m = m || {};
-    if (m[em.id]) { m[em.id].civilianLat = data.lat; m[em.id].civilianLng = data.lng; }
+    if (m[em.id]) {
+      m[em.id].civilianLat = data.lat; m[em.id].civilianLng = data.lng;
+      if (acc != null) { m[em.id].civilianAccuracyM = acc; m[em.id].civilianFixAt = Date.now(); }
+      if (refine) { m[em.id].lat = data.lat; m[em.id].lng = data.lng; m[em.id].locationApprox = em.locationApprox; m[em.id].location = alertLocationText(em); }
+    }
     return m;
   });
 });
@@ -2405,6 +2431,7 @@ const CivilianApp = (() => {
     const em = CivilianData.startEmergency(type);
     if (GeamsSync.available()) { em.officerName = null; em.officerBadge = null; em.officerETA = null; }
     const sending = startEmergencySync(em, details);
+    if (em.locationApprox || (CivilianData.fixInfo().ageS || 0) > 20) refreshFix();
     // Flash topbar
     const tb = document.getElementById('topbar');
     if (tb) { tb.style.background='rgba(80,0,0,0.5)'; tb.style.borderBottomColor='var(--red)'; }
@@ -2480,6 +2507,7 @@ const CivilianApp = (() => {
     const em = CivilianData.startEmergency(type);
     if (GeamsSync.available()) { em.officerName = null; em.officerBadge = null; em.officerETA = null; }
     const sending = startEmergencySync(em, 'Silent SOS — audio/video recording active');
+    if (em.locationApprox || (CivilianData.fixInfo().ageS || 0) > 20) refreshFix();
     const dot = document.getElementById('logo-dot');
     if (dot) dot.classList.add('emergency');
     const res = await Promise.race([sending, new Promise(r => setTimeout(() => r('pending'), 4000))]);
@@ -3809,6 +3837,25 @@ const CivilianApp = (() => {
     if (CivilianData.isLocationSharingOn()) startRealLocationWatch();
   }
 
+  function onRealFix(pos) {
+          const first = CivilianData.user.gpsLat === undefined;
+          CivilianData.user.gpsLat = pos.coords.latitude;
+          CivilianData.user.gpsLng = pos.coords.longitude;
+          CivilianData.user.gpsAcc = pos.coords.accuracy; CivilianData.user.gpsAt = Date.now();   // how good this fix is, and when it was taken
+          CivilianData.user.areaOnly = false; // a real fix replaces a manually chosen area
+          CivilianData.saveAccount(); // remember the real fix across reloads
+          const { station, distanceM } = CivilianData.nearestStation(pos.coords.latitude, pos.coords.longitude);
+          CivilianData.emit('gps_update', { lat:pos.coords.latitude, lng:pos.coords.longitude, station, distanceM, acc: pos.coords.accuracy });
+          if (first) {
+            setTimeout(()=>showToast('success','GEAMS Connected',
+              `GPS acquired · ${station.name} · ${(distanceM/1000).toFixed(1)} km away`,5000),1200);
+          }
+  }
+  /** One fresh reading right now (used when an alert is raised), so the alert's position is replaced by a real fix as soon as possible. */
+  function refreshFix() {
+    try { if (navigator.geolocation) navigator.geolocation.getCurrentPosition(onRealFix, () => {}, { enableHighAccuracy:true, timeout: 15000, maximumAge: 0 }); } catch (e) {}
+  }
+
   /** The ONLY source of this civilian's live position — real device GPS via
    *  navigator.geolocation.watchPosition. Continuously tracks so SOS routing
    *  and the "nearest station" indicator stay correct as the civilian moves
@@ -3819,19 +3866,7 @@ const CivilianApp = (() => {
     if (geoWatchId !== null) return; // already running
     if (navigator.geolocation) {
       geoWatchId = navigator.geolocation.watchPosition(
-        pos => {
-          const first = CivilianData.user.gpsLat === undefined;
-          CivilianData.user.gpsLat = pos.coords.latitude;
-          CivilianData.user.gpsLng = pos.coords.longitude;
-          CivilianData.user.areaOnly = false; // a real fix replaces a manually chosen area
-          CivilianData.saveAccount(); // remember the real fix across reloads
-          const { station, distanceM } = CivilianData.nearestStation(pos.coords.latitude, pos.coords.longitude);
-          CivilianData.emit('gps_update', { lat:pos.coords.latitude, lng:pos.coords.longitude, station, distanceM });
-          if (first) {
-            setTimeout(()=>showToast('success','GEAMS Connected',
-              `GPS acquired · ${station.name} · ${(distanceM/1000).toFixed(1)} km away`,5000),1200);
-          }
-        },
+        onRealFix,
         () => {
           // Real GPS denied/unavailable this time. If we already know where this
           // civilian is (a previous real fix or a manually simulated jurisdiction),
@@ -3850,7 +3885,7 @@ const CivilianApp = (() => {
             simulateLocation();
           },1200);
         },
-        { enableHighAccuracy:true, timeout: 8000, maximumAge: 15000 }
+        { enableHighAccuracy:true, timeout: 20000, maximumAge: 5000 }
       );
     } else if (CivilianData.user.gpsLat !== undefined) {
       const { lat, lng } = CivilianData.currentLatLng();
@@ -3957,7 +3992,7 @@ const CivilianApp = (() => {
     logout, confirmLogout,
     simulateLocation, applySimulatedLocation, alertContacts,
     get trackingActive(){ return trackingActive; },
-    boot, enterApp, pauseLocationWatch, resumeLocationWatch
+    boot, enterApp, pauseLocationWatch, resumeLocationWatch, refreshFix
   };
 })();
 
@@ -4460,8 +4495,8 @@ const ScreenEmergency = (() => {
       <!-- GPS bar -->
       <div class="gps-bar">
         <div style="width:7px;height:7px;border-radius:50%;background:var(--primary);box-shadow:0 0 6px var(--primary);animation:blink 2s infinite;flex-shrink:0"></div>
-        <div class="gps-coords" id="gps-coords">GPS: ${CivilianData.user.lat.toFixed(5)}, ${CivilianData.user.lng.toFixed(5)}</div>
-        <div class="gps-accuracy">±8m · Broadcasting</div>
+        <div class="gps-coords" id="gps-coords">${(() => { const ll = CivilianData.currentLatLng(); return 'GPS: ' + (+ll.lat).toFixed(5) + ', ' + (+ll.lng).toFixed(5); })()}</div>
+        <div class="gps-accuracy" id="gps-acc">${(() => { const fi = CivilianData.fixInfo(); return fi.areaOnly ? 'Area only, not exact' : (!fi.hasGps ? 'No GPS fix yet, position approximate' : '±' + (fi.accM != null ? fi.accM : '?') + ' m · Broadcasting'); })()}</div>
       </div>
 
       <!-- Officer ETA card -->
@@ -4520,6 +4555,8 @@ const ScreenEmergency = (() => {
       if (event === 'gps_update') {
         const coordEl = document.getElementById('gps-coords');
         if (coordEl) coordEl.textContent = `GPS: ${data.lat.toFixed(5)}, ${data.lng.toFixed(5)}`;
+        const accEl = document.getElementById('gps-acc');
+        if (accEl && data.acc != null) accEl.textContent = '±' + Math.round(data.acc) + ' m · Broadcasting';
         if (emMap && civMarker) {
           try {
             civMarker.setLatLng([data.lat, data.lng]);

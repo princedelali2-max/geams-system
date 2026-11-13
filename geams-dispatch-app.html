@@ -720,6 +720,7 @@ body{background:var(--bg-void);color:var(--text-bright);font-family:var(--font-u
       <div class="side-tab" data-screen="comms" onclick="DispatchApp.navigate('comms')">
         <div class="side-tab-icon">💬</div>
         <div class="side-tab-label">Comms</div>
+        <div class="side-badge" id="side-badge-comms">0</div>
       </div>
       <div class="side-tab" data-screen="evidence" onclick="DispatchApp.navigate('evidence')">
         <div class="side-tab-icon">📎</div>
@@ -793,6 +794,7 @@ body{background:var(--bg-void);color:var(--text-bright);font-family:var(--font-u
     </div>
     <div class="nav-tab" data-screen="comms"    onclick="DispatchApp.navigate('comms')">
       <div class="nav-icon">💬</div><div class="nav-label">Comms</div>
+      <div class="nav-badge" id="badge-comms" style="display:none">0</div>
     </div>
     <div class="nav-tab" data-screen="evidence" onclick="DispatchApp.navigate('evidence')">
       <div class="nav-icon">📎</div><div class="nav-label">Evidence</div>
@@ -2010,6 +2012,15 @@ const GeamsDispatchSync = (() => {
         if (rec.source !== 'civilian-app' && rec.source !== 'sms' && rec.source !== 'e112') return;   // 'sms' = a text message the server turned into an incident; handled like an app alert
         if (rec.officerStatus !== 'assigned') return;                 // not (yet) assigned to anyone
         if (rec.officerName !== DispatchData.officer.name) return;    // assigned to a different officer
+        { // a job already loaded or waiting follows the civilian's refined position (a real GPS fix replacing a guessed one)
+          const ex = DispatchData.currentJob.id === rec.id ? DispatchData.currentJob : DispatchData.jobQueue.find(j => j.id === rec.id);
+          if (ex && rec.lat != null && rec.lng != null && (ex.lat !== rec.lat || ex.lng !== rec.lng || !!ex.locationApprox !== !!rec.locationApprox)) {
+            ex.lat = rec.lat; ex.lng = rec.lng; if (rec.location) { ex.location = rec.location; ex.address = rec.location; }
+            ex.locationApprox = !!rec.locationApprox; ex.civilianAccuracyM = rec.civilianAccuracyM;
+            if (rec.civilianLat != null) { ex.civilianLat = rec.civilianLat; ex.civilianLng = rec.civilianLng; }
+            try { if (ex === DispatchData.currentJob && document.getElementById('screen-job')?.classList.contains('active')) ScreenJob.render(); } catch (e) {}
+          }
+        }
         if (injected.has(rec.id)) return;                             // already surfaced
         if (DispatchData.jobQueue.some(j => j.id === rec.id)) return;
         if (DispatchData.currentJob.id === rec.id) return;
@@ -2019,7 +2030,7 @@ const GeamsDispatchSync = (() => {
           location: rec.location, address: rec.location,
           lat: rec.lat, lng: rec.lng,
           civilian: rec.civilianName, civilianPhone: rec.civilianPhone, civilianVerified: !!rec.civilianVerified, _civilianId: rec.civilianId || null,
-          civilianLat: rec.civilianLat, civilianLng: rec.civilianLng,
+          civilianLat: rec.civilianLat, civilianLng: rec.civilianLng, locationApprox: !!rec.locationApprox, civilianAccuracyM: rec.civilianAccuracyM,
           status: 'pending', receivedAt: new Date(),
           controlRoomId: DispatchData.officer.controlRoomId,
           controlRoomName: DispatchData.officer.controlRoomName,
@@ -2210,6 +2221,9 @@ const DispatchApp = (() => {
         if (rec.civilianLat == null || rec.civilianLng == null) return;
         DispatchData.currentJob.civilianLat = rec.civilianLat;
         DispatchData.currentJob.civilianLng = rec.civilianLng;
+        if (rec.lat != null && rec.lng != null) { DispatchData.currentJob.lat = rec.lat; DispatchData.currentJob.lng = rec.lng; }
+        if (rec.location) { DispatchData.currentJob.location = rec.location; DispatchData.currentJob.address = rec.location; }
+        DispatchData.currentJob.locationApprox = !!rec.locationApprox; DispatchData.currentJob.civilianAccuracyM = rec.civilianAccuracyM;
         if (typeof DispatchMap !== 'undefined') DispatchMap.updateCivilianPosition([rec.civilianLat, rec.civilianLng]);
         syncSceneFromMap();
       }, 2000);
@@ -2450,7 +2464,7 @@ const DispatchApp = (() => {
       <div class="form-group"><label class="form-label">Notes to Station</label>
         <textarea class="form-textarea" placeholder="Optional initial observations..."></textarea></div>
       <div style="background:var(--bg-deep);border-radius:var(--r-md);padding:10px 12px;margin-top:4px;font-size:0.78rem">
-        Distance: <span style="color:var(--primary)">1.8 km</span> &nbsp;·&nbsp; ETA: <span style="color:var(--primary)">~6 min</span>
+        ${(()=>{ const eta=DispatchData.etaMinutes(); return eta==null?'Distance and ETA appear once this device has a GPS fix.':'Distance: <span style="color:var(--primary)">'+(DispatchData.distToJobM()/1000).toFixed(1)+' km</span> &nbsp;·&nbsp; ETA: <span style="color:var(--primary)">~'+eta+' min</span>'; })()}
       </div>`,
       `<button class="btn btn-ghost" onclick="DispatchApp.closeSheet()">Cancel</button>
        <button class="btn btn-success btn-full" onclick="DispatchApp.confirmAccept()">✅ Accept &amp; Navigate</button>`);
@@ -3956,6 +3970,47 @@ const DispatchApp = (() => {
     try{ const AC=window.AudioContext||window.webkitAudioContext; if(!AC) return; const ac=new AC(), o=ac.createOscillator(), g=ac.createGain(); o.connect(g); g.connect(ac.destination); o.frequency.value=880; g.gain.value=0.15; if(ac.resume) ac.resume(); o.start(); o.stop(ac.currentTime+0.5); o.onended=()=>{ try{ ac.close(); }catch(e){} }; }catch(e){}
   }
 
+  // ── CHAT LINK ──
+  // The incident chat (control room, civilian, officer) is followed from the moment a job is loaded, on every screen, not only while
+  // the Comms screen is open. A message from the control room or the civilian raises the Comms badge, a toast and the alert tone.
+  let chatStop=null, chatFor=null, chatFirst=true, chatUnread=0;
+  const chatEsc=(t)=>String(t==null?'':t).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  function chatBadges(){
+    const b=document.getElementById('badge-comms'); if(b){ b.textContent=chatUnread>9?'9+':chatUnread; b.style.display=chatUnread>0?'flex':'none'; }
+    const sb=document.getElementById('side-badge-comms'); if(sb){ sb.textContent=chatUnread>9?'9+':chatUnread; sb.className='side-badge'+(chatUnread>0?' show':''); }
+  }
+  function chatRead(){ chatUnread=0; chatBadges(); }
+  function chatIngest(msgs){
+    if(!Array.isArray(msgs)) return;
+    const backlog=chatFirst; chatFirst=false;
+    const fresh=[];
+    msgs.forEach(m=>{
+      if(!m||m.from==='officer') return;                                   // our own message is shown locally when sent
+      if(DispatchData.chatHistory.some(h=>h.ts===m.ts&&h.from===m.from&&h.text===m.text)) return;
+      DispatchData.chatHistory.push(m); fresh.push(m);
+    });
+    if(!fresh.length) return;
+    const cm=document.getElementById('chat-messages');
+    if(currentScreen==='comms'&&cm){
+      fresh.forEach(m=>{ const div=document.createElement('div'); div.className='chat-bubble '+(m.from==='system'?'system':'station');
+        div.innerHTML=m.from==='system'?`${chatEsc(m.text)} <span style="color:var(--text-ghost)">${chatEsc(m.time)}</span>`
+          :`<div style="font-size:0.62rem;font-weight:700;margin-bottom:3px;opacity:0.7">${chatEsc(m.name)}</div>${chatEsc(m.text)}<div class="chat-meta">${chatEsc(m.time)}</div>`;
+        cm.appendChild(div); });
+      cm.scrollTop=cm.scrollHeight; return;
+    }
+    const real=fresh.filter(m=>m.from!=='system');
+    chatUnread+=real.length; chatBadges();
+    if(!backlog&&real.length){ const m=real[real.length-1]; showToast('info','💬 '+(m.name||'New message'),String(m.text||'').slice(0,90)); alertOfficer(); }
+  }
+  function chatTick(){
+    const j=DispatchData.currentJob;
+    const want=(j&&j._syncIncId&&j._syncSource==='civilian-app'&&j.status!=='idle'&&j.status!=='case_closed')?j._syncIncId:null;
+    if(want===chatFor) return;
+    if(chatStop){ try{chatStop();}catch(e){} chatStop=null; }
+    chatFor=want; chatFirst=true; chatUnread=0; chatBadges(); DispatchData.chatHistory.length=0;   // each incident has its own conversation
+    if(want) chatStop=GeamsDispatchSync.watchChat(want,chatIngest);
+  }
+
   // ── LIVE ──
   function bindLive(){
     DispatchData.onRoute(()=>{ if(typeof DispatchMap!=='undefined') DispatchMap.refreshRouteLines(); pushNavState(); });
@@ -4236,6 +4291,7 @@ const DispatchApp = (() => {
     // GeamsDispatchSync — see confirmAccept/doLogin.
     if (!GeamsSync.available()) { DispatchData.startSim(); }
     bindLive();updateBadges();
+    setInterval(chatTick,1000);
     startOfficerTracking();
     const off=DispatchData.officer;
     const tnEl=document.querySelector('.topbar-name'); if(tnEl)tnEl.textContent=off.name;
@@ -4247,7 +4303,7 @@ const DispatchApp = (() => {
   return{navigate,showToast,openSheet,closeSheet,updateBadges,setState,updateActivityPanel,
     doLogin,forgotPassword,contactSupport,performLogout,
     showSignupForm,showLoginForm,doSignup,
-    pullNextJob,acceptJob,confirmAccept,rejectJob,confirmReject,
+    pullNextJob,acceptJob,confirmAccept,rejectJob,confirmReject,chatRead,
     arriveOnScene,confirmArrival,secureScene,confirmSecure,closeCase,confirmCloseCase,
     officerSOS,activateSOS,requestBackup,confirmBackup,requestForensics,confirmForensics,
     declareUnsafe,confirmUnsafe,runBiometricScan,verifyCivilian,captureVerifyCivilian,onScanTypeChange,startScanCamera,stopScanCamera,
@@ -4611,6 +4667,7 @@ const ScreenJob = (() => {
           <div class="job-id">${job.id} · ${new Date(job.receivedAt).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}</div>
           <div class="job-type">${job.type}</div>
           <div class="job-loc">📍 ${job.address}</div>
+          ${job.locationApprox?'<div style="margin-top:6px;padding:6px 10px;border-radius:8px;background:rgba(245,158,11,.15);color:#f59e0b;font-size:0.74rem;font-weight:600">⚠ This position is not confirmed'+(job.civilianAccuracyM!=null?' (accurate to '+job.civilianAccuracyM+' m)':'')+'. Ask the civilian where they are before you rely on it.</div>':''}
         </div>
       </div>
       <div class="job-badges">
@@ -4808,33 +4865,11 @@ const ScreenMap = (() => {
 
 /* ── COMMS SCREEN ── */
 const ScreenComms = (() => {
-  let chatWatchStop = null, chatWatchedId = null;
   function render(){
     const el=document.getElementById('screen-comms');
     if(!el)return;
     const job=DispatchData.currentJob;
-    if (job._syncSource === 'civilian-app' && chatWatchedId !== job._syncIncId) {
-      if (chatWatchStop) chatWatchStop();
-      chatWatchedId = job._syncIncId;
-      chatWatchStop = GeamsDispatchSync.watchChat(job._syncIncId, (msgs) => {
-        if (!Array.isArray(msgs)) return;
-        msgs.forEach(m => {
-          if (m.from === 'officer') return; // already shown locally when sent
-          const exists = DispatchData.chatHistory.some(h => h.ts === m.ts);
-          if (exists) return;
-          DispatchData.chatHistory.push(m);
-          const cm = document.getElementById('chat-messages');
-          if (cm) {
-            const div = document.createElement('div');
-            div.className = 'chat-bubble ' + (m.from === 'system' ? 'system' : 'station');
-            div.innerHTML = m.from === 'system'
-              ? `${m.text} <span style="color:var(--text-ghost)">${m.time}</span>`
-              : `<div style="font-size:0.62rem;font-weight:700;margin-bottom:3px;opacity:0.7">${m.name}</div>${m.text}<div class="chat-meta">${m.time}</div>`;
-            cm.appendChild(div); cm.scrollTop = cm.scrollHeight;
-          }
-        });
-      });
-    }
+    DispatchApp.chatRead();   // the officer is looking at the chat now
     el.innerHTML=`
       <div class="screen-header">
         <div class="screen-title">Communications</div>
@@ -4854,10 +4889,11 @@ const ScreenComms = (() => {
         <div class="card-header"><span>💬</span><span class="card-title">Live Chat — ${job.id}</span></div>
         <div class="chat-messages" id="chat-messages" style="max-height:200px;overflow-y:auto">
           ${DispatchData.chatHistory.map(m=>{
-            if(m.from==='system')return`<div class="chat-bubble system">${m.text} <span style="color:var(--text-ghost)">${m.time}</span></div>`;
+            const e=(t)=>String(t==null?'':t).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+            if(m.from==='system')return`<div class="chat-bubble system">${e(m.text)} <span style="color:var(--text-ghost)">${e(m.time)}</span></div>`;
             return`<div class="chat-bubble ${m.from==='officer'?'officer':'station'}">
-              <div style="font-size:0.62rem;font-weight:700;margin-bottom:3px;opacity:0.7">${m.name}</div>
-              ${m.text}<div class="chat-meta">${m.time}</div></div>`;
+              <div style="font-size:0.62rem;font-weight:700;margin-bottom:3px;opacity:0.7">${e(m.name)}</div>
+              ${e(m.text)}<div class="chat-meta">${e(m.time)}</div></div>`;
           }).join('')}
         </div>
         <div style="display:flex;gap:8px;padding:10px 12px;border-top:1px solid var(--border-dim)">
