@@ -2168,6 +2168,7 @@ const GeamsReplay = (() => {
         const b = badge();
         if (online) { b.style.color = '#9ae6b4'; b.textContent = st.err ? 'Backend: online · device count unavailable (' + st.err + ')' : 'Backend: online · ' + st.devices + ' device(s) connected'; }
         else { b.style.color = '#fbbf24'; b.textContent = 'Backend: unreachable — retrying…'; }
+        window.__geamsServerDown = !online; try { window.__geamsLinkBanner && window.__geamsLinkBanner(!online); } catch (e) {}
       });
       return;
     }
@@ -2546,8 +2547,22 @@ const StationAuth = (() => {
     STATION_JCELLS = res.cells; STATION_JOVERLAPS = res.overlaps;
   }
   // ── LCRs created by HQ (shared 'registry:stations') join the directory ──
+  // An unreachable server must never look like "HQ disabled this control room". getShared() answers
+  // with its fallback ({}) when the request fails, so an empty registry, or a server that is currently
+  // down, is treated as "no answer" and changes nothing (the session stays signed in).
+  function showLinkBanner(down) {
+    let b = document.getElementById('link-banner');
+    if (!down) { if (b) b.remove(); return; }
+    if (!b) {
+      b = document.createElement('div'); b.id = 'link-banner'; b.setAttribute('role', 'status');
+      b.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:99999;background:#92400e;color:#fff;font:600 13px system-ui,sans-serif;padding:6px 12px;text-align:center';
+      b.textContent = 'GEAMS server not reachable. You are still signed in; retrying automatically. Changes will sync when the connection returns.';
+      document.body.appendChild(b);
+    }
+  }
+  window.__geamsLinkBanner = showLinkBanner;
   function applyDynamicStations(map) {
-    if (!map) return;
+    if (!map || window.__geamsServerDown || Object.keys(map).length === 0) return;
     Object.values(map).forEach(r => {
       if (!r || !r.id) return;
       let e = STATION_DIRECTORY.find(x => x.id === r.id);

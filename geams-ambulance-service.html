@@ -920,18 +920,21 @@ const AmbulanceApp = (() => {
   function dismissIncoming() { const el = document.getElementById('incoming-call'); if (el) { el.style.display = 'none'; el.innerHTML = ''; } navigate('queue'); }
 
   /* ── CLOSE A CALL: the crew can resolve or close a call at any stage, saying why; the HQ sees the reason ── */
-  function showCloseSheet() {
+  function showCloseSheet(mode) {
     const job = AmbulanceData.currentJob, el = document.getElementById('close-sheet'); if (!job || !el) return;
-    el.innerHTML = `<div class="cs-card"><h2 style="font-size:1.05rem">Close this call</h2><div style="font-size:.78rem;color:var(--text-muted);margin-top:4px">${escH(job.type)} · ${escH(job.location)}. The HQ is told the reason.</div>
-      <button class="btn btn-success btn-full" onclick="AmbulanceApp.closeCall('resolved')">✅ Resolved</button>
-      <button class="btn btn-warning btn-full" onclick="AmbulanceApp.closeCall('false_alarm')">🔕 False alarm</button>
-      <button class="btn btn-warning btn-full" onclick="AmbulanceApp.closeCall('cannot_reach')">🚫 Cannot reach / cannot attend</button>
-      <button class="btn btn-warning btn-full" onclick="AmbulanceApp.closeCall('cancelled')">✖ Cancelled by the caller or HQ</button>
-      <button class="btn btn-full" onclick="AmbulanceApp.hideCloseSheet()">Back</button></div>`;
+    const finish = mode === 'finish', B = (r, cls, label) => `<button class="btn ${cls} btn-full" onclick="AmbulanceApp.closeCall('${r}')">${label}</button>`;
+    el.innerHTML = `<div class="cs-card"><h2 style="font-size:1.05rem">${finish ? 'How did this call end?' : 'Close this call'}</h2><div style="font-size:.78rem;color:var(--text-muted);margin-top:4px">${escH(job.type)} · ${escH(job.location)}. Your answer goes straight to the HQ.</div>
+      <input id="cs-note" maxlength="200" placeholder="Short note for the HQ (optional)" aria-label="Note for the HQ" style="width:100%;margin-top:10px;padding:12px;border-radius:10px;border:1px solid var(--border-mid);background:var(--bg-base);color:var(--text);font-size:.9rem">
+      ${B('resolved', 'btn-success', '✅ Resolved')}
+      ${finish ? B('handed_over', 'btn-success', job.transfer ? '🏥 Patient handed over' : '🤝 Handed over to another service') : ''}
+      ${finish ? B('not_resolved', 'btn-warning', '⚠️ Not resolved — needs follow-up') : ''}
+      ${B('false_alarm', 'btn-warning', '🔕 False alarm')}
+      ${finish ? '' : B('cannot_reach', 'btn-warning', '🚫 Cannot reach / cannot attend') + B('cancelled', 'btn-warning', '✖ Cancelled by the caller or HQ')}
+      <button class="btn btn-full" style="margin-top:8px" onclick="AmbulanceApp.hideCloseSheet()">Back</button></div>`;
     el.style.display = 'flex';
   }
   function hideCloseSheet() { const el = document.getElementById('close-sheet'); if (el) { el.style.display = 'none'; el.innerHTML = ''; } }
-  function closeCall(reason) { hideCloseSheet(); setStatus('complete', { closeReason: reason, closedByCrew: true }); }
+  function closeCall(reason) { const n = document.getElementById('cs-note'), note = n ? n.value.trim().slice(0, 200) : ''; hideCloseSheet(); setStatus('complete', { closeReason: reason, closedByCrew: true, closeNote: note }); }
   /* the HQ closed a call this crew is on, or took it out of the waiting list */
   function onRecordGone(rec) {
     const j = AmbulanceData.currentJob;
@@ -1326,7 +1329,7 @@ const AmbulanceApp = (() => {
         ${job.status === 'accepted' ? `<button class="btn btn-primary btn-full" onclick="AmbulanceApp.setStatus('en_route')">🚨 Depart — En Route</button>` : ''}
         ${job.status === 'en_route' ? `<button class="btn btn-warning btn-full" onclick="AmbulanceApp.setStatus('on_scene')">${job.transfer ? '📍 Arrived at ' + (job.leg === 'to_destination' ? job.transfer.to.name : job.transfer.from.name) : '📍 Mark On Scene'}</button>` : ''}
         ${job.status === 'on_scene' && job.transfer && job.leg !== 'to_destination' ? `<button class="btn btn-primary btn-full" onclick="AmbulanceApp.loadPatient()">🛏 Patient on board — depart to ${job.transfer.to.name}</button>` : ''}
-        ${job.status === 'on_scene' && (!job.transfer || job.leg === 'to_destination') ? `<button class="btn btn-success btn-full" onclick="AmbulanceApp.setStatus('complete')">${job.transfer ? '✅ Patient handed over — Complete' : '✅ Complete Call'}</button>` : ''}
+        ${job.status === 'on_scene' && (!job.transfer || job.leg === 'to_destination') ? `<button class="btn btn-success btn-full" onclick="AmbulanceApp.showCloseSheet('finish')">${job.transfer ? '✅ Patient handed over — Complete' : '✅ Complete Call'}</button>` : ''}
       </div>`;
     setTimeout(initMap, 60);
   }

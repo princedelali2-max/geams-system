@@ -3949,6 +3949,13 @@ const DispatchApp = (() => {
     if(item){item.checked=!item.checked;ScreenJob.render();}
   }
 
+  // Same alert the Fire and Ambulance crew apps give: vibrate, then one 880 Hz tone. Browsers only allow sound after the person
+  // has tapped something on the page (signing in counts); if sound is blocked, the vibration and the toast still happen.
+  function alertOfficer(){
+    try{ if(navigator.vibrate) navigator.vibrate([400,150,400,150,400]); }catch(e){}
+    try{ const AC=window.AudioContext||window.webkitAudioContext; if(!AC) return; const ac=new AC(), o=ac.createOscillator(), g=ac.createGain(); o.connect(g); g.connect(ac.destination); o.frequency.value=880; g.gain.value=0.15; if(ac.resume) ac.resume(); o.start(); o.stop(ac.currentTime+0.5); o.onended=()=>{ try{ ac.close(); }catch(e){} }; }catch(e){}
+  }
+
   // ── LIVE ──
   function bindLive(){
     DispatchData.onRoute(()=>{ if(typeof DispatchMap!=='undefined') DispatchMap.refreshRouteLines(); pushNavState(); });
@@ -3963,6 +3970,7 @@ const DispatchApp = (() => {
         if(data.controlRoomId !== DispatchData.officer.controlRoomId) return;
         if(!data._syncSource && !DispatchData.isOwnJurisdiction(data.lat, data.lng)) return;
 
+        alertOfficer();   // sound + vibration for every job the control room assigns to this officer (also while busy)
         const active = jobState !== 'idle' && jobState !== 'case_closed';
         if(active){
           // Own-jurisdiction job but officer is busy — queue silently

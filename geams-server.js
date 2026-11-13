@@ -1434,7 +1434,7 @@ const server = http.createServer(async (req, res) => {
           if (s === 'new') { o.waiting++; o.oldestWaitingSecs = Math.max(o.oldestWaitingSecs, Math.round((now - t) / 1000)); }
           else if (s !== 'complete' && s !== 'reassigned') o.active++;
           else if (s === 'complete' && ((r.srv && r.srv.completed) || t) >= day) o.doneToday++;
-          if (s !== 'complete' && s !== 'reassigned' ? true : t >= now - 6 * 3600000) list.push({ sid, station: o.name, id, type: String(r.type || '').slice(0, 40), priority: String(r.priority || '').slice(0, 12), location: String(r.location || '').slice(0, 120), lat: typeof r.lat === 'number' ? r.lat : null, lng: typeof r.lng === 'number' ? r.lng : null, status: s, unit: r.unitName || null, unitBadge: r.unitBadge || null, eta: r.unitETA || null, forwardedAt: t, acceptedAt: (r.srv && r.srv.accepted) || null, reassignedTo: r.reassignedTo || null, reassignedFrom: r.reassignedFrom || null, closeReason: r.closeReason || null, closedBy: r.closedByHq ? 'HQ' : r.closedByCrew ? 'crew' : null, waitedSecs: s === 'new' ? Math.round((now - t) / 1000) : null,
+          if (s !== 'complete' && s !== 'reassigned' ? true : ((r.srv && r.srv.completed) || t) >= now - 6 * 3600000) list.push({ sid, station: o.name, id, type: String(r.type || '').slice(0, 40), priority: String(r.priority || '').slice(0, 12), location: String(r.location || '').slice(0, 120), lat: typeof r.lat === 'number' ? r.lat : null, lng: typeof r.lng === 'number' ? r.lng : null, status: s, unit: r.unitName || null, unitBadge: r.unitBadge || null, eta: r.unitETA || null, forwardedAt: t, acceptedAt: (r.srv && r.srv.accepted) || null, reassignedTo: r.reassignedTo || null, reassignedFrom: r.reassignedFrom || null, closeNote: r.closeNote ? String(r.closeNote).slice(0, 200) : null, completedAt: (r.srv && r.srv.completed) || null, closeReason: r.closeReason || null, closedBy: r.closedByHq ? 'HQ' : r.closedByCrew ? 'crew' : null, waitedSecs: s === 'new' ? Math.round((now - t) / 1000) : null,
             unitLat: typeof r.unitLat === 'number' ? r.unitLat : null, unitLng: typeof r.unitLng === 'number' ? r.unitLng : null, etaSource: r.etaSource || null, etaTarget: r.etaTarget || null, etaKm: typeof r.etaKm === 'number' ? r.etaKm : null, leg: r.leg || null, posAt: (r.srv && r.srv.posAt) || null, posAgeSecs: (r.srv && r.srv.posAt) ? Math.round((now - r.srv.posAt) / 1000) : null, positionStale: s === 'en_route' && (!(r.srv && r.srv.posAt) || now - r.srv.posAt > 60000), departedAt: (r.srv && r.srv.departed) || null, pickedUpAt: (r.srv && r.srv.pickedUp) || null,
             transfer: isObj(r.transfer) ? { from: r.transfer.from, to: r.transfer.to, patient: r.transfer.patient || '', needs: r.transfer.needs || '', contact: r.transfer.contact || '' } : null });
         }
@@ -1521,6 +1521,24 @@ const server = http.createServer(async (req, res) => {
           stations: Object.values(per).map(o => ({ sid: o.sid, station: o.station, forwarded: o.n, secondsToAcceptMedian: median(o.accepted), measuredAccept: o.accepted.length })).sort((a, b) => b.forwarded - a.forwarded),
           crewAccounts: (kvGet(U.key, []) || []).length,
           notMeasured: ['Alerts that no control room forwarded to ' + label.toLowerCase() + ' crews (for example a call handled by phone only).', 'Whether help arrived in time or the outcome for the patient or property: GEAMS records only what staff tap.', 'Times before the server stamped them (older records show no figures instead of a guess).'] });
+      }
+      if (p === '/api/agency/activity' && req.method === 'GET') {              // automatic log: built from what the crews and the server stamped on each alert, nothing typed by anyone
+        const reg = kvGet('registry:stations', {}) || {}, since = Date.now() - 48 * 3600000, ev = [];
+        const OUTL = { resolved: 'Resolved', handed_over: 'Handed over', not_resolved: 'NOT resolved - follow up', false_alarm: 'False alarm', cannot_reach: 'Could not attend', cancelled: 'Cancelled', duplicate: 'Duplicate' };
+        for (const { sid, id, r } of incs()) {
+          const sv = isObj(r.srv) ? r.srv : {}, base = { sid, station: (reg[sid] && reg[sid].name) || sid, id, type: String(r.type || '').slice(0, 40), location: String(r.location || '').slice(0, 80) }, unit = String(r.unitName || '').slice(0, 60);
+          const add = (at, event, by, detail) => { if (at && at >= since) ev.push(Object.assign({}, base, { at, event, by: by || 'system', detail: detail || '' })); };
+          add(sv.forwarded || r.forwardedAt, r.reassignedFrom ? 'Alert moved here from another station' : 'Alert received', r.forwardedBy || 'control room', r.priority ? 'priority ' + r.priority : '');
+          add(sv.accepted, 'Accepted by crew', unit, '');
+          add(sv.departed, 'Crew en route', unit, r.transfer ? 'to ' + (r.transfer.from && r.transfer.from.name || 'pickup') : '');
+          add(sv.pickedUp, 'Patient on board', unit, r.transfer ? 'heading to ' + (r.transfer.to && r.transfer.to.name || 'destination') : '');
+          add(sv.atDestination, 'Arrived at destination', unit, r.transfer && r.transfer.to ? r.transfer.to.name : '');
+          add(sv.onScene, 'Crew on scene', unit, '');
+          add(sv.completed, r.closedByHq ? 'Closed by HQ' : r.closedByCrew ? 'Crew reported call ended' : 'Call completed', r.closedByHq ? String(r.closedBy || 'HQ') : unit, (OUTL[r.closeReason] || (r.closeReason ? String(r.closeReason).slice(0, 30) : 'no outcome given')) + (r.closeNote ? ' - ' + String(r.closeNote).slice(0, 200) : ''));
+          if (r.reassignedFrom) add(sv.forwarded || r.forwardedAt, 'Reassigned by HQ', 'HQ', 'from ' + ((reg[r.reassignedFrom] && reg[r.reassignedFrom].name) || r.reassignedFrom));
+        }
+        ev.sort((x, y) => y.at - x.at);
+        return json(res, 200, { total: ev.length, items: ev.slice(0, Math.min(+u.searchParams.get('limit') || 300, 1000)), note: 'Built automatically from the times the server stamped on each alert; covers the last 48 hours.' });
       }
       if (p === '/api/agency/log' && req.method === 'GET') {
         const l = kvGet('registry:staffLog', []).filter(x => x.role === ses.role || (x.ref && String(x.ref).startsWith(kind + ':')) || String(x.action).startsWith('agency_' + kind) || (x.action === 'incident.update' && false));
