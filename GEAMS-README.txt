@@ -383,3 +383,59 @@ INCIDENT POSITION (fix)
 - Limits: GEAMS can only be as exact as the phone's GPS; indoors or with location switched off it may be coarse or missing, and it then says so.
   There is no street-address lookup from the GPS position (needs a geocoder); the text shows the coordinates.
 - Test: tests/t_location.js (17 checks).
+
+DISPATCH SIGN-OUT ALWAYS LANDS ON SIGN IN (fix)
+- Reported: after signing out, the officer saw account creation instead of the sign-in screen. I could not reproduce the exact route on a
+  clean browser, but found and fixed a real fault that makes the sign-in screen disappear: signing out while the sign-in animation was
+  still running let a pending step hide the login screen again. Sign-out now cancels those timers, closes the registration form,
+  empties it and always shows Sign In. Test: tests/t_officerlogout.js (8 checks).
+
+FIRE AND AMBULANCE CREW APPS: SIGN OUT BUTTON
+- The top bar now has a labelled "Sign out" button (before, only a small unlabelled power icon). It asks "Sign out?"; "Stay signed in"
+  keeps the session. If the crew is still on a call it says so and offers "Report the outcome" first, so the HQ is not left waiting.
+- Signing out stops position sharing, drops the sign-in held by the page and reloads, so the next person sees empty boxes.
+- Limit: the sign-in is a signed token that the server accepts until it expires; a copy made before sign-out stays valid until then
+  (server-side revocation is in the known-gaps list). Test: tests/t_crewsignout.js (20 checks, both apps).
+
+
+ROLES: WHO MAY SEE AND DO WHAT (HQ and control rooms)
+-----------------------------------------------------
+Not everyone on duty should reach everything (incident replay, logs, officers, analytics, backups...).
+Each HQ account and each control-room commander account now has a role. The SERVER checks the role on the data
+and on the action, so a hidden menu item is only a courtesy: calling the API directly is refused too.
+A role is read from the live account on every request, so a change takes effect on the person's open session at once.
+
+HQ roles (the owner, "hqadmin", chooses one when adding an operator, and can change it in the account menu):
+  supervisor  every screen
+  duty        overview, incidents, stations (view), officers, broadcast, tactical
+  analyst     analytics only, as COUNTS (totals, by type, by region, by hour, response times). No incident records,
+              chat, evidence, names, positions or replay: the server refuses them and gives a separate summary instead
+  auditor     overview, incidents, analytics, replay, security log
+  (operator   older accounts made before roles existed keep full access until the owner sets a role)
+  A new operator with no role chosen gets "duty", the narrowest.
+  Owner-only actions (operators, tokens, lockdown, retention, backups) stay owner-only whatever the role.
+  Only supervisors may change the station list or issue station passphrases / commander accounts.
+  Security screen (staff log, abuse list) needs security; system health (storage, client errors, feedback) needs a supervisor.
+
+Control-room (LCR) roles (HQ chooses one when creating a commander account, and can change it in the Commanders window):
+  commander   every control-room screen
+  supervisor  all but backup, import and settings
+  dispatcher  dashboard, incidents, dispatch, comms, officers (view only), evidence
+  records     dashboard, incidents, evidence, replay, reports/analytics
+  Approving crew sign-ups, resetting crew passwords and bulk crew creation need officers.manage (commander, supervisor).
+  Replay archives need replay; backup data needs backup; analytics needs analytics/reports.
+
+What the server enforces: replay archives, officer registers, backup data, the staff log, abuse list, analytics, storage status,
+client errors, feedback, importing incidents, broadcast and tactical writes, the station list, station passphrases, commander
+accounts, crew approvals and resets. Role changes are written to the staff log.
+
+Honest limits:
+  - A control room that has no commander accounts is signed in by the station passphrase alone. That cannot tell people apart,
+    so it keeps full access. Create commander accounts (one per person) to get per-person roles; once any exist,
+    a passphrase-only sign-in stops working for that control room.
+  - Roles with the incidents screen (supervisor, duty, auditor) see whole incident records; roles limit the screens and
+    records listed above, not each field of an incident. The analyst is the count-only role: if you want a role that
+    sees incidents but not, say, caller names, that would be a further split.
+  - The analyst's counts cover the last 30 days and exclude drills; the time of day is UTC (Ghana keeps UTC).
+  - Fire HQ, Ambulance HQ, and crew apps already have their own narrower accounts and are unchanged.
+  - Tests: t_rbac.js (73 server checks), t_rbac_ui.js (menu and navigation checks).

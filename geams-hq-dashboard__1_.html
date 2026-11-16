@@ -1930,8 +1930,12 @@ const HqAuth = (() => {
   }
   function applyMe() {
     const n = document.getElementById('hq-user-name'), r = document.getElementById('hq-user-role'), a = document.getElementById('hq-user-avatar');
-    if (me) { if (n) n.textContent = me.user; if (r) r.textContent = me.role === 'admin' ? 'HQ OWNER' : 'HQ OPERATOR'; if (a) a.textContent = me.user.slice(0, 2).toUpperCase(); }
+    if (me) { if (n) n.textContent = me.user; if (r) r.textContent = me.role === 'admin' ? 'HQ OWNER' : ('HQ ' + (me.role === 'operator' ? 'OPERATOR' : String(me.role || '').toUpperCase())); if (a) a.textContent = me.user.slice(0, 2).toUpperCase(); }
+    // hide the screens this role does not include (the server refuses the data as well)
+    document.querySelectorAll('.nav-item[data-page]').forEach(n => { n.style.display = can(n.dataset.page) ? '' : 'none'; });
   }
+  // may this signed-in HQ account use a screen or action? Without a backend there is no sign-in and nothing is limited.
+  function can(perm) { return !me || !Array.isArray(me.perms) || me.perms.includes(perm); }
   function show(msg) { const l = document.getElementById('hq-login'); if (l) l.classList.add('show'); if (msg) showErr(msg); setTimeout(() => { const u = document.getElementById('hq-user'); if (u && !u.value) u.focus(); }, 50); }
   function hide() { const l = document.getElementById('hq-login'); if (l) l.classList.remove('show'); }
   function showErr(m) { const e = document.getElementById('hq-login-err'); if (e) { e.textContent = m; e.classList.toggle('show', !!m); } }
@@ -1949,7 +1953,7 @@ const HqAuth = (() => {
     try {
       const r = await api('/api/hq/login', { method: 'POST', body: JSON.stringify({ username: document.getElementById('hq-user').value, password: document.getElementById('hq-pass').value }) });
       if (!r.ok) { showErr(r.j.error || 'Sign-in failed'); return; }
-      setToken(r.j.token); me = { user: r.j.user, role: r.j.role }; document.getElementById('hq-pass').value = '';
+      setToken(r.j.token); me = { user: r.j.user, role: r.j.role, perms: r.j.perms }; document.getElementById('hq-pass').value = '';
       applyMe(); hide(); begin(); setTimeout(storageWarn, 4000);
     } catch (e) { showErr('Cannot reach the GEAMS server'); }
     finally { btn.disabled = false; btn.textContent = 'Sign in'; }
@@ -1959,23 +1963,29 @@ const HqAuth = (() => {
   function openMenu() {
     if (GeamsSync.mode !== 'server') { GeamsApp.showToast('info','No sign-in','HQ is running without a backend'); return; }
     GeamsApp.openModal('👤 ' + (me ? me.user : 'Account'), `
-      <div style="font-size:.82rem;color:var(--text-muted);line-height:1.6">Signed in as <strong style="color:var(--text-white)">${me ? me.user : ''}</strong> (${me && me.role === 'admin' ? 'HQ owner' : 'HQ operator'}). Everything you issue from HQ is recorded under this name.</div>
+      <div style="font-size:.82rem;color:var(--text-muted);line-height:1.6">Signed in as <strong style="color:var(--text-white)">${me ? me.user : ''}</strong> (${me && me.role === 'admin' ? 'HQ owner' : 'HQ ' + (me ? me.role : 'operator')}). Everything you issue from HQ is recorded under this name.</div>
       <div id="hq-ops-area" style="margin-top:14px"></div><div id="hq-store-area" style="margin-top:14px"></div>`,
       `<button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal()">Close</button>
        <button class="btn btn-danger btn-sm" onclick="HqAuth.signOut()">⎋ Sign out</button>`);
     if (me && me.role === 'admin') loadOperators();
     loadStorage();
   }
+  const ROLE_HELP = { supervisor: 'Supervisor: every screen', duty: 'Duty: incidents, stations, officers, broadcast, tactical', analyst: 'Analyst: incidents, analytics, replay', auditor: 'Auditor: incidents, analytics, replay, security log' };
+  async function setOperatorRole(name, role) {
+    const r = await api('/api/hq/users', { method: 'POST', body: JSON.stringify({ username: name, role, setRole: true }) });
+    GeamsApp.showToast(r.ok ? 'success' : 'error', r.ok ? 'Role changed' : 'Not changed', r.ok ? name + ' is now ' + role : (r.j.error || '')); loadOperators();
+  }
   async function loadOperators() {
     const area = document.getElementById('hq-ops-area'); if (!area) return;
     const r = await api('/api/hq/users'); if (!r.ok) { area.textContent = r.j.error || ''; return; }
     area.innerHTML = `<div style="font-family:var(--font-mono);font-size:.6rem;letter-spacing:1.5px;color:var(--text-muted);margin-bottom:6px">HQ OPERATORS</div>
       <div style="font-size:.78rem;padding:7px 10px;background:var(--bg-deep);border-radius:var(--r-sm);margin-bottom:6px">${r.j.owner} <span class="badge badge-resolved" style="font-size:.55rem">OWNER</span> <span style="color:var(--text-muted);font-size:.68rem">${r.j.ownerPasswordFromEnv ? 'password set on the server (GEAMS_HQ_ADMIN_PASSWORD)' : '⚠ password is generated at each start: set GEAMS_HQ_ADMIN_PASSWORD'}</span></div>
-      ${r.j.users.map(u => `<div style="display:flex;justify-content:space-between;align-items:center;font-size:.78rem;padding:7px 10px;background:var(--bg-deep);border-radius:var(--r-sm);margin-bottom:6px"><span>${u.username}</span><button class="btn btn-danger btn-sm" onclick="HqAuth.removeOperator('${u.username}')">Remove</button></div>`).join('')}
+      ${r.j.users.map(u => `<div style="display:flex;justify-content:space-between;align-items:center;font-size:.78rem;padding:7px 10px;background:var(--bg-deep);border-radius:var(--r-sm);margin-bottom:6px"><span>${u.username}</span><span style="display:flex;gap:6px;align-items:center"><select class="form-select" style="font-size:.7rem;padding:3px 6px" onchange="HqAuth.setOperatorRole('${u.username}',this.value)" aria-label="Role of ${u.username}">${(u.role === 'operator' ? ['operator'].concat(r.j.roles) : r.j.roles).map(x => '<option value="' + x + '"' + (x === u.role ? ' selected' : '') + '>' + (x === 'operator' ? 'operator (full, older account)' : x) + '</option>').join('')}</select><button class="btn btn-danger btn-sm" onclick="HqAuth.removeOperator('${u.username}')">Remove</button></span></div>`).join('')}
       <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:6px;margin-top:8px">
         <input class="form-input" id="op-name" placeholder="username" autocapitalize="none">
         <input class="form-input" id="op-pass" type="password" placeholder="password (10+ chars)">
-        <button class="btn btn-primary btn-sm" onclick="HqAuth.addOperator()">Add</button></div>
+        <button class="btn btn-primary btn-sm" onclick="HqAuth.addOperator()">Add</button>
+        <select class="form-select" id="op-role" style="grid-column:1/-1">${(r.j.roles || ['duty']).map(x => '<option value="' + x + '"' + (x === 'duty' ? ' selected' : '') + '>' + ROLE_HELP[x] + '</option>').join('')}</select></div>
       <div style="font-size:.66rem;color:var(--text-muted);margin-top:6px;line-height:1.5">Adding an existing username sets a new password. Operator accounts are saved with the rest of GEAMS data (see Storage and backups below).</div>`;
   }
   const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -2024,7 +2034,7 @@ const HqAuth = (() => {
     else if (s.backups.overdue) GeamsApp.showToast('warn', 'Backup overdue', 'The latest backup is older than expected', 9000);
   }
   async function addOperator() {
-    const r = await api('/api/hq/users', { method: 'POST', body: JSON.stringify({ username: document.getElementById('op-name').value, password: document.getElementById('op-pass').value }) });
+    const r = await api('/api/hq/users', { method: 'POST', body: JSON.stringify({ username: document.getElementById('op-name').value, password: document.getElementById('op-pass').value, role: document.getElementById('op-role').value }) });
     GeamsApp.showToast(r.ok ? 'success' : 'error', r.ok ? 'Operator saved' : 'Not saved', r.ok ? '' : (r.j.error || ''));
     if (r.ok) loadOperators();
   }
@@ -2034,7 +2044,7 @@ const HqAuth = (() => {
   }
   document.addEventListener('visibilitychange', () => {});
   setInterval(() => { try { storageWarn(true); } catch (e) {} }, 60000);
-  return { gate, submit, sessionExpired, signOut, openMenu, addOperator, removeOperator, runBackup, downloadBackup, storageWarn, api, user: () => (me ? me.user : 'HQ'), token };
+  return { gate, can, submit, sessionExpired, signOut, openMenu, addOperator, setOperatorRole, removeOperator, runBackup, downloadBackup, storageWarn, api, user: () => (me ? me.user : 'HQ'), token };
 })();
 GeamsSync.onAuthLost(() => { try { HqAuth.sessionExpired(); } catch (e) {} });
 
@@ -2916,6 +2926,7 @@ const GeamsApp = (() => {
 
   /* ── NAVIGATION ── */
   function navigate(page) {
+    if (typeof HqAuth !== 'undefined' && !HqAuth.can(page)) { GeamsApp.showToast('warn', 'Not in your role', 'Your HQ role does not include this screen. The HQ owner can change it.'); if (currentPage !== page && !document.querySelector('.page-view.active')) page = 'overview'; else return; }
     // guard against leaving Overview while its map fullscreen overlay is active —
     // otherwise the fixed-position overlay would persist over the new page
     if (typeof GeamsMap !== 'undefined' && GeamsMap.destroy) GeamsMap.destroy();
@@ -3614,7 +3625,7 @@ ${want.files ? `<h2>Attached files (${(B.media||[]).length})</h2><table><tr><th>
   function boot() {
     setTimeout(() => {
       startClock();
-      navigate('overview');
+      navigate(typeof HqAuth !== 'undefined' && !HqAuth.can('overview') ? (['incidents','analytics','stations','officers','broadcast','tactical','replay','security','syshealth'].find(p => HqAuth.can(p)) || 'overview') : 'overview');   // first screen this role has
       // Real incident feed replaces the demo simulation entirely once
       // synced — same principle as Station's incidents/officers and
       // Civilian's live-location fixes. Falls back to the demo feed if
@@ -5710,24 +5721,25 @@ const GeamsStations = (() => {
     GeamsApp.openModal('👤 Commanders — ' + cx(st.name), `
       ${shown ? '<div style="background:var(--orange-dim);border:1px solid var(--orange-border);border-radius:var(--r-md);padding:10px 12px;font-size:0.76rem;margin-bottom:12px;line-height:1.55"><strong>Copy now, shown once.</strong><br>Username <span class="td-mono" style="user-select:all">' + cx(shown.username) + '</span><br>Password <span class="td-mono" style="user-select:all;font-size:1rem">' + cx(shown.password) + '</span></div>' : ''}
       <div style="font-size:0.72rem;color:var(--text-muted);line-height:1.55;margin-bottom:10px">${active ? 'This control room now requires a commander username and password at sign-in, on top of its station passphrase. The name on screen and in every record comes from the account, not from typing.' : 'No commander accounts yet, so commanders still type their own name at sign-in and it is recorded as unverified. Creating the first account switches this control room to personal sign-in, and anyone signed in without an account is signed out.'}</div>
-      ${list.map(a => '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:0.76rem;padding:7px 10px;background:var(--bg-deep);border-radius:var(--r-sm);margin-bottom:6px"><span>' + cx(a.name) + ' <span style="color:var(--text-muted)">· ' + cx(a.rank) + ' · ' + cx(a.username) + '</span>' + (a.disabled ? ' <span class="badge badge-resolved" style="font-size:.55rem">DISABLED</span>' : '') + '</span><span style="white-space:nowrap"><button class="btn btn-ghost btn-sm" onclick="GeamsStations.cmdAct(\'' + id + '\',\'' + cx(a.username) + '\',\'reset\')">New password</button> <button class="btn btn-ghost btn-sm" onclick="GeamsStations.cmdAct(\'' + id + '\',\'' + cx(a.username) + '\',\'' + (a.disabled ? 'enable' : 'disable') + '\')">' + (a.disabled ? 'Enable' : 'Disable') + '</button> <button class="btn btn-danger btn-sm" onclick="GeamsStations.cmdAct(\'' + id + '\',\'' + cx(a.username) + '\',\'remove\')">Remove</button></span></div>').join('') || '<div style="font-size:0.74rem;color:var(--text-muted);margin-bottom:8px">No accounts.</div>'}
+      ${list.map(a => '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:0.76rem;padding:7px 10px;background:var(--bg-deep);border-radius:var(--r-sm);margin-bottom:6px"><span>' + cx(a.name) + ' <span style="color:var(--text-muted)">· ' + cx(a.rank) + ' · ' + cx(a.username) + '</span>' + (a.disabled ? ' <span class="badge badge-resolved" style="font-size:.55rem">DISABLED</span>' : '') + '</span><span style="white-space:nowrap"><select class="form-select" style="font-size:.7rem;padding:3px 6px;width:auto" aria-label="Role of ' + cx(a.username) + '" onchange="GeamsStations.cmdAct(\'' + id + '\',\'' + cx(a.username) + '\',\'role\',this.value)">' + ['commander','supervisor','dispatcher','records'].map(x => '<option value="' + x + '"' + (x === (a.role || 'commander') ? ' selected' : '') + '>' + x + '</option>').join('') + '</select> <button class="btn btn-ghost btn-sm" onclick="GeamsStations.cmdAct(\'' + id + '\',\'' + cx(a.username) + '\',\'reset\')">New password</button> <button class="btn btn-ghost btn-sm" onclick="GeamsStations.cmdAct(\'' + id + '\',\'' + cx(a.username) + '\',\'' + (a.disabled ? 'enable' : 'disable') + '\')">' + (a.disabled ? 'Enable' : 'Disable') + '</button> <button class="btn btn-danger btn-sm" onclick="GeamsStations.cmdAct(\'' + id + '\',\'' + cx(a.username) + '\',\'remove\')">Remove</button></span></div>').join('') || '<div style="font-size:0.74rem;color:var(--text-muted);margin-bottom:8px">No accounts.</div>'}
       <div style="font-family:var(--font-mono);font-size:.6rem;letter-spacing:1.5px;color:var(--text-muted);margin:12px 0 6px">NEW COMMANDER</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
         <input class="form-input" id="cm-user" placeholder="username (e.g. k.mensah)" autocapitalize="none"><input class="form-input" id="cm-name" placeholder="Full name">
-        <select class="form-select" id="cm-rank">${RANKS.map(x => '<option>' + x + '</option>').join('')}</select><input class="form-input" id="cm-phone" type="tel" placeholder="Phone +233…"></div>
+        <select class="form-select" id="cm-rank">${RANKS.map(x => '<option>' + x + '</option>').join('')}</select><input class="form-input" id="cm-phone" type="tel" placeholder="Phone +233…">
+        <select class="form-select" id="cm-role" style="grid-column:1/-1"><option value="commander">Commander: every control-room screen</option><option value="supervisor">Supervisor: all but backup, import and settings</option><option value="dispatcher">Dispatcher: dashboard, incidents, dispatch, comms, officers (view), evidence</option><option value="records">Records: incidents, evidence, replay, reports</option></select></div>
       <div id="cm-err" style="color:var(--red);font-size:0.72rem;margin-top:6px"></div>`,
       `<button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal()">Close</button><button class="btn btn-primary btn-sm" onclick="GeamsStations.cmdCreate('${id}')">Create account</button>`);
   }
   async function cmdCreate(id) {
     const g = (x) => document.getElementById(x).value.trim();
-    const r = await HqAuth.api('/api/hq/lcr/commander', { method: 'POST', body: JSON.stringify({ stationId: id, action: 'create', username: g('cm-user'), name: g('cm-name'), rank: document.getElementById('cm-rank').value, phone: g('cm-phone') }) });
+    const r = await HqAuth.api('/api/hq/lcr/commander', { method: 'POST', body: JSON.stringify({ stationId: id, action: 'create', username: g('cm-user'), name: g('cm-name'), rank: document.getElementById('cm-rank').value, phone: g('cm-phone'), role: document.getElementById('cm-role').value }) });
     if (!r.ok) { document.getElementById('cm-err').textContent = r.j.error || 'Could not create the account'; return; }
     commanders(id, { username: r.j.username, password: r.j.password });
   }
-  async function cmdAct(id, user, act) {
+  async function cmdAct(id, user, act, role) {
     if (act === 'remove' && !confirm('Remove commander account "' + user + '"? They are signed out at once.')) return;
     if (act === 'reset' && !confirm('Issue a new password for "' + user + '"? The old one stops working and they are signed out.')) return;
-    const r = await HqAuth.api('/api/hq/lcr/commander', { method: 'POST', body: JSON.stringify({ stationId: id, action: act, username: user }) });
+    const r = await HqAuth.api('/api/hq/lcr/commander', { method: 'POST', body: JSON.stringify({ stationId: id, action: act, username: user, role }) });
     if (!r.ok) { GeamsApp.showToast('error', 'Not changed', r.j.error || ''); return; }
     commanders(id, act === 'reset' ? { username: user, password: r.j.password } : null);
   }
@@ -5908,7 +5920,34 @@ const ResponseTimes = (() => {
 
 const GeamsAnalytics = (() => {
 
+  // For a role that may see analytics but not incident records (Analyst): everything here is a count from the server.
+  async function renderCounts() {
+    const el = document.getElementById('page-analytics'); if (!el) return;
+    let d = null, err = ''; try { const r = await HqAuth.api('/api/analytics/summary?days=30'); if (r.ok) d = r.j; else err = (r.j && r.j.error) || 'Could not load the summary'; } catch (e) { err = e.message; }
+    const bars = (rows, col) => rows.length ? rows.map(r => `<div class="bar-row"><span class="bar-label">${OpenData.esc(r.label)}</span><div class="bar-track"><div class="bar-fill ${col}" style="width:${Math.round(r.val / rows[0].val * 100)}%"></div></div><span class="bar-value">${r.val}</span></div>`).join('') : '<div style="color:var(--text-muted);font-size:0.74rem">No incidents in this period.</div>';
+    const hx = d ? Math.max(1, ...d.hourly) : 1;
+    el.innerHTML = `
+      <div class="section-header"><div class="section-title">National Performance Analytics</div><div class="section-line"></div></div>
+      <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:8px">Your role shows counts only. Incident records, names, positions and replay are not included.</div>
+      ${ResponseTimes.section()}
+      <div class="section-header" style="margin-top:14px"><div class="section-title">Activity, last 30 days</div><div class="section-line"></div></div>
+      ${err ? '<div style="color:var(--red);font-size:0.76rem">' + OpenData.esc(err) + '</div>' : ''}
+      <div class="kpi-row">
+        <div class="kpi-card gold"><div class="kpi-label">Total Incidents</div><div class="kpi-value">${d ? d.total : '…'}</div><div class="kpi-sub">Last 30 days</div></div>
+        <div class="kpi-card green"><div class="kpi-label">Resolution Rate</div><div class="kpi-value">${d ? (d.total ? Math.round(d.resolved / d.total * 100) : 0) + '%' : '…'}</div><div class="kpi-sub">Resolved / total</div></div>
+        <div class="kpi-card cyan"><div class="kpi-label">Median time to arrival</div><div class="kpi-value" id="rt-kpi">…</div><div class="kpi-sub" id="rt-kpi-sub">Measured by the server</div></div>
+      </div>
+      <div class="two-col">
+        <div class="panel"><div class="panel-header"><span>🗺</span><span class="panel-title">Incidents by Region</span></div><div class="panel-body"><div class="bar-chart">${d ? bars(d.byRegion, 'gold') : ''}</div></div></div>
+        <div class="panel"><div class="panel-header"><span>📊</span><span class="panel-title">Incidents by Type</span></div><div class="panel-body"><div class="bar-chart">${d ? bars(d.byType, 'cyan') : ''}</div></div></div>
+      </div>
+      <div class="panel"><div class="panel-header"><span>📈</span><span class="panel-title">Hourly Volume (last 24h)</span></div><div class="panel-body">
+        <div style="display:flex;align-items:flex-end;gap:3px;height:80px">${d ? d.hourly.map((v, i) => `<div style="flex:1;height:${Math.round(v / hx * 100)}%;min-height:3px;border-radius:2px 2px 0 0;background:var(--cyan-dim);border-top:1px solid var(--cyan)" title="${i}:00 — ${v} incidents"></div>`).join('') : ''}</div>
+        <div style="display:flex;justify-content:space-between;margin-top:4px;font-family:var(--font-mono);font-size:0.55rem;color:var(--text-ghost)"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>23:00</span></div></div></div>`;
+    ResponseTimes.load().then(() => { const h = ResponseTimes.headline(), k = document.getElementById('rt-kpi'); if (!h || !k) return; const c = h.national.current, f = (s) => s == null ? '—' : s < 60 ? Math.round(s) + 's' : Math.floor(s / 60) + 'm ' + String(Math.round(s % 60)).padStart(2, '0') + 's'; k.textContent = f(c.medianArrive); document.getElementById('rt-kpi-sub').textContent = c.measuredArrive + ' of ' + c.n + ' alerts, last ' + h.windowDays + ' days'; });
+  }
   function render() {
+    if (typeof HqAuth !== 'undefined' && !HqAuth.can('incidents')) return renderCounts();
     const el = document.getElementById('page-analytics');
     if (!el) return;
     const kpi = GeamsData.getKPIs();

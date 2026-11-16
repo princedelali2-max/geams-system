@@ -3865,6 +3865,7 @@ const DispatchApp = (() => {
   // Hard logout — tears down the session and returns to the login screen.
   // Called by End Shift. Can also be called if a future session-expiry check
   // fires. In production this would also call the server to revoke the token.
+  let bootHideTimer=null, bootInt=null, bootGo=null;   // sign-in animation timers: a sign-out must cancel them or they hide the login screen again
   function performLogout(){
     // Clear all running timers
     if(clockTimer){clearInterval(clockTimer);clockTimer=null;}
@@ -3884,6 +3885,15 @@ const DispatchApp = (() => {
     if(pass){pass.value='';pass.classList.remove('error');}
     if(btn){btn.disabled=false;btn.textContent='🔐 Sign In to Dispatch';}
     if(genErr){genErr.style.display='none';}
+    // Always land on SIGN IN, never on the registration form, whatever was open before: close registration, empty it, and cancel
+    // any boot-screen timer still pending from the sign-in (it would hide the login screen again).
+    if(bootHideTimer){clearTimeout(bootHideTimer);bootHideTimer=null;}
+    if(bootInt){clearInterval(bootInt);bootInt=null;} if(bootGo){clearTimeout(bootGo);bootGo=null;}
+    const sv=document.getElementById('signup-form-view'); if(sv)sv.style.display='none';
+    ['su-name','su-phone','su-vehicle','su-pass','su-pass2'].forEach(id=>{const e=document.getElementById(id);if(e){e.value='';e.classList.remove('error');}});
+    const sl=document.getElementById('su-lcr'); if(sl)sl.value='';
+    const sb=document.getElementById('signup-btn'); if(sb){sb.disabled=false;sb.textContent='👮 Register & Sign In';}
+    const sge=document.getElementById('su-err-general'); if(sge)sge.style.display='none';
     // Show login view, hide loading view
     const lv=document.getElementById('login-form-view');
     const loadV=document.getElementById('boot-loading-view');
@@ -4262,9 +4272,10 @@ const DispatchApp = (() => {
     let si=0;
     const bar=document.getElementById('boot-bar-anim');
     if(bar){bar.style.transition='width 2.4s ease';setTimeout(()=>{bar.style.width='100%';},60);}
-    const stInt=setInterval(()=>{
+    if(bootInt){clearInterval(bootInt);bootInt=null;} if(bootGo){clearTimeout(bootGo);bootGo=null;}
+    const stInt=bootInt=setInterval(()=>{
       si++; if(si<steps.length&&st)st.textContent=steps[si];
-      if(si>=steps.length-1){clearInterval(stInt); setTimeout(()=>boot(),600);}
+      if(si>=steps.length-1){clearInterval(stInt); bootInt=null; bootGo=setTimeout(()=>{bootGo=null;boot();},600);}
     },580);
   }
 
@@ -4280,7 +4291,7 @@ const DispatchApp = (() => {
     const app=document.getElementById('app');
     if(app){app.style.transition='opacity 0.4s';app.style.opacity='1';}
     const bs=document.getElementById('boot-screen');
-    if(bs){bs.style.transition='opacity 0.5s ease';bs.style.opacity='0';setTimeout(()=>{bs.style.display='none';},500);}
+    if(bs){bs.style.transition='opacity 0.5s ease';bs.style.opacity='0';bootHideTimer=setTimeout(()=>{bootHideTimer=null;bs.style.display='none';},500);}
     // Reset job state to idle so the new officer starts on a clean Job screen
     jobState='idle';
     DispatchData.currentJob.status='idle';

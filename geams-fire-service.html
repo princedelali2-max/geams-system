@@ -165,7 +165,7 @@
       <button class="topbar-btn" onclick="CrewPw.open({})" title="Change password">🔑</button>
       <button class="topbar-btn" onclick="GeamsRoster.open()" title="My availability" aria-label="My availability">🕑</button>
       <button class="topbar-btn" onclick="Feedback.open('fire',false)" title="Send feedback">💬</button>
-      <button class="topbar-btn" onclick="FireApp.endShift()" title="End Shift">⏻</button>
+      <button class="topbar-btn" id="btn-signout" onclick="FireApp.signOut()" aria-label="Sign out" style="white-space:nowrap;border:1px solid var(--border-base);border-radius:8px;padding:8px 10px;font-size:.72rem;font-weight:700;color:var(--text)">⏻ Sign out</button>
     </div>
 
     <div class="screen active" id="screen-queue"></div>
@@ -877,14 +877,28 @@ const FireApp = (() => {
     showToast('success', 'Signed In', `Connected to ${station ? station.name : ''} LCR — listening for calls`, 5000);
   }
 
-  function endShift() {
-    if (FireData.currentJob && FireData.currentJob.status !== 'complete') {
-      showToast('warning', 'Active Response', 'Complete or hand off your current call before ending shift', 5000);
-      return;
-    }
-    GeamsSync.setToken(null);
-    location.reload();
+  /* ── SIGN OUT: a labelled button in the top bar. With a call still open the crew is told to report how it ended first (so the HQ is not left guessing). ── */
+  function signOut() {
+    const el = document.getElementById('close-sheet'); if (!el) return;
+    const j = FireData.currentJob, active = j && j.status !== 'complete';
+    el.innerHTML = active
+      ? `<div class="cs-card"><h2 style="font-size:1.05rem">You are still on a call</h2><div style="font-size:.78rem;color:var(--text-muted);margin-top:4px">${escH(j.type || '')} · ${escH(j.location || '')}<br>Report how it ended before you sign out, so the HQ is not left waiting.</div>
+          <button class="btn btn-primary btn-full" style="margin-top:12px" onclick="FireApp.showCloseSheet('finish')">Report the outcome…</button>
+          <button class="btn btn-full" style="margin-top:8px" onclick="FireApp.hideCloseSheet()">Back</button></div>`
+      : `<div class="cs-card"><h2 style="font-size:1.05rem">Sign out?</h2><div style="font-size:.78rem;color:var(--text-muted);margin-top:4px">You will stop receiving calls on this phone. Sign in again to go back on duty.</div>
+          <button class="btn btn-warning btn-full" id="so-confirm" style="margin-top:12px" onclick="FireApp.confirmSignOut()">⏻ Sign out</button>
+          <button class="btn btn-full" style="margin-top:8px" onclick="FireApp.hideCloseSheet()">Stay signed in</button></div>`;
+    el.style.display = 'flex';
   }
+  function confirmSignOut() {
+    hideCloseSheet();
+    if (routeTimer) { clearInterval(routeTimer); routeTimer = null; }
+    stopGps();                       // no more position sharing
+    GeamsSync.setToken(null);        // the sign-in is dropped here and the server no longer accepts it from this page
+    try { sessionStorage.removeItem('geams_token'); sessionStorage.removeItem('geams_hq_token'); } catch (e) {}
+    location.reload();               // a clean page: every watcher and timer is gone and the sign-in boxes are empty
+  }
+  function endShift() { signOut(); }
 
   /* ── NAVIGATION ── */
   function navigate(screen) {
@@ -1413,7 +1427,7 @@ const FireApp = (() => {
   }
 
   return {
-    showSignup, showLogin, doLogin, doSignup, endShift, navigate, openNav, dismissIncoming, showCloseSheet, hideCloseSheet, closeCall, onRecordGone,
+    showSignup, showLogin, doLogin, doSignup, endShift, signOut, confirmSignOut, navigate, openNav, dismissIncoming, showCloseSheet, hideCloseSheet, closeCall, onRecordGone,
     onNewCall, acceptCall, setStatus, showToast,
     toggleAidPicker, requestMutualAid, cancelMutualAidRequest,
     acceptMutualAid, declineMutualAid,

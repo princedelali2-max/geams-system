@@ -226,6 +226,47 @@ function signToken(payload, ms) {
   return 'v1.' + body + '.' + crypto.createHmac('sha256', TOKEN_SECRET).update(body).digest('base64url');
 }
 const CMD_KEY = 'registry:commanderAuth', AGENCY_KEY = 'registry:agencyHq';
+
+/* ── Who may use what (role-based access) ──
+ * HQ staff and control-room commanders each carry a role; a role is a list of permissions.
+ * The server checks the permission on the data and the action, so hiding a menu item is only a courtesy.
+ * The role is read from the live account on every request, so a change by the owner (HQ) or HQ (control room) takes effect at once.
+ * 'operator' is the old HQ role from before roles existed; it keeps full access so existing accounts do not break. */
+const HQ_ALL = ['overview', 'incidents', 'stations', 'officers', 'analytics', 'broadcast', 'security', 'tactical', 'replay', 'syshealth', 'stations.manage', 'officers.manage', 'accounts', 'import', 'backup'];
+const HQ_ROLES = {
+  admin: HQ_ALL, supervisor: HQ_ALL, operator: HQ_ALL,
+  duty: ['overview', 'incidents', 'stations', 'officers', 'broadcast', 'tactical'],
+  analyst: ['analytics'],   // counts only: no incident records, no replay
+  auditor: ['overview', 'incidents', 'analytics', 'replay', 'security']
+};
+const LCR_ALL = ['dashboard', 'incidents', 'dispatch', 'comms', 'officers', 'officers.manage', 'evidence', 'replay', 'backup', 'reports', 'analytics', 'settings', 'import'];
+const LCR_ROLES = {
+  commander: LCR_ALL,
+  supervisor: ['dashboard', 'incidents', 'dispatch', 'comms', 'officers', 'officers.manage', 'evidence', 'replay', 'reports', 'analytics'],
+  dispatcher: ['dashboard', 'incidents', 'dispatch', 'comms', 'officers', 'evidence'],
+  records: ['dashboard', 'incidents', 'evidence', 'replay', 'reports', 'analytics']
+};
+const HQ_ROLE_LIST = ['supervisor', 'duty', 'analyst', 'auditor'], LCR_ROLE_LIST = ['commander', 'supervisor', 'dispatcher', 'records'];
+// permissions a signed-in HQ or control-room session has; any other kind of session is not limited here
+function permsOf(ses) {
+  if (!ses) return [];
+  if (ses.role === 'hq') return HQ_ROLES[ses.hqRole] || [];
+  if (ses.role === 'lcr') return ses.cmd ? (LCR_ROLES[ses.cmd.role || 'commander'] || []) : LCR_ALL;   // a station passphrase on its own cannot tell people apart, so it keeps the full set until HQ creates commander accounts
+  return null;
+}
+const can = (ses, perm) => { const p = permsOf(ses); return p === null || p.includes(perm); };
+const roleLabel = (ses) => ses.role === 'hq' ? (ses.hqRole === 'admin' ? 'HQ owner' : 'HQ ' + ses.hqRole) : ses.role === 'lcr' && ses.cmd ? ('control room ' + (ses.cmd.role || 'commander')) : ses.role;
+// which permission a shared record needs, for HQ and control-room sessions (null = no extra limit)
+function kvPerm(key, action, hq) {
+  if (/^archive:/.test(key)) return 'replay';
+  if (hq && (/^lcr:[^:]+:incidents$/.test(key) || /^(chat|evidence):/.test(key))) return 'incidents';   // raw incident records, chat and evidence for HQ staff
+  if (action === 'r' && (/^registry:officers$/.test(key) || /^lcr:[^:]+:officers$/.test(key))) return 'officers';
+  if (/^backup:/.test(key)) return 'backup';
+  if (action === 'w' && /^public:alerts$/.test(key)) return 'broadcast';
+  if (action === 'w' && /^hq:tacticalOps$/.test(key)) return 'tactical';
+  if (action === 'w' && /^registry:stations$/.test(key)) return 'stations.manage';
+  return null;
+}
 const commanderAccts = (sid) => { const m = store[CMD_KEY] && store[CMD_KEY].value; return (m && m[sid]) || {}; };
 function verifyToken(t) {
   const m = /^v1\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/.exec(String(t || '')); if (!m) return null;
@@ -233,13 +274,13 @@ function verifyToken(t) {
   let p; try { p = JSON.parse(Buffer.from(m[1], 'base64url').toString('utf8')); } catch (e) { return null; }
   if (!p || p.exp < Date.now() || revoked.has(p.jti)) return null;
   if (p.r !== 'hq' && p.r !== 'civilian') { const ep = store['registry:authEpoch'] && store['registry:authEpoch'].value; if (ep && ep.at && p.iat < ep.at) return null; }   // HQ rotated every station-side token
-  if (p.r === 'hq' && p.hr !== 'admin') { const u = hqUsers[p.u]; if (!u || (u.changed && u.changed > p.iat)) return null; }
+  if (p.r === 'hq' && p.hr !== 'admin') { const u = hqUsers[p.u]; if (!u || (u.changed && u.changed > p.iat)) return null; p.hr = u.role || 'operator'; }
   if (p.r === 'officer' || p.r === 'fire' || p.r === 'ambulance') { const ua = (store['registry:unitAuth'] && store['registry:unitAuth'].value || {})[p.r + ':' + p.b]; if (ua && ((ua.changed && ua.changed > p.iat) || ua.disabled)) return null; }   // password changed or reset, or account disabled by its HQ: older sign-ins end
   if (p.r === 'fire_hq' || p.r === 'ambulance_hq') { const a = (store[AGENCY_KEY] && store[AGENCY_KEY].value || {})[p.ak + ':' + p.u]; if (!a || a.disabled || (a.changed && a.changed > p.iat)) return null; }   // password changed or reset: older sign-ins end
   if (p.r === 'lcr') {
     const st = (store['registry:stations'] && store['registry:stations'].value || {})[p.s]; if (st && st.disabled) return null;
     const accts = commanderAccts(p.s);
-    if (p.cu) { const a = accts[p.cu]; if (!a || a.disabled || (a.changed && a.changed > p.iat)) return null; }
+    if (p.cu) { const a = accts[p.cu]; if (!a || a.disabled || (a.changed && a.changed > p.iat)) return null; p.cl = a.role || 'commander'; }
     else if (Object.values(accts).some(a => !a.disabled)) return null;   // once HQ creates commander accounts, a station sign-in without one stops working
   }
   return p;
@@ -251,7 +292,7 @@ function rawToken(req, allowCookie) {
 }
 function sessionOf(req, allowCookie) {
   const p = verifyToken(rawToken(req, allowCookie)); if (!p) return null;
-  return { dev: p.d, role: p.r, user: p.u, cmd: p.cu ? { user: p.cu, name: p.cn, rank: p.cr } : null, hqRole: p.hr, sid: p.s, lcr: p.l, badge: p.b, id: p.i, phone: p.p, verified: !!p.v, jti: p.jti, agency: p.ak, mc: !!p.mc, name: p.cn };
+  return { dev: p.d, role: p.r, user: p.u, cmd: p.cu ? { user: p.cu, name: p.cn, rank: p.cr, role: p.cl || 'commander' } : null, hqRole: p.hr, sid: p.s, lcr: p.l, badge: p.b, id: p.i, phone: p.p, verified: !!p.v, jti: p.jti, agency: p.ak, mc: !!p.mc, name: p.cn };
 }
 function issue(res, req, payload, ms) {
   const t = signToken(payload, ms);
@@ -415,6 +456,7 @@ function authorize(req, key, action, allowCookie) {
     if (!matched) return { code: 403, error: 'Your role (' + ses.role + ') cannot ' + (action === 'r' ? 'read' : 'write') + ' this data' };
   }
   if (Array.isArray(need) && !need.includes(ses.role)) return { code: 403, error: 'Your role (' + ses.role + ') cannot ' + (action === 'r' ? 'read' : 'write') + ' this data' };
+  if (ses.role === 'hq' || ses.role === 'lcr') { const kp = kvPerm(key, action, ses.role === 'hq'); if (kp && !can(ses, kp)) return { code: 403, error: 'Your role (' + roleLabel(ses) + ') does not include access to this' }; }
   if (action === 'w' && rule.own && ses.role === 'lcr' && m && m[1] && ses.sid !== m[1]) return { code: 403, error: 'A control room can only change its own roster' };
   // a control room writes only its own station's incident, intel and service maps (reading across stations stays allowed for archives)
   if (action === 'w' && rule.fence && ses.role === 'lcr' && m && m[1] && ses.sid !== m[1]) return { code: 403, error: 'A control room can only change its own station\'s records' };
@@ -614,6 +656,25 @@ const median = (a) => { if (!a.length) return null; const b = a.slice().sort((x,
 const pctl = (a, p) => { if (!a.length) return null; const b = a.slice().sort((x, y) => x - y); return b[Math.max(0, Math.ceil(p * b.length) - 1)]; };
 const mkStats = (n, as, ar, open) => ({ n, measuredAssign: as.length, measuredArrive: ar.length, medianAssign: median(as), p90Assign: pctl(as, 0.9), medianArrive: median(ar), p90Arrive: pctl(ar, 0.9), noArrival: open });
 function stationMeta(sid) { const r = (kvGet('registry:stations', {}) || {})[sid] || {}; return { id: sid, name: r.name || sid, region: r.region || '', town: r.town || '' }; }
+// Counts only: no incident record, name, position or text leaves here. For roles that may see analytics but not incidents.
+function incidentSummary(q, ses) {
+  const days = Math.min(Math.max(parseInt(q.days, 10) || 30, 1), 400), now = Date.now(), from = now - days * 86400000;
+  const type = {}, region = {}, hourly = new Array(24).fill(0); let total = 0, resolved = 0, open = 0;
+  for (const key of Object.keys(store)) {
+    const m = /^lcr:([^:]+):incidents$/.exec(key); if (!m) continue;
+    if (ses.role === 'lcr' && ses.sid !== m[1]) continue;
+    const mapv = store[key].value; if (!isObj(mapv)) continue; const reg = stationMeta(m[1]).region || 'Unassigned';
+    for (const rec of Object.values(mapv)) {
+      if (!isObj(rec) || rec.drill) continue;
+      const t = Date.parse(rec.createdAt) || (isObj(rec.srv) && rec.srv.received) || Number(rec.createdAt) || 0; if (!t || t < from) continue;
+      total++; if (rec.status === 'resolved') resolved++; else if (rec.status !== 'cancelled') open++;
+      const ty = String(rec.type || 'Other').slice(0, 40); type[ty] = (type[ty] || 0) + 1; region[reg] = (region[reg] || 0) + 1;
+      if (t >= now - 86400000) hourly[new Date(t).getUTCHours()]++;   // Ghana keeps UTC time
+    }
+  }
+  const top = (o, n) => Object.entries(o).map(([label, val]) => ({ label, val })).sort((a, b) => b.val - a.val).slice(0, n);
+  return { generatedAt: new Date(now).toISOString(), windowDays: days, total, resolved, open, byType: top(type, 6), byRegion: top(region, 8), hourly };
+}
 function responseAnalytics(q, ses) {
   const days = Math.min(Math.max(parseInt(q.days, 10) || 30, 1), 400), now = Date.now(), from = now - days * 86400000, prevFrom = from - days * 86400000;
   const month = q.bucket === 'month', excl = { imported: 0, legacy: 0, cancelled: 0, invalid: 0, noArrival: 0 };
@@ -1141,27 +1202,37 @@ const server = http.createServer(async (req, res) => {
       const who = checkLogin(b.username, b.password);
       if (!who) { noteFail(k); return json(res, 401, { error: 'Wrong username or password' }); }
       fails.delete(k);
-      return json(res, 200, { token: issue(res, req, { r: 'hq', u: who.user, hr: who.role }, SESSION_MS), user: who.user, role: who.role, expires: Date.now() + SESSION_MS });
+      return json(res, 200, { token: issue(res, req, { r: 'hq', u: who.user, hr: who.role }, SESSION_MS), user: who.user, role: who.role, perms: HQ_ROLES[who.role] || [], expires: Date.now() + SESSION_MS });
     }
-    if (p === '/api/hq/me' && req.method === 'GET') { const s = sessionOf(req); return s && s.role === 'hq' ? json(res, 200, { user: s.user, role: s.hqRole }) : json(res, 401, { error: 'Not signed in' }); }
+    if (p === '/api/hq/me' && req.method === 'GET') { const s = sessionOf(req); return s && s.role === 'hq' ? json(res, 200, { user: s.user, role: s.hqRole, perms: permsOf(s) }) : json(res, 401, { error: 'Not signed in' }); }
     if (p === '/api/hq/logout' && req.method === 'POST') { const s = sessionOf(req, true); if (s) revoked.add(s.jti); res.setHeader('Set-Cookie', 'geams_t=; Path=/; HttpOnly; Max-Age=0'); return json(res, 200, { ok: true }); }
     if (p === '/api/hq/users') {
       const s = sessionOf(req); if (!s || s.role !== 'hq') return json(res, 401, { error: 'Not signed in' });
       if (s.hqRole !== 'admin') return json(res, 403, { error: 'Only the HQ owner can manage operators' });
-      if (req.method === 'GET') return json(res, 200, { owner: OWNER, ownerPasswordFromEnv: !ownerGenerated, users: Object.entries(hqUsers).map(([u, v]) => ({ username: u, role: v.role, created: v.created })) });
+      if (req.method === 'GET') return json(res, 200, { owner: OWNER, ownerPasswordFromEnv: !ownerGenerated, roles: HQ_ROLE_LIST, users: Object.entries(hqUsers).map(([u, v]) => ({ username: u, role: v.role, created: v.created })) });
       if (req.method === 'POST') {
         const b = await readBody(req), name = String(b.username || '').trim().toLowerCase();
         if (b.remove) { delete hqUsers[name]; saveUsers(); return json(res, 200, { ok: true }); }
         if (!/^[a-z0-9._-]{3,32}$/.test(name) || name === OWNER) return json(res, 400, { error: 'Username: 3-32 letters, digits, dot, dash or underscore' });
+        // 'operator' is the older full-access role, still accepted from older scripts
+        const wantRole = b.role === undefined || b.role === '' ? null : String(b.role);
+        if (wantRole && !HQ_ROLE_LIST.includes(wantRole) && wantRole !== 'operator') return json(res, 400, { error: 'Role must be one of: ' + HQ_ROLE_LIST.join(', ') });
+        if (b.setRole) {   // change a role without touching the password
+          if (!hqUsers[name]) return json(res, 404, { error: 'No such operator' }); if (!wantRole) return json(res, 400, { error: 'Choose a role' });
+          hqUsers[name].role = wantRole; saveUsers(); staffLog(s, 'hq.role', name, wantRole, ''); return json(res, 200, { ok: true });
+        }
         if (String(b.password || '').length < 10) return json(res, 400, { error: 'Password must be at least 10 characters' });
-        const salt = crypto.randomBytes(16).toString('hex');
-        hqUsers[name] = { salt, hash: pwHash(b.password, salt), role: 'operator', created: Date.now(), changed: Date.now() }; saveUsers();
-        return json(res, 200, { ok: true });
+        const salt = crypto.randomBytes(16).toString('hex'), keep = hqUsers[name] && hqUsers[name].role;
+        // a new account without a stated role gets the narrowest one (duty); a new password on an existing account keeps its role
+        hqUsers[name] = { salt, hash: pwHash(b.password, salt), role: wantRole || keep || 'duty', created: Date.now(), changed: Date.now() }; saveUsers();
+        staffLog(s, 'hq.operator', name, hqUsers[name].role, '');
+        return json(res, 200, { ok: true, role: hqUsers[name].role });
       }
     }
     // ── LCR credentials: issued by HQ, verified here, never readable by clients ──
     if (p === '/api/hq/lcr/credential' && req.method === 'POST') {
       const s = sessionOf(req); if (!s || s.role !== 'hq') return json(res, 401, { error: 'HQ sign-in required' });
+      if (!can(s, 'accounts')) return json(res, 403, { error: 'Your role (' + roleLabel(s) + ') does not include this' });
       const b = await readBody(req), id = String(b.stationId || '');
       const reg = store['registry:stations'] && store['registry:stations'].value || {};
       if (!reg[id] && !BUILTIN_STATIONS.includes(id)) return json(res, 404, { error: 'Unknown station' });
@@ -1187,7 +1258,7 @@ const server = http.createServer(async (req, res) => {
         const ca = accts[cuser];
         if (!ca || ca.disabled || !eq(pwHash(String(cin.password), ca.salt), ca.hash)) { noteFail(k); return json(res, 401, { error: 'Incorrect commander username or password' }); }
         fails.delete(k); console.log('commander sign-in: ' + cuser + ' at ' + id);
-        return json(res, 200, { ok: true, token: issue(res, req, { r: 'lcr', s: id, u: cuser, cu: cuser, cn: ca.name, cr: ca.rank }, SESSION_MS), commander: { user: cuser, name: ca.name, rank: ca.rank, phone: ca.phone || '' } });
+        return json(res, 200, { ok: true, token: issue(res, req, { r: 'lcr', s: id, u: cuser, cu: cuser, cn: ca.name, cr: ca.rank }, SESSION_MS), commander: { user: cuser, name: ca.name, rank: ca.rank, phone: ca.phone || '', role: ca.role || 'commander', perms: LCR_ROLES[ca.role || 'commander'] || [] } });
       }
       fails.delete(k);
       return json(res, 200, { ok: true, token: issue(res, req, { r: 'lcr', s: id, u: id }, SESSION_MS), commander: null });
@@ -1208,25 +1279,28 @@ const server = http.createServer(async (req, res) => {
     // HQ creates and manages commander accounts
     if (p === '/api/hq/lcr/commander') {
       const s = sessionOf(req); if (!s || s.role !== 'hq') return json(res, 401, { error: 'HQ sign-in required' });
+      if (!can(s, 'accounts')) return json(res, 403, { error: 'Your role (' + roleLabel(s) + ') does not include this' });
       const reg = store['registry:stations'] && store['registry:stations'].value || {};
       if (req.method === 'GET') {
         const id = String(u.searchParams.get('stationId') || ''); if (!reg[id] && !BUILTIN_STATIONS.includes(id)) return json(res, 404, { error: 'Unknown station' });
-        return json(res, 200, { accounts: Object.entries(commanderAccts(id)).map(([user, a]) => ({ username: user, name: a.name, rank: a.rank, phone: a.phone || '', disabled: !!a.disabled, created: a.created, by: a.by })) });
+        return json(res, 200, { roles: LCR_ROLE_LIST, accounts: Object.entries(commanderAccts(id)).map(([user, a]) => ({ username: user, name: a.name, rank: a.rank, role: a.role || 'commander', phone: a.phone || '', disabled: !!a.disabled, created: a.created, by: a.by })) });
       }
       if (req.method === 'POST') {
         const b = await readBody(req), id = String(b.stationId || ''), user = String(b.username || '').trim().toLowerCase(), act = String(b.action || 'create');
         if (!reg[id] && !BUILTIN_STATIONS.includes(id)) return json(res, 404, { error: 'Unknown station' });
         const all = JSON.parse(JSON.stringify(kvGet(CMD_KEY, {}))), mine = all[id] || (all[id] = {}), a = mine[user];
         if (act === 'create') {
-          const name = clean(b.name, 60), rank = clean(b.rank, 40), phone = clean(b.phone, 30);
+          const name = clean(b.name, 60), rank = clean(b.rank, 40), phone = clean(b.phone, 30), role = b.role ? String(b.role) : 'commander';
+          if (!LCR_ROLE_LIST.includes(role)) return json(res, 400, { error: 'Role must be one of: ' + LCR_ROLE_LIST.join(', ') });
           if (!/^[a-z0-9._-]{3,32}$/.test(user)) return json(res, 400, { error: 'Username: 3-32 letters, digits, dot, dash or underscore' });
           if (!name || name.length < 3 || !/\s/.test(name)) return json(res, 400, { error: 'Enter the commander\'s full name (first and last)' });
           if (a) return json(res, 409, { error: 'That username already exists for this control room. Use reset to set a new password.' });
           const pw = b.password ? String(b.password) : newPassphrase(); if (pw.length < 10) return json(res, 400, { error: 'Password must be at least 10 characters' });
-          const salt = crypto.randomBytes(16).toString('hex'); mine[user] = { name, rank, phone, salt, hash: pwHash(pw, salt), created: Date.now(), changed: Date.now(), by: s.user }; kvSet(CMD_KEY, all);
+          const salt = crypto.randomBytes(16).toString('hex'); mine[user] = { name, rank, phone, role, salt, hash: pwHash(pw, salt), created: Date.now(), changed: Date.now(), by: s.user }; kvSet(CMD_KEY, all);
           console.log('commander account created: ' + user + ' at ' + id + ' by hq:' + s.user); staffLog(s, 'commander.created', user, '', id); return json(res, 200, { ok: true, username: user, password: pw });
         }
         if (!a) return json(res, 404, { error: 'No such commander account' });
+        if (act === 'role') { const role = String(b.role || ''); if (!LCR_ROLE_LIST.includes(role)) return json(res, 400, { error: 'Role must be one of: ' + LCR_ROLE_LIST.join(', ') }); a.role = role; kvSet(CMD_KEY, all); staffLog(s, 'commander.role', user, role, id); return json(res, 200, { ok: true }); }
         if (act === 'reset') { const pw = newPassphrase(), salt = crypto.randomBytes(16).toString('hex'); a.salt = salt; a.hash = pwHash(pw, salt); a.changed = Date.now() + 1; kvSet(CMD_KEY, all); return json(res, 200, { ok: true, username: user, password: pw }); }
         if (act === 'disable' || act === 'enable') { a.disabled = act === 'disable'; a.changed = Date.now() + 1; kvSet(CMD_KEY, all); return json(res, 200, { ok: true }); }
         if (act === 'remove') { delete mine[user]; if (!Object.keys(mine).length) delete all[id]; kvSet(CMD_KEY, all); return json(res, 200, { ok: true }); }
@@ -1306,6 +1380,7 @@ const server = http.createServer(async (req, res) => {
     // ── Bulk setup: a control room (or HQ) adds many crew at once; each gets a one-time temporary password ──
     if (p === '/api/lcr/crew/bulk' && req.method === 'POST') {
       const ses = sessionOf(req); if (!ses || !['lcr', 'hq', ...AGENCY_ROLES].includes(ses.role)) return json(res, 401, { error: 'Sign in as a control room or HQ' });
+      if (!can(ses, 'officers.manage')) return json(res, 403, { error: 'Your role (' + roleLabel(ses) + ') does not include this' });
       if (ses.mc) return json(res, 403, { error: 'Choose your own password first' });
       const b = await readBody(req), kind = agencyOf(ses) || String(b.kind || ''), U = UNIT[kind]; if (!U) return json(res, 400, { error: 'Unknown account type' });
       const sid = ses.role === 'lcr' ? ses.sid : String(b.stationId || ''); if (!sid) return json(res, 400, { error: 'Say which control room these crew belong to' });
@@ -1354,6 +1429,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (p === '/api/lcr/unit/reset' && req.method === 'POST') {
       const ses = sessionOf(req); if (!ses || !['lcr', 'hq', ...AGENCY_ROLES].includes(ses.role)) return json(res, 401, { error: 'Sign in as a control room or HQ' });
+      if (!can(ses, 'officers.manage')) return json(res, 403, { error: 'Your role (' + roleLabel(ses) + ') does not include this' });
       if (ses.mc) return json(res, 403, { error: 'Choose your own password first' });
       const b = await readBody(req), kind = agencyOf(ses) || String(b.kind || ''), U = UNIT[kind]; if (!U) return json(res, 400, { error: 'Unknown account type' });
       const cred = (kvGet(U.key, []) || []).find(x => x.badge === String(b.badge || '')); if (!cred) return json(res, 404, { error: 'No such crew member' });
@@ -1684,6 +1760,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (p === '/api/security/check' && req.method === 'GET') {
       const ses = sessionOf(req); if (!ses || ses.role !== 'hq') return json(res, 401, { error: 'Sign in as HQ' });
+      if (!can(ses, 'security')) return json(res, 403, { error: 'Your role (' + roleLabel(ses) + ') does not include this' });
       const https = req.socket.encrypted || String(req.headers['x-forwarded-proto'] || '').split(',')[0] === 'https';
       const checks = [];
       const add = (name, ok, detail, sev) => checks.push({ name, ok, detail, sev: ok ? 'ok' : (sev || 'warn') });
@@ -1721,6 +1798,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (p === '/api/abuse' && req.method === 'GET') {
       const ses = sessionOf(req); if (!ses || ses.role !== 'hq') return json(res, 403, { error: 'HQ only' });
+      if (!can(ses, 'security')) return json(res, 403, { error: 'Your role (' + roleLabel(ses) + ') does not include this' });
       const days = Math.min(+u.searchParams.get('days') || 90, 365), since = Date.now() - days * 86400000, by = {}, bl = kvGet('registry:blocks', {});
       for (const k of incidentKeys()) { const m = store[k].value; if (!isObj(m)) continue;
         for (const r of Object.values(m)) { if (!isObj(r) || r.drill || !r.civilianId) continue; const tt = +incTime(r); if (tt && tt < since) continue;
@@ -1732,6 +1810,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (p === '/api/abuse/set' && req.method === 'POST') {
       const ses = sessionOf(req); if (!ses || ses.role !== 'hq') return json(res, 403, { error: 'HQ only' });
+      if (!can(ses, 'security')) return json(res, 403, { error: 'Your role (' + roleLabel(ses) + ') does not include this' });
       const b = await readBody(req), id = String(b.civilianId || ''); if (!/^CIV-\d{3,8}$/.test(id)) return json(res, 400, { error: 'Not a civilian number' });
       const bl = Object.assign({}, kvGet('registry:blocks', {}));
       if (!b.level || b.level === 'none') { delete bl[id]; kvSet('registry:blocks', bl); staffLog(ses, 'abuse.cleared', id, ''); return json(res, 200, { ok: true, level: null }); }
@@ -1762,6 +1841,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (p === '/api/stafflog' && req.method === 'GET') {
       const ses = sessionOf(req); if (!ses || ses.role !== 'hq') return json(res, 403, { error: 'HQ only' });
+      if (!can(ses, 'security')) return json(res, 403, { error: 'Your role (' + roleLabel(ses) + ') does not include this' });
       let l = kvGet('registry:staffLog', []); const q = u.searchParams, who = q.get('by'), st = q.get('station'), ref = q.get('ref'), act = q.get('action');
       if (who) l = l.filter(x => x.by.includes(who)); if (st) l = l.filter(x => x.station === st); if (ref) l = l.filter(x => x.ref === ref); if (act) l = l.filter(x => x.action.startsWith(act));
       return json(res, 200, { total: l.length, items: l.slice().reverse().slice(0, Math.min(+q.get('limit') || 200, 1000)) });
@@ -1782,6 +1862,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (p === '/api/clientlog' && req.method === 'GET') {
       const ses = sessionOf(req); if (!ses || ses.role !== 'hq') return json(res, 403, { error: 'HQ only' });
+      if (!can(ses, 'syshealth')) return json(res, 403, { error: 'Your role (' + roleLabel(ses) + ') does not include this' });
       const list = kvGet('registry:clientErrors', []), groups = {};
       for (const e of list) { const k = e.app + '|' + e.msg; const g = groups[k] || (groups[k] = { app: e.app, msg: e.msg, src: e.src, line: e.line, count: 0, first: e.at, last: e.at, builds: {}, roles: {}, offline: 0 }); g.count++; g.last = Math.max(g.last, e.at); g.first = Math.min(g.first, e.at); g.builds[e.build || '?'] = 1; if (e.role) g.roles[e.role] = 1; if (!e.online) g.offline++; }
       return json(res, 200, { total: list.length, groups: Object.values(groups).sort((a, b) => b.last - a.last).slice(0, 100).map(g => Object.assign(g, { builds: Object.keys(g.builds), roles: Object.keys(g.roles) })) });
@@ -1803,6 +1884,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (p === '/api/feedback' && req.method === 'GET') {
       const ses = sessionOf(req); if (!ses || ses.role !== 'hq') return json(res, 403, { error: 'HQ only' });
+      if (!can(ses, 'syshealth')) return json(res, 403, { error: 'Your role (' + roleLabel(ses) + ') does not include this' });
       const list = kvGet('registry:feedback', []); return json(res, 200, { items: list.slice().reverse().slice(0, 300), total: list.length, open: list.filter(x => x.status === 'new').length });
     }
     if (p === '/api/feedback/status' && req.method === 'POST') {
@@ -1900,6 +1982,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (p === '/api/storage/status' && req.method === 'GET') {
       const ses = sessionOf(req); if (!ses || ses.role !== 'hq') return json(res, 401, { error: 'Sign in as HQ' });
+      if (!can(ses, 'syshealth')) return json(res, 403, { error: 'Your role (' + roleLabel(ses) + ') does not include this' });
       const okDb = await WRITER.ping(), bks = PERSIST.listBackups(), last = bks[0] || null, hrs = BACKUP_HOURS;
       return json(res, 200, { kind: WRITER.kind, databaseConfigured: WRITER.enabled, databaseOk: WRITER.enabled ? okDb && WRITER.ok : null, pending: WRITER.pending, lastDatabaseWrite: WRITER.lastOkFlush ? new Date(WRITER.lastOkFlush).toISOString() : null, lastError: WRITER.lastError, records: Object.keys(store).length, diskSave: { ok: saveState.ok, lastError: saveState.lastError, since: saveState.failedSince ? new Date(saveState.failedSince).toISOString() : null, lastOk: saveState.lastOkAt ? new Date(saveState.lastOkAt).toISOString() : null, startupNote: saveState.loadNote },
         backups: { everyHours: hrs, keep: parseInt(process.env.GEAMS_BACKUP_KEEP, 10) || 7, encrypted: !!process.env.GEAMS_BACKUP_PASSPHRASE, offsite: !!process.env.GEAMS_BACKUP_PUT_URL, last, count: bks.length, overdue: hrs > 0 ? !last || Date.now() - Date.parse(last.createdAt) > hrs * 3600000 * 2 : null, lastRun: backupState },
@@ -1953,8 +2036,14 @@ const server = http.createServer(async (req, res) => {
         feedback: { total: fb.length, byKind: fbBy }, staffActions: { crewImports: cnt(/bulk_import/), handoversRecorded: cnt(/handover/), passwordResets: cnt(/password_reset/) },
         notMeasured: ['Whether help actually arrived or the outcome for the patient or victim: GEAMS only records what staff tap.', 'Calls and texts made outside GEAMS (112, phone calls).', 'Alerts that never reached the server (no signal and never retried).', 'Whether response times improved because of GEAMS: there is no comparison group unless you compare against your own earlier records.', 'Anything at an hour or place with too few alerts to be meaningful: treat small counts as stories, not statistics.'] });
     }
+    if (p === '/api/analytics/summary' && req.method === 'GET') {
+      const ses = sessionOf(req); if (!ses || !['hq', 'lcr'].includes(ses.role)) return json(res, 401, { error: 'Sign in as HQ or a control room' });
+      if (!can(ses, 'analytics')) return json(res, 403, { error: 'Your role (' + roleLabel(ses) + ') does not include this' });
+      return json(res, 200, incidentSummary(Object.fromEntries(u.searchParams), ses));
+    }
     if (p === '/api/analytics/response' && req.method === 'GET') {
       const ses = sessionOf(req); if (!ses || !['hq', 'lcr'].includes(ses.role)) return json(res, 401, { error: 'Sign in as HQ or a control room' });
+      if (!can(ses, 'analytics')) return json(res, 403, { error: 'Your role (' + roleLabel(ses) + ') does not include this' });
       return json(res, 200, responseAnalytics(Object.fromEntries(u.searchParams), ses));
     }
     // ── Open data: export ──
@@ -1984,6 +2073,7 @@ const server = http.createServer(async (req, res) => {
     // ── Open data: import (raw file in the body) ──
     if (p === '/api/import/incidents' && req.method === 'POST') {
       const ses = sessionOf(req); if (!ses || !['hq', 'lcr'].includes(ses.role)) return json(res, 401, { error: 'Sign in as HQ or a control room' });
+      if (!can(ses, 'import')) return json(res, 403, { error: 'Your role (' + roleLabel(ses) + ') does not include this' });
       const chunks = []; let size = 0, tooBig = false;
       await new Promise((ok) => { req.on('data', (c) => { size += c.length; if (size > 5 * 1024 * 1024) { tooBig = true; } else chunks.push(c); }); req.on('end', ok); req.on('error', ok); });
       if (tooBig) return json(res, 413, { error: 'File is over 5 MB. Split it and import in parts.' });
@@ -2015,12 +2105,14 @@ const server = http.createServer(async (req, res) => {
     // ── Crew approvals: a control room approves its own crews, HQ can approve any ──
     if (p === '/api/lcr/pending' && req.method === 'GET') {
       const ses = sessionOf(req); if (!ses || !['lcr', 'hq', ...AGENCY_ROLES].includes(ses.role)) return json(res, 401, { error: 'Sign in as a control room or HQ' });
+      if (!can(ses, 'officers.manage')) return json(res, 403, { error: 'Your role (' + roleLabel(ses) + ') does not include this' });
       if (ses.mc) return json(res, 403, { error: 'Choose your own password first' });
       const list = Object.values(kvGet(UNIT_PENDING, {})).filter(x => ses.role === 'hq' || (agencyOf(ses) ? x.kind === agencyOf(ses) : (x.kind === 'officer' && x.cred.lcrId === ses.sid))).map(x => ({ kind: x.kind, badge: x.cred.badge, name: x.cred.name, rank: x.cred.rank, phone: x.cred.phone, vehicle: x.cred.vehicle, lcrId: x.cred.lcrId, requestedAt: x.requestedAt }));
       return json(res, 200, { pending: list });
     }
     if (p === '/api/lcr/approve' && req.method === 'POST') {
       const ses = sessionOf(req); if (!ses || !['lcr', 'hq', ...AGENCY_ROLES].includes(ses.role)) return json(res, 401, { error: 'Sign in as a control room or HQ' });
+      if (!can(ses, 'officers.manage')) return json(res, 403, { error: 'Your role (' + roleLabel(ses) + ') does not include this' });
       if (ses.mc) return json(res, 403, { error: 'Choose your own password first' });
       const b = await readBody(req), id = (agencyOf(ses) || String(b.kind)) + ':' + String(b.badge), pend = Object.assign({}, kvGet(UNIT_PENDING, {})), x = pend[id];
       if (!x) return json(res, 404, { error: 'No such request (it may already have been handled)' });

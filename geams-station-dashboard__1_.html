@@ -2791,7 +2791,7 @@ const StationAuth = (() => {
       // ever appears on the map, in any mode, matching the same policy
       // applied to incidents.
       StationData.clearDemoOfficers();
-      StationApp.boot();
+      StationApp.boot(); try { StationApp.applyRole(); } catch (e) {}
       GeamsStationSync.start(match.id);
     };
 
@@ -3339,7 +3339,16 @@ const StationApp = (() => {
   let currentPage = 'dashboard';
 
   /* ── NAVIGATION ── */
+  // what the signed-in commander's role allows. Signing in with only the station passphrase (no commander accounts yet) cannot tell people apart, so nothing is limited then.
+  const ROLE_NAME = { commander: 'COMMANDER', supervisor: 'SUPERVISOR', dispatcher: 'DISPATCHER', records: 'RECORDS' };
+  function can(perm) { const c = StationAuth.getCommander(); return !c || !Array.isArray(c.perms) || c.perms.includes(perm); }
+  function applyRole() {
+    document.querySelectorAll('.nav-item[data-page]').forEach(n => { n.style.display = can(n.dataset.page) ? '' : 'none'; });
+    const c = StationAuth.getCommander(), el = document.getElementById('topbar-user-role');
+    if (el && c && c.role) el.textContent = 'STATION ' + (ROLE_NAME[c.role] || String(c.role).toUpperCase());
+  }
   function navigate(page) {
+    if (!can(page)) { showToast('warn', 'Not in your role', 'Your control-room role does not include this screen. HQ can change it.'); return; }
     document.querySelectorAll('.page-view').forEach(p => p.classList.remove('active'));
     const target = document.getElementById('page-' + page);
     if (target) target.classList.add('active');
@@ -4613,7 +4622,7 @@ const StationApp = (() => {
   }
 
   return {
-    navigate, showToast, openModal, closeModal, updateKPIs,
+    navigate, can, applyRole, showToast, openModal, closeModal, updateKPIs,
     /* incident */   acceptIncident, confirmAccept, markResolved, confirmResolve,
                      escalateToHQ, confirmEscalate, addIncidentNotes,
                      mergeIncidents, possibleDuplicates, mergeSuggested, flagSuspiciousCaller,
