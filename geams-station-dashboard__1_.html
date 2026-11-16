@@ -1100,7 +1100,7 @@ body.dfs-active { overflow:hidden; }
 
     <div class="form-group">
       <label class="form-label">Station ID</label>
-      <input class="form-input" id="login-station-id" placeholder="Station ID issued by HQ" autocomplete="off" onchange="StationAuth.prefillCommander()">
+      <input class="form-input" id="login-station-id" placeholder="Station ID issued by HQ" autocomplete="off" onchange="StationAuth.prefillCommander()" oninput="StationAuth.modeSoon()" onblur="StationAuth.modeSoon()">
     </div>
     <div class="form-group">
       <label class="form-label">Passphrase</label>
@@ -1214,6 +1214,7 @@ body.dfs-active { overflow:hidden; }
         <div class="user-role" id="topbar-user-role">STATION COMMANDER</div>
       </div>
     </div>
+    <button class="btn btn-ghost btn-sm" id="btn-mypw" style="margin-left:8px;display:none" onclick="StationAuth.openPassword(false)" title="Change my password" aria-label="Change my password">🔑</button>
     <button class="btn btn-ghost btn-sm" style="margin-left:8px" onclick="StationApp.confirmLogout()" title="End session">🚪</button>
   </header>
 
@@ -2603,6 +2604,7 @@ const StationAuth = (() => {
     let j = {}; try { j = await r.json(); } catch (e) {}
     if (r.status === 429 || r.status === 403 || r.status === 404) throw new Error(j.error || 'Sign-in refused');
     if (r.ok && j.token) { GeamsSync.setToken(j.token); lastCommander = j.commander || null; return true; }
+    if (r.status === 401 && /commander username and password/i.test(j.error || '')) { setAcctMode(true); acctFor = match.id; modeAt = Date.now(); }   // the server says this control room uses personal accounts
     lastLoginError = j.error || '';
     return false;
   }
@@ -2663,14 +2665,24 @@ const StationAuth = (() => {
   }
 
   let needAcct = false, acctFor = '', lastCommander = null;
-  async function checkLoginMode() {
-    const st = findStation(document.getElementById('login-station-id').value); if (!st || acctFor === st.id) return;
+  // Does this control room sign in with personal commander accounts? Asked of the server, never guessed: it re-asks whenever the ID changes,
+  // when you press Sign in, and when the page is shown again, so accounts HQ creates later are picked up without a reload.
+  let modeAt = 0, modeTimer = null;
+  async function checkLoginMode(force) {
+    const typed = document.getElementById('login-station-id').value.trim(); if (!typed) return;
+    const st = findStation(typed), id = st ? st.id : typed.toUpperCase();
+    if (!force && acctFor === id && Date.now() - modeAt < 8000) return;
     try {
-      const r = await fetch((GeamsSync.base || '') + '/api/lcr/login-info?stationId=' + encodeURIComponent(st.id), { cache: 'no-store' }); if (!r.ok) return; const j = await r.json();
-      needAcct = !!j.required; acctFor = st.id;
-      document.getElementById('login-cmd-acct').style.display = needAcct ? '' : 'none'; document.getElementById('login-cmd-self').style.display = needAcct ? 'none' : '';
+      const r = await fetch((GeamsSync.base || '') + '/api/lcr/login-info?stationId=' + encodeURIComponent(id), { cache: 'no-store' }); if (!r.ok) return; const j = await r.json();
+      setAcctMode(!!j.required); acctFor = id; modeAt = Date.now();
     } catch (e) {}
   }
+  function setAcctMode(on) {
+    needAcct = on;
+    document.getElementById('login-cmd-acct').style.display = on ? '' : 'none'; document.getElementById('login-cmd-self').style.display = on ? 'none' : '';
+  }
+  function modeSoon() { clearTimeout(modeTimer); modeTimer = setTimeout(() => checkLoginMode(true), 350); }
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && !session) checkLoginMode(true); });
   function fillDemo(id) {
     document.getElementById('login-station-id').value = id;
     prefillCommander();
@@ -2682,7 +2694,7 @@ const StationAuth = (() => {
   // 'registry:lcrCommanders' key so partner control rooms see who is on duty.
   function cmdLocalKey(id) { return 'geams:lcrCommander:' + id; }
   function prefillCommander() {
-    acctFor = ''; checkLoginMode();
+    acctFor = ''; checkLoginMode(true);
     const st = findStation(document.getElementById('login-station-id').value); if (!st) return;
     let c = null; try { c = JSON.parse(localStorage.getItem(cmdLocalKey(st.id)) || 'null'); } catch (e) {}
     if (!c && st.commanderName) c = { name: st.commanderName, rank: st.commanderRank, phone: st.phone };
@@ -2748,7 +2760,7 @@ const StationAuth = (() => {
     if (!idInput.trim() || !passInput.trim()) {
       showError('Enter both Station ID and passphrase'); return;
     }
-    acctFor = ''; await checkLoginMode();
+    await checkLoginMode(true);
     if (needAcct && (!document.getElementById('login-cmd-user').value.trim() || !document.getElementById('login-cmd-pass').value)) { showError('Enter your commander username and password'); return; }
 
     let match = findStation(idInput);
@@ -2792,6 +2804,7 @@ const StationAuth = (() => {
       // applied to incidents.
       StationData.clearDemoOfficers();
       StationApp.boot(); try { StationApp.applyRole(); } catch (e) {}
+      try { if (lastCommander && lastCommander.mustChange) openPassword(true); } catch (e) {}
       GeamsStationSync.start(match.id);
     };
 
@@ -2843,7 +2856,34 @@ const StationAuth = (() => {
     document.getElementById('login-screen').classList.add('active');
   }
 
-  return { initLoginScreen, fillDemo, prefillCommander, setCommander, attemptLogin, getSession, getCommander: () => lastCommander, getDirectory, getOtherStations, logout, findStation, haversineMeters };
+  // Everyone with a commander account may change their own password from the key button, whatever their role.
+  // A password HQ has just issued must be replaced before anything else works (the server refuses everything until then).
+  let pwForced = false, pwWatch = null;
+  function openPassword(forced) {
+    if (!lastCommander) return; pwForced = !!forced;
+    StationApp.openModal(forced ? '🔑 Choose your own password' : '🔑 Change my password', `
+      ${forced ? '<div style="font-size:.76rem;color:var(--amber);line-height:1.5;margin-bottom:10px">HQ gave you a first password. Choose one only you know to continue.</div>' : ''}
+      <input class="form-input" type="password" id="pw-cur" placeholder="${forced ? 'Password HQ gave you' : 'Current password'}" autocomplete="current-password" style="margin-bottom:8px">
+      <input class="form-input" type="password" id="pw-new" placeholder="New password (10+ characters)" autocomplete="new-password" style="margin-bottom:8px">
+      <input class="form-input" type="password" id="pw-new2" placeholder="New password again" autocomplete="new-password">
+      <div id="pw-msg" style="font-size:.74rem;margin-top:8px;color:var(--text-muted)"></div>`,
+      `${forced ? '<button class="btn btn-ghost btn-sm" onclick="StationApp.confirmLogout()">Sign out</button>' : '<button class="btn btn-ghost btn-sm" onclick="StationApp.closeModal()">Cancel</button>'}<button class="btn btn-primary btn-sm" id="pw-save" onclick="StationAuth.savePassword()">Save password</button>`);
+    clearInterval(pwWatch); if (forced) pwWatch = setInterval(() => { const ov = document.getElementById('modal-overlay'); if (lastCommander && lastCommander.mustChange && ov && ov.classList.contains('hidden')) openPassword(true); }, 800);
+  }
+  async function savePassword() {
+    const msg = document.getElementById('pw-msg'), say = (t, bad) => { msg.style.color = bad ? 'var(--red)' : 'var(--green)'; msg.textContent = t; };
+    const cur = document.getElementById('pw-cur').value, n1 = document.getElementById('pw-new').value, n2 = document.getElementById('pw-new2').value;
+    if (n1.length < 10) return say('New password must be at least 10 characters', true);
+    if (n1 !== n2) return say('The two new passwords are not the same', true);
+    document.getElementById('pw-save').disabled = true;
+    try {
+      const r = await fetch((GeamsSync.base || '') + '/api/lcr/commander/password', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (GeamsSync.token || '') }, body: JSON.stringify({ current: cur, password: n1 }) });
+      const j = await r.json().catch(() => ({})); if (!r.ok) { say(j.error || 'Not changed', true); document.getElementById('pw-save').disabled = false; return; }
+      GeamsSync.setToken(j.token); lastCommander = Object.assign({}, lastCommander, { mustChange: false, role: j.role, perms: j.perms });
+      clearInterval(pwWatch); pwForced = false; say('✓ Password changed'); setTimeout(() => { StationApp.closeModal(); try { StationApp.applyRole(); StationApp.navigate('dashboard'); } catch (e) {} }, 700);
+    } catch (e) { say('Could not reach the server', true); document.getElementById('pw-save').disabled = false; }
+  }
+  return { initLoginScreen, openPassword, savePassword, modeSoon, fillDemo, prefillCommander, setCommander, attemptLogin, getSession, getCommander: () => lastCommander, getDirectory, getOtherStations, logout, findStation, haversineMeters };
 })();
 
 /* ============================================================
@@ -3341,10 +3381,10 @@ const StationApp = (() => {
   /* ── NAVIGATION ── */
   // what the signed-in commander's role allows. Signing in with only the station passphrase (no commander accounts yet) cannot tell people apart, so nothing is limited then.
   const ROLE_NAME = { commander: 'COMMANDER', supervisor: 'SUPERVISOR', dispatcher: 'DISPATCHER', records: 'RECORDS' };
-  function can(perm) { const c = StationAuth.getCommander(); return !c || !Array.isArray(c.perms) || c.perms.includes(perm); }
+  function can(perm) { const c = StationAuth.getCommander(); return !c || c.mustChange || !Array.isArray(c.perms) || c.perms.includes(perm); }
   function applyRole() {
     document.querySelectorAll('.nav-item[data-page]').forEach(n => { n.style.display = can(n.dataset.page) ? '' : 'none'; });
-    const c = StationAuth.getCommander(), el = document.getElementById('topbar-user-role');
+    const c = StationAuth.getCommander(), el = document.getElementById('topbar-user-role'), pb = document.getElementById('btn-mypw'); if (pb) pb.style.display = c ? '' : 'none';
     if (el && c && c.role) el.textContent = 'STATION ' + (ROLE_NAME[c.role] || String(c.role).toUpperCase());
   }
   function navigate(page) {

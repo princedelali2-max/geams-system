@@ -1953,8 +1953,9 @@ const HqAuth = (() => {
     try {
       const r = await api('/api/hq/login', { method: 'POST', body: JSON.stringify({ username: document.getElementById('hq-user').value, password: document.getElementById('hq-pass').value }) });
       if (!r.ok) { showErr(r.j.error || 'Sign-in failed'); return; }
-      setToken(r.j.token); me = { user: r.j.user, role: r.j.role, perms: r.j.perms }; document.getElementById('hq-pass').value = '';
+      setToken(r.j.token); me = { user: r.j.user, role: r.j.role, perms: r.j.perms, mustChange: !!r.j.mustChange }; document.getElementById('hq-pass').value = '';
       applyMe(); hide(); begin(); setTimeout(storageWarn, 4000);
+      if (me.mustChange) setTimeout(() => openPassword(true), 400);
     } catch (e) { showErr('Cannot reach the GEAMS server'); }
     finally { btn.disabled = false; btn.textContent = 'Sign in'; }
   }
@@ -1964,11 +1965,35 @@ const HqAuth = (() => {
     if (GeamsSync.mode !== 'server') { GeamsApp.showToast('info','No sign-in','HQ is running without a backend'); return; }
     GeamsApp.openModal('👤 ' + (me ? me.user : 'Account'), `
       <div style="font-size:.82rem;color:var(--text-muted);line-height:1.6">Signed in as <strong style="color:var(--text-white)">${me ? me.user : ''}</strong> (${me && me.role === 'admin' ? 'HQ owner' : 'HQ ' + (me ? me.role : 'operator')}). Everything you issue from HQ is recorded under this name.</div>
+      ${me && me.role !== 'admin' ? '<div style="margin-top:12px"><button class="btn btn-primary btn-sm" onclick="HqAuth.openPassword(false)">🔑 Change my password</button></div>' : ''}
       <div id="hq-ops-area" style="margin-top:14px"></div><div id="hq-store-area" style="margin-top:14px"></div>`,
       `<button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal()">Close</button>
        <button class="btn btn-danger btn-sm" onclick="HqAuth.signOut()">⎋ Sign out</button>`);
     if (me && me.role === 'admin') loadOperators();
     loadStorage();
+  }
+  // An operator changes their own password here (the owner's is set on the server). A password the owner has just issued must be replaced first.
+  let pwWatch = null;
+  function openPassword(forced) {
+    if (!me || me.role === 'admin') return;
+    GeamsApp.openModal(forced ? '🔑 Choose your own password' : '🔑 Change my password', `
+      ${forced ? '<div style="font-size:.76rem;color:var(--amber);line-height:1.5;margin-bottom:10px">The HQ owner gave you a first password. Choose one only you know to continue.</div>' : ''}
+      <input class="form-input" type="password" id="hpw-cur" placeholder="${forced ? 'Password the owner gave you' : 'Current password'}" autocomplete="current-password" style="margin-bottom:8px">
+      <input class="form-input" type="password" id="hpw-new" placeholder="New password (10+ characters)" autocomplete="new-password" style="margin-bottom:8px">
+      <input class="form-input" type="password" id="hpw-new2" placeholder="New password again" autocomplete="new-password">
+      <div id="hpw-msg" style="font-size:.74rem;margin-top:8px"></div>`,
+      `${forced ? '<button class="btn btn-ghost btn-sm" onclick="HqAuth.signOut()">Sign out</button>' : '<button class="btn btn-ghost btn-sm" onclick="GeamsApp.closeModal()">Cancel</button>'}<button class="btn btn-primary btn-sm" id="hpw-save" onclick="HqAuth.savePassword()">Save password</button>`);
+    clearInterval(pwWatch); if (forced) pwWatch = setInterval(() => { const ov = document.getElementById('modal-overlay'); if (me && me.mustChange && ov && ov.classList.contains('hidden')) openPassword(true); }, 800);
+  }
+  async function savePassword() {
+    const msg = document.getElementById('hpw-msg'), say = (t, bad) => { msg.style.color = bad ? 'var(--red)' : 'var(--green)'; msg.textContent = t; };
+    const cur = document.getElementById('hpw-cur').value, n1 = document.getElementById('hpw-new').value, n2 = document.getElementById('hpw-new2').value;
+    if (n1.length < 10) return say('New password must be at least 10 characters', true); if (n1 !== n2) return say('The two new passwords are not the same', true);
+    document.getElementById('hpw-save').disabled = true;
+    const r = await api('/api/hq/password', { method: 'POST', body: JSON.stringify({ current: cur, password: n1 }) });
+    if (!r.ok) { say(r.j.error || 'Not changed', true); document.getElementById('hpw-save').disabled = false; return; }
+    setToken(r.j.token); me.perms = r.j.perms; me.mustChange = false; clearInterval(pwWatch); say('✓ Password changed'); applyMe();
+    setTimeout(() => { GeamsApp.closeModal(); GeamsApp.navigate(me.perms.includes('overview') ? 'overview' : (me.perms[0] || 'overview')); }, 700);
   }
   const ROLE_HELP = { supervisor: 'Supervisor: every screen', duty: 'Duty: incidents, stations, officers, broadcast, tactical', analyst: 'Analyst: incidents, analytics, replay', auditor: 'Auditor: incidents, analytics, replay, security log' };
   async function setOperatorRole(name, role) {
@@ -2034,7 +2059,7 @@ const HqAuth = (() => {
     else if (s.backups.overdue) GeamsApp.showToast('warn', 'Backup overdue', 'The latest backup is older than expected', 9000);
   }
   async function addOperator() {
-    const r = await api('/api/hq/users', { method: 'POST', body: JSON.stringify({ username: document.getElementById('op-name').value, password: document.getElementById('op-pass').value, role: document.getElementById('op-role').value }) });
+    const r = await api('/api/hq/users', { method: 'POST', body: JSON.stringify({ username: document.getElementById('op-name').value, password: document.getElementById('op-pass').value, role: document.getElementById('op-role').value, mustChange: true }) });
     GeamsApp.showToast(r.ok ? 'success' : 'error', r.ok ? 'Operator saved' : 'Not saved', r.ok ? '' : (r.j.error || ''));
     if (r.ok) loadOperators();
   }
@@ -2044,7 +2069,7 @@ const HqAuth = (() => {
   }
   document.addEventListener('visibilitychange', () => {});
   setInterval(() => { try { storageWarn(true); } catch (e) {} }, 60000);
-  return { gate, can, submit, sessionExpired, signOut, openMenu, addOperator, setOperatorRole, removeOperator, runBackup, downloadBackup, storageWarn, api, user: () => (me ? me.user : 'HQ'), token };
+  return { gate, can, openPassword, savePassword, submit, sessionExpired, signOut, openMenu, addOperator, setOperatorRole, removeOperator, runBackup, downloadBackup, storageWarn, api, user: () => (me ? me.user : 'HQ'), token };
 })();
 GeamsSync.onAuthLost(() => { try { HqAuth.sessionExpired(); } catch (e) {} });
 
@@ -5732,14 +5757,14 @@ const GeamsStations = (() => {
   }
   async function cmdCreate(id) {
     const g = (x) => document.getElementById(x).value.trim();
-    const r = await HqAuth.api('/api/hq/lcr/commander', { method: 'POST', body: JSON.stringify({ stationId: id, action: 'create', username: g('cm-user'), name: g('cm-name'), rank: document.getElementById('cm-rank').value, phone: g('cm-phone'), role: document.getElementById('cm-role').value }) });
+    const r = await HqAuth.api('/api/hq/lcr/commander', { method: 'POST', body: JSON.stringify({ stationId: id, action: 'create', username: g('cm-user'), name: g('cm-name'), rank: document.getElementById('cm-rank').value, phone: g('cm-phone'), role: document.getElementById('cm-role').value, mustChange: true }) });
     if (!r.ok) { document.getElementById('cm-err').textContent = r.j.error || 'Could not create the account'; return; }
     commanders(id, { username: r.j.username, password: r.j.password });
   }
   async function cmdAct(id, user, act, role) {
     if (act === 'remove' && !confirm('Remove commander account "' + user + '"? They are signed out at once.')) return;
     if (act === 'reset' && !confirm('Issue a new password for "' + user + '"? The old one stops working and they are signed out.')) return;
-    const r = await HqAuth.api('/api/hq/lcr/commander', { method: 'POST', body: JSON.stringify({ stationId: id, action: act, username: user, role }) });
+    const r = await HqAuth.api('/api/hq/lcr/commander', { method: 'POST', body: JSON.stringify({ stationId: id, action: act, username: user, role, mustChange: true }) });
     if (!r.ok) { GeamsApp.showToast('error', 'Not changed', r.j.error || ''); return; }
     commanders(id, act === 'reset' ? { username: user, password: r.j.password } : null);
   }

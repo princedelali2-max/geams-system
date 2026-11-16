@@ -28,14 +28,14 @@
       { sel: '.nav-tab[data-screen="aid"]', title: 'Mutual aid', text: 'Ask another station for help, or answer a request from one.' },
       { sel: 'button[title="My availability"]', title: 'My availability', text: 'Say whether you can take a call. Your commander sees it on the station roster.' },
       { sel: 'button[title="Send feedback"]', title: 'Feedback', text: 'Tell HQ about a problem or an idea. It goes to the GEAMS team, not to the public.' },
-      { sel: 'button[title="End Shift"]', title: 'End shift', text: 'Signs you out at the end of your shift.' } ] },
+      { sel: '#btn-signout', title: 'Sign out', text: 'Signs you out at the end of your shift. It asks you to confirm first.' } ] },
     'geams-ambulance-service.html': { gate: '#main-view', blockedBy: '#main-view[style*="display:none"], #main-view[style*="display: none"]', steps: [
       { sel: '.nav-tab[data-screen="queue"]', title: 'Calls', text: 'Ambulance calls for your station arrive here. Take one to start a response.', before: "AmbulanceApp.navigate('queue')" },
       { sel: '.nav-tab[data-screen="job"]', title: 'Active response', text: 'The job you are working: status, location and updates. Updates made with no signal wait on the phone and send later.' },
       { sel: '.nav-tab[data-screen="aid"]', title: 'Mutual aid', text: 'Ask another station for help, or answer a request from one.' },
       { sel: 'button[title="My availability"]', title: 'My availability', text: 'Say whether you can take a call. Your commander sees it on the station roster.' },
       { sel: 'button[title="Send feedback"]', title: 'Feedback', text: 'Tell HQ about a problem or an idea. It goes to the GEAMS team, not to the public.' },
-      { sel: 'button[title="End Shift"]', title: 'End shift', text: 'Signs you out at the end of your shift.' } ] },
+      { sel: '#btn-signout', title: 'Sign out', text: 'Signs you out at the end of your shift. It asks you to confirm first.' } ] },
     'geams-station-dashboard__1_.html': { gate: '#app', blockedBy: '#app[style*="display:none"], #app[style*="display: none"]', steps: [
       { sel: '.nav-item[data-page="dashboard"]', title: 'Dashboard', text: 'The map and the numbers for your station. Counts come from the live records, not from sample data.', before: "StationApp.navigate('dashboard')" },
       { sel: '.nav-item[data-page="incidents"]', title: 'Incidents', text: 'Every alert for your station. Open one to assign it, update it, merge duplicates or resolve it.' },

@@ -439,3 +439,23 @@ Honest limits:
   - The analyst's counts cover the last 30 days and exclude drills; the time of day is UTC (Ghana keeps UTC).
   - Fire HQ, Ambulance HQ, and crew apps already have their own narrower accounts and are unchanged.
   - Tests: t_rbac.js (73 server checks), t_rbac_ui.js (menu and navigation checks).
+
+
+OWN PASSWORDS, AND THE CONTROL-ROOM SIGN-IN FORM
+------------------------------------------------
+Own password: every commander and HQ operator can now set their own password.
+  - Control room: a key button (🔑) in the top bar opens "Change my password" for every role. Before, the only place was
+    Settings, which dispatchers and records staff cannot open.
+  - HQ operators: "Change my password" is in the account menu. (The HQ owner's password is set on the server with
+    GEAMS_HQ_ADMIN_PASSWORD and cannot be changed from the page.)
+  - A password that HQ or the owner has just issued (new account, or a reset) must be replaced at first sign-in. Until it is,
+    the person has no permissions at all: the server refuses their data, so closing the prompt does not get around it.
+    The prompt reappears if closed, and the only other choice is Sign out.
+  - New passwords need 10 or more characters and must differ from the old one. Old tokens stop working after a change.
+  - API scripts that create accounts without "mustChange": true are not forced, so older scripts keep working.
+Sign-in form: the control-room form now asks the server whether commander accounts exist each time the Station ID changes, when
+  you press Sign in, and when the page is shown again, so accounts HQ creates later are picked up without a reload. It no longer
+  depends on the station being in the page's own list. If the server says accounts are needed, the form switches to them.
+  A passphrase alone is refused by the server once any commander account exists, whatever the form shows.
+Tests: t_ownpassword.js (17 screen checks), t_rbac.js (97 server checks). The help tour step for Sign out in the Fire and
+  Ambulance apps was updated to the new Sign out button.

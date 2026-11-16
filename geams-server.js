@@ -250,6 +250,7 @@ const HQ_ROLE_LIST = ['supervisor', 'duty', 'analyst', 'auditor'], LCR_ROLE_LIST
 // permissions a signed-in HQ or control-room session has; any other kind of session is not limited here
 function permsOf(ses) {
   if (!ses) return [];
+  if ((ses.role === 'hq' || (ses.role === 'lcr' && ses.cmd)) && ses.mc) return [];   // an HQ-issued password must be replaced first
   if (ses.role === 'hq') return HQ_ROLES[ses.hqRole] || [];
   if (ses.role === 'lcr') return ses.cmd ? (LCR_ROLES[ses.cmd.role || 'commander'] || []) : LCR_ALL;   // a station passphrase on its own cannot tell people apart, so it keeps the full set until HQ creates commander accounts
   return null;
@@ -274,13 +275,13 @@ function verifyToken(t) {
   let p; try { p = JSON.parse(Buffer.from(m[1], 'base64url').toString('utf8')); } catch (e) { return null; }
   if (!p || p.exp < Date.now() || revoked.has(p.jti)) return null;
   if (p.r !== 'hq' && p.r !== 'civilian') { const ep = store['registry:authEpoch'] && store['registry:authEpoch'].value; if (ep && ep.at && p.iat < ep.at) return null; }   // HQ rotated every station-side token
-  if (p.r === 'hq' && p.hr !== 'admin') { const u = hqUsers[p.u]; if (!u || (u.changed && u.changed > p.iat)) return null; p.hr = u.role || 'operator'; }
+  if (p.r === 'hq' && p.hr !== 'admin') { const u = hqUsers[p.u]; if (!u || (u.changed && u.changed > p.iat)) return null; p.hr = u.role || 'operator'; p.mc = u.mustChange ? 1 : 0; }
   if (p.r === 'officer' || p.r === 'fire' || p.r === 'ambulance') { const ua = (store['registry:unitAuth'] && store['registry:unitAuth'].value || {})[p.r + ':' + p.b]; if (ua && ((ua.changed && ua.changed > p.iat) || ua.disabled)) return null; }   // password changed or reset, or account disabled by its HQ: older sign-ins end
   if (p.r === 'fire_hq' || p.r === 'ambulance_hq') { const a = (store[AGENCY_KEY] && store[AGENCY_KEY].value || {})[p.ak + ':' + p.u]; if (!a || a.disabled || (a.changed && a.changed > p.iat)) return null; }   // password changed or reset: older sign-ins end
   if (p.r === 'lcr') {
     const st = (store['registry:stations'] && store['registry:stations'].value || {})[p.s]; if (st && st.disabled) return null;
     const accts = commanderAccts(p.s);
-    if (p.cu) { const a = accts[p.cu]; if (!a || a.disabled || (a.changed && a.changed > p.iat)) return null; p.cl = a.role || 'commander'; }
+    if (p.cu) { const a = accts[p.cu]; if (!a || a.disabled || (a.changed && a.changed > p.iat)) return null; p.cl = a.role || 'commander'; p.mc = a.mustChange ? 1 : 0; }
     else if (Object.values(accts).some(a => !a.disabled)) return null;   // once HQ creates commander accounts, a station sign-in without one stops working
   }
   return p;
@@ -456,6 +457,7 @@ function authorize(req, key, action, allowCookie) {
     if (!matched) return { code: 403, error: 'Your role (' + ses.role + ') cannot ' + (action === 'r' ? 'read' : 'write') + ' this data' };
   }
   if (Array.isArray(need) && !need.includes(ses.role)) return { code: 403, error: 'Your role (' + ses.role + ') cannot ' + (action === 'r' ? 'read' : 'write') + ' this data' };
+  if ((ses.role === 'hq' || ses.role === 'lcr') && ses.mc) return { code: 403, error: 'Choose your own password first' };
   if (ses.role === 'hq' || ses.role === 'lcr') { const kp = kvPerm(key, action, ses.role === 'hq'); if (kp && !can(ses, kp)) return { code: 403, error: 'Your role (' + roleLabel(ses) + ') does not include access to this' }; }
   if (action === 'w' && rule.own && ses.role === 'lcr' && m && m[1] && ses.sid !== m[1]) return { code: 403, error: 'A control room can only change its own roster' };
   // a control room writes only its own station's incident, intel and service maps (reading across stations stays allowed for archives)
@@ -1202,9 +1204,21 @@ const server = http.createServer(async (req, res) => {
       const who = checkLogin(b.username, b.password);
       if (!who) { noteFail(k); return json(res, 401, { error: 'Wrong username or password' }); }
       fails.delete(k);
-      return json(res, 200, { token: issue(res, req, { r: 'hq', u: who.user, hr: who.role }, SESSION_MS), user: who.user, role: who.role, perms: HQ_ROLES[who.role] || [], expires: Date.now() + SESSION_MS });
+      return json(res, 200, { token: issue(res, req, { r: 'hq', u: who.user, hr: who.role }, SESSION_MS), user: who.user, role: who.role, perms: (hqUsers[who.user] && hqUsers[who.user].mustChange) ? [] : (HQ_ROLES[who.role] || []), mustChange: !!(hqUsers[who.user] && hqUsers[who.user].mustChange), expires: Date.now() + SESSION_MS });
     }
-    if (p === '/api/hq/me' && req.method === 'GET') { const s = sessionOf(req); return s && s.role === 'hq' ? json(res, 200, { user: s.user, role: s.hqRole, perms: permsOf(s) }) : json(res, 401, { error: 'Not signed in' }); }
+    if (p === '/api/hq/me' && req.method === 'GET') { const s = sessionOf(req); return s && s.role === 'hq' ? json(res, 200, { user: s.user, role: s.hqRole, perms: permsOf(s), mustChange: !!s.mc }) : json(res, 401, { error: 'Not signed in' }); }
+    if (p === '/api/hq/password' && req.method === 'POST') {   // an HQ operator sets their own password (the owner's is set on the server)
+      const s = sessionOf(req); if (!s || s.role !== 'hq') return json(res, 401, { error: 'Not signed in' });
+      if (s.hqRole === 'admin') return json(res, 400, { error: 'The owner password is set on the server (GEAMS_HQ_ADMIN_PASSWORD), not here' });
+      if (!bump('hpw|' + s.user, 8, 15 * 60000)) return json(res, 429, { error: 'Too many attempts. Try again later.' });
+      const b = await readBody(req), u0 = hqUsers[s.user];
+      if (!u0 || !eq(pwHash(String(b.current || ''), u0.salt), u0.hash)) return json(res, 401, { error: 'Your current password is not right' });
+      if (String(b.password || '').length < 10) return json(res, 400, { error: 'New password must be at least 10 characters' });
+      if (String(b.password) === String(b.current)) return json(res, 400, { error: 'Choose a password different from the current one' });
+      const salt = crypto.randomBytes(16).toString('hex'); u0.salt = salt; u0.hash = pwHash(String(b.password), salt); u0.changed = Date.now(); u0.mustChange = false; saveUsers();
+      staffLog(s, 'hq.password', s.user, '', '');
+      return json(res, 200, { ok: true, token: issue(res, req, { r: 'hq', u: s.user, hr: u0.role || 'operator' }, SESSION_MS), perms: HQ_ROLES[u0.role || 'operator'] || [] });
+    }
     if (p === '/api/hq/logout' && req.method === 'POST') { const s = sessionOf(req, true); if (s) revoked.add(s.jti); res.setHeader('Set-Cookie', 'geams_t=; Path=/; HttpOnly; Max-Age=0'); return json(res, 200, { ok: true }); }
     if (p === '/api/hq/users') {
       const s = sessionOf(req); if (!s || s.role !== 'hq') return json(res, 401, { error: 'Not signed in' });
@@ -1224,7 +1238,7 @@ const server = http.createServer(async (req, res) => {
         if (String(b.password || '').length < 10) return json(res, 400, { error: 'Password must be at least 10 characters' });
         const salt = crypto.randomBytes(16).toString('hex'), keep = hqUsers[name] && hqUsers[name].role;
         // a new account without a stated role gets the narrowest one (duty); a new password on an existing account keeps its role
-        hqUsers[name] = { salt, hash: pwHash(b.password, salt), role: wantRole || keep || 'duty', created: Date.now(), changed: Date.now() }; saveUsers();
+        hqUsers[name] = { salt, hash: pwHash(b.password, salt), role: wantRole || keep || 'duty', created: Date.now(), changed: Date.now(), mustChange: !!b.mustChange }; saveUsers();
         staffLog(s, 'hq.operator', name, hqUsers[name].role, '');
         return json(res, 200, { ok: true, role: hqUsers[name].role });
       }
@@ -1258,7 +1272,7 @@ const server = http.createServer(async (req, res) => {
         const ca = accts[cuser];
         if (!ca || ca.disabled || !eq(pwHash(String(cin.password), ca.salt), ca.hash)) { noteFail(k); return json(res, 401, { error: 'Incorrect commander username or password' }); }
         fails.delete(k); console.log('commander sign-in: ' + cuser + ' at ' + id);
-        return json(res, 200, { ok: true, token: issue(res, req, { r: 'lcr', s: id, u: cuser, cu: cuser, cn: ca.name, cr: ca.rank }, SESSION_MS), commander: { user: cuser, name: ca.name, rank: ca.rank, phone: ca.phone || '', role: ca.role || 'commander', perms: LCR_ROLES[ca.role || 'commander'] || [] } });
+        return json(res, 200, { ok: true, token: issue(res, req, { r: 'lcr', s: id, u: cuser, cu: cuser, cn: ca.name, cr: ca.rank }, SESSION_MS), commander: { user: cuser, name: ca.name, rank: ca.rank, phone: ca.phone || '', role: ca.role || 'commander', perms: ca.mustChange ? [] : (LCR_ROLES[ca.role || 'commander'] || []), mustChange: !!ca.mustChange } });
       }
       fails.delete(k);
       return json(res, 200, { ok: true, token: issue(res, req, { r: 'lcr', s: id, u: id }, SESSION_MS), commander: null });
@@ -1273,8 +1287,9 @@ const server = http.createServer(async (req, res) => {
       const b = await readBody(req), all = JSON.parse(JSON.stringify(kvGet(CMD_KEY, {}))), a = (all[ses.sid] || {})[ses.cmd.user];
       if (!a || !eq(pwHash(String(b.current || ''), a.salt), a.hash)) return json(res, 401, { error: 'Your current password is not right' });
       if (String(b.password || '').length < 10) return json(res, 400, { error: 'New password must be at least 10 characters' });
-      a.salt = crypto.randomBytes(16).toString('hex'); a.hash = pwHash(String(b.password), a.salt); a.changed = Date.now(); kvSet(CMD_KEY, all);
-      return json(res, 200, { ok: true, token: issue(res, req, { r: 'lcr', s: ses.sid, u: ses.cmd.user, cu: ses.cmd.user, cn: a.name, cr: a.rank }, SESSION_MS) });
+      if (String(b.password) === String(b.current)) return json(res, 400, { error: 'Choose a password different from the current one' });
+      a.salt = crypto.randomBytes(16).toString('hex'); a.hash = pwHash(String(b.password), a.salt); a.changed = Date.now(); a.mustChange = false; kvSet(CMD_KEY, all);
+      return json(res, 200, { ok: true, role: a.role || 'commander', perms: LCR_ROLES[a.role || 'commander'] || [], token: issue(res, req, { r: 'lcr', s: ses.sid, u: ses.cmd.user, cu: ses.cmd.user, cn: a.name, cr: a.rank }, SESSION_MS) });
     }
     // HQ creates and manages commander accounts
     if (p === '/api/hq/lcr/commander') {
@@ -1296,12 +1311,12 @@ const server = http.createServer(async (req, res) => {
           if (!name || name.length < 3 || !/\s/.test(name)) return json(res, 400, { error: 'Enter the commander\'s full name (first and last)' });
           if (a) return json(res, 409, { error: 'That username already exists for this control room. Use reset to set a new password.' });
           const pw = b.password ? String(b.password) : newPassphrase(); if (pw.length < 10) return json(res, 400, { error: 'Password must be at least 10 characters' });
-          const salt = crypto.randomBytes(16).toString('hex'); mine[user] = { name, rank, phone, role, salt, hash: pwHash(pw, salt), created: Date.now(), changed: Date.now(), by: s.user }; kvSet(CMD_KEY, all);
+          const salt = crypto.randomBytes(16).toString('hex'); mine[user] = { name, rank, phone, role, salt, hash: pwHash(pw, salt), created: Date.now(), changed: Date.now(), by: s.user, mustChange: !!b.mustChange }; kvSet(CMD_KEY, all);
           console.log('commander account created: ' + user + ' at ' + id + ' by hq:' + s.user); staffLog(s, 'commander.created', user, '', id); return json(res, 200, { ok: true, username: user, password: pw });
         }
         if (!a) return json(res, 404, { error: 'No such commander account' });
         if (act === 'role') { const role = String(b.role || ''); if (!LCR_ROLE_LIST.includes(role)) return json(res, 400, { error: 'Role must be one of: ' + LCR_ROLE_LIST.join(', ') }); a.role = role; kvSet(CMD_KEY, all); staffLog(s, 'commander.role', user, role, id); return json(res, 200, { ok: true }); }
-        if (act === 'reset') { const pw = newPassphrase(), salt = crypto.randomBytes(16).toString('hex'); a.salt = salt; a.hash = pwHash(pw, salt); a.changed = Date.now() + 1; kvSet(CMD_KEY, all); return json(res, 200, { ok: true, username: user, password: pw }); }
+        if (act === 'reset') { const pw = newPassphrase(), salt = crypto.randomBytes(16).toString('hex'); a.salt = salt; a.hash = pwHash(pw, salt); a.changed = Date.now() + 1; a.mustChange = !!b.mustChange; kvSet(CMD_KEY, all); return json(res, 200, { ok: true, username: user, password: pw }); }
         if (act === 'disable' || act === 'enable') { a.disabled = act === 'disable'; a.changed = Date.now() + 1; kvSet(CMD_KEY, all); return json(res, 200, { ok: true }); }
         if (act === 'remove') { delete mine[user]; if (!Object.keys(mine).length) delete all[id]; kvSet(CMD_KEY, all); return json(res, 200, { ok: true }); }
         return json(res, 400, { error: 'Unknown action' });
