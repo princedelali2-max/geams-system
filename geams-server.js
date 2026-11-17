@@ -261,7 +261,11 @@ const roleLabel = (ses) => ses.role === 'hq' ? (ses.hqRole === 'admin' ? 'HQ own
 function kvPerm(key, action, hq) {
   if (/^archive:/.test(key)) return 'replay';
   if (hq && (/^lcr:[^:]+:incidents$/.test(key) || /^(chat|evidence):/.test(key))) return 'incidents';   // raw incident records, chat and evidence for HQ staff
-  if (action === 'r' && (/^registry:officers$/.test(key) || /^lcr:[^:]+:officers$/.test(key))) return 'officers';
+  if (hq && (/^hq:smsInbox$/.test(key) || /^lcr:[^:]+:(intel|handovers|officerAlerts)$/.test(key) || /^mutualaid:/.test(key))) return 'incidents';
+  if (!hq && /^lcr:[^:]+:(intel|handovers)$/.test(key)) return 'incidents';
+  if (!hq && /^lcr:[^:]+:officerAlerts$/.test(key)) return 'dispatch';
+  if (hq && action === 'r' && /^hq:tacticalOps$/.test(key)) return 'tactical';
+  if (action === 'r' && (/^registry:(officers|fire|ambulance|civilians|lcrCommanders)$/.test(key) || /^lcr:[^:]+:(officers|roster)$/.test(key))) return 'officers';
   if (/^backup:/.test(key)) return 'backup';
   if (action === 'w' && /^public:alerts$/.test(key)) return 'broadcast';
   if (action === 'w' && /^hq:tacticalOps$/.test(key)) return 'tactical';
@@ -432,12 +436,12 @@ const RULES = [
   [/^public:alerts$/, { r: ALL_R, w: ['hq'] }],
   [/^hq:smsInbox$/, { r: ['hq'], w: ['hq'] }],
   [/^public:ack:[^:]+$/, { r: ['hq', 'lcr'], w: ALL_R }],
-  [/^lcr:([^:]+):incidents$/, { r: ALL_R, w: ['hq', 'lcr', 'officer', 'civilian'], fence: true }],
-  [/^lcr:([^:]+):intel$/, { r: ['hq', 'lcr'], w: ['hq', 'lcr'], fence: true }],
+  [/^lcr:([^:]+):incidents$/, { r: ALL_R, w: ['hq', 'lcr', 'officer', 'civilian'], fence: true, fenceRead: true }],
+  [/^lcr:([^:]+):intel$/, { r: ['hq', 'lcr'], w: ['hq', 'lcr'], fence: true, fenceRead: true }],
   [/^lcr:([^:]+):handovers$/, { r: ['hq', 'lcr'], w: ['hq', 'lcr'], fence: true, fenceRead: true }],
   [/^lcr:([^:]+):roster$/, { r: ['hq', 'lcr', 'officer', 'fire', 'ambulance'], w: ['hq', 'lcr', 'officer', 'fire', 'ambulance'], fence: true, fenceRead: true }],
   [/^lcr:([^:]+):officers$/, { r: ['hq', 'lcr', 'officer', 'fire', 'ambulance'], w: ['hq', 'lcr', 'officer'], own: true, fence: true }],
-  [/^lcr:([^:]+):officerAlerts$/, { r: ['hq', 'lcr', 'officer'], w: ['hq', 'lcr', 'officer'], own: true, fence: true }],
+  [/^lcr:([^:]+):officerAlerts$/, { r: ['hq', 'lcr', 'officer'], w: ['hq', 'lcr', 'officer'], own: true, fence: true, fenceRead: true }],
   [/^fire:([^:]+):incidents$/, { r: ['hq', 'lcr', 'fire', 'fire_hq'], w: ['hq', 'lcr', 'fire'], fence: true }],
   [/^ambulance:([^:]+):incidents$/, { r: ['hq', 'lcr', 'ambulance', 'ambulance_hq'], w: ['hq', 'lcr', 'ambulance'], fence: true }],
   [/^mutualaid:(fire|ambulance):requests$/, { r: ['hq', 'lcr', 'fire', 'ambulance'], w: ['hq', 'lcr', 'fire', 'ambulance'] }],
@@ -487,6 +491,11 @@ function civMayUse(ses, incId, forWrite) {
 }
 // officers, fire and ambulance crews: evidence, chat and signalling only for incidents of their own control room (any other station's is refused)
 function staffMayUse(ses, incId, forWrite) {
+  if (ses && ses.role === 'hq' && !can(ses, 'incidents')) return false;   // an HQ role without incidents (the analyst) gets no evidence, chat or recordings
+  if (ses && ses.role === 'lcr') {   // a control room reaches chat, evidence and archives of its own station's incidents only (HQ reaches all)
+    const f = findIncident(incId); if (f) return f.sid === ses.sid;
+    return true;   // no live record (purged or not yet written): nothing here to read across
+  }
   if (!ses || !['officer', 'fire', 'ambulance'].includes(ses.role)) return true;
   const f = findIncident(incId);
   if (f) return f.sid === ses.lcr;
@@ -1329,7 +1338,7 @@ const server = http.createServer(async (req, res) => {
       if (!bump('signup|' + clientIp(req), 30, 10 * 60000)) return json(res, 429, { error: 'Too many sign-ups from this address. Try again later.' });
       const c = b.cred || {}, name = clean(c.name, 60), phone = clean(c.phone, 30), lcrId = clean(c.lcrId, 80);
       if (!name || !phone || !lcrId) return json(res, 400, { error: 'Name, phone and control room are required' });
-      if (String(b.password || '').length < 6) return json(res, 400, { error: 'Password must be at least 6 characters' });
+      if (String(b.password || '').length < 8) return json(res, 400, { error: 'Password must be at least 8 characters' });
       const list = Array.isArray(kvGet(U.key, null)) ? kvGet(U.key, []).slice() : [];
       const pendList = Object.values(kvGet(UNIT_PENDING, {})).filter(x => x.kind === kind).map(x => x.cred);
       if (list.concat(pendList).some(x => x.phone === phone)) return json(res, 409, { error: 'An account is already registered with this phone number.' });
@@ -1837,12 +1846,14 @@ const server = http.createServer(async (req, res) => {
     }
     if (p === '/api/escalations' && req.method === 'GET') {
       const ses = sessionOf(req, true); if (!ses || ses.role !== 'hq') return json(res, 403, { error: 'HQ only' });
+      if (!can(ses, 'incidents')) return json(res, 403, { error: 'Your role (' + roleLabel(ses) + ') does not include this' });
       const map = kvGet('registry:escalations', {}), list = Object.values(isObj(map) ? map : {}), c = ESC();
       const now = Date.now(); list.forEach(e => { if (e.open) e.waitedSecs = Math.round((now - e.since) / 1000); });
       return json(res, 200, { open: list.filter(e => e.open).sort((a, b) => a.since - b.since), recent: list.filter(e => !e.open).sort((a, b) => b.clearedAt - a.clearedAt).slice(0, 50), config: { secs: c.secs, offlineSecs: c.offlineSecs }, note: 'This only warns. Nothing is moved or sent automatically. Phone the control room or a neighbour.' });
     }
     if (p === '/api/escalations/ack' && req.method === 'POST') {
       const ses = sessionOf(req); if (!ses || ses.role !== 'hq') return json(res, 403, { error: 'HQ only' });
+      if (!can(ses, 'incidents')) return json(res, 403, { error: 'Your role (' + roleLabel(ses) + ') does not include this' });
       const b = await readBody(req), map = kvGet('registry:escalations', {}), e = isObj(map) ? map[String(b.key || '')] : null; if (!e) return json(res, 404, { error: 'Unknown warning' });
       e.ackBy = ses.user; e.ackAt = Date.now(); e.ackNote = String(b.note || '').slice(0, 160); kvSet('registry:escalations', map); staffLog(ses, 'escalation.ack', e.ref, e.ackNote ? 'note' : '', e.sid); return json(res, 200, { ok: true });
     }
@@ -2024,6 +2035,7 @@ const server = http.createServer(async (req, res) => {
     // ── Pilot evaluation report (HQ): anonymised numbers only, no names, phones, addresses or free text ──
     if (p === '/api/hq/pilot-report' && req.method === 'GET') {
       const ses = sessionOf(req); if (!ses || ses.role !== 'hq') return json(res, 401, { error: 'HQ sign-in required' });
+      if (!can(ses, 'analytics')) return json(res, 403, { error: 'Your role (' + roleLabel(ses) + ') does not include this' });
       const days = Math.min(Math.max(parseInt(u.searchParams.get('days'), 10) || 30, 1), 400), from = Date.now() - days * 86400000;
       const ra = responseAnalytics({ days: String(days) }, { role: 'hq' });
       const byType = {}, byPrio = {}, byStatus = {}, byHour = Array(24).fill(0); let total = 0, drills = 0, civ = 0, walk = 0; const civIds = new Set();
@@ -2271,6 +2283,10 @@ const server = http.createServer(async (req, res) => {
         if (e && az.ses && az.ses.role === 'civilian' && /^lcr:[^:]+:incidents$/.test(key)) {
           const mine = {}; for (const [id, r] of Object.entries(isObj(e.value) ? e.value : {})) if (canSee(r, az.ses.dev)) mine[id] = civView(r);
           return json(res, 200, { found: true, value: mine, v: e.v });
+        }
+        // an officer or crew member sees the people of their own control room, not the national list of names and phone numbers
+        if (e && az.ses && ['officer', 'fire', 'ambulance'].includes(az.ses.role) && /^registry:(officers|fire|ambulance)$/.test(key) && Array.isArray(e.value)) {
+          return json(res, 200, { found: true, value: e.value.filter(x => x && (x.lcrId === az.ses.lcr || (az.ses.badge && x.badge === az.ses.badge))), v: e.v });
         }
         return json(res, 200, e ? { found: true, value: e.value, v: e.v } : { found: false, v: 0 });
       }

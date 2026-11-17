@@ -459,3 +459,26 @@ Sign-in form: the control-room form now asks the server whether commander accoun
   A passphrase alone is refused by the server once any commander account exists, whatever the form shows.
 Tests: t_ownpassword.js (17 screen checks), t_rbac.js (97 server checks). The help tour step for Sign out in the Fire and
   Ambulance apps was updated to the new Sign out button.
+
+
+PILOT READINESS AUDIT (access, maps, passwords)
+-----------------------------------------------
+Maps: the Fire and Ambulance crew apps and the Fire HQ and Ambulance HQ maps showed satellite pictures only, so nothing named
+  where you were. Satellite now also draws the place-name and border layer, as the HQ, LCR and Dispatch screens always did.
+  The Fire HQ and Ambulance HQ maps open on Ghana instead of a guessed zoom. As before, vendor/geams-map.js stops asking for
+  imagery detail Ghana does not have (it would be grey) and falls back to the street map, with a notice, if pictures cannot load.
+Access fixes found by the audit (all enforced by the server, with tests in t_rbac.js):
+  - A control room could read other stations' incident lists, chat, evidence, replay archives, intel and officer alerts (only
+    writing was fenced). It now reaches its own station's only. HQ still reaches every station.
+  - Some records were hidden only by menu for restricted roles: SMS inbox, intel, handovers, officer alerts, mutual aid,
+    civilian register, fire/ambulance registers, the commanders list, tactical, escalations, pilot report, evidence files.
+    They now follow the role (analyst: counts only; duty: incidents, officers, tactical; and so on).
+  - An officer or Fire/Ambulance crew member could read the national list of officer names and phone numbers. They now see
+    their own control room's people only.
+  - Crew sign-up passwords need 8 or more characters (was 6), the same as changing a password.
+  - The mutual-aid test was updated to the current flow (agency approval, incoming-call screen); it passes.
+Still true, and worth knowing for the pilot:
+  - Officers and crews see the whole incident list of their own control room, not only their own jobs.
+  - Tokens are signed and stay valid until they expire; a disabled account loses access on its next request, but a copied token
+    for an account that is not disabled keeps working until expiry or until the owner rotates tokens (HQ menu).
+  - Phones and browsers must be online to sync; polling is every few seconds, not push.

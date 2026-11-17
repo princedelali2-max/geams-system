@@ -148,7 +148,7 @@
     <div class="login-field"><label class="login-label">Police control room (LCR) covering your area</label>
       <select class="login-input" id="su-lcr"><!-- populated by JS from STATION_DIRECTORY --></select></div>
     <div class="login-field"><label class="login-label">Create Password</label>
-      <input class="login-input" id="su-pass" type="password" placeholder="At least 6 characters"></div>
+      <input class="login-input" id="su-pass" type="password" placeholder="At least 8 characters"></div>
     <div class="login-field"><label class="login-label">Confirm Password</label>
       <input class="login-input" id="su-pass2" type="password" placeholder="Re-enter password"></div>
     <div class="login-error" id="su-err-general" style="text-align:center;margin-top:6px"></div>
@@ -843,9 +843,9 @@ const FireApp = (() => {
     const pass2 = document.getElementById('su-pass2')?.value || '';
     const genErr = document.getElementById('su-err-general');
     if (genErr) genErr.textContent = '';
-    if (!name || !phone || !lcrId || pass.length < 6 || pass !== pass2) {
+    if (!name || !phone || !lcrId || pass.length < 8 || pass !== pass2) {
       if (genErr) genErr.textContent = !name || !phone || !lcrId ? 'Fill in all required fields.' :
-        pass.length < 6 ? 'Password must be at least 6 characters.' : 'Passwords do not match.';
+        pass.length < 8 ? 'Password must be at least 8 characters.' : 'Passwords do not match.';
       return;
     }
     const btn = document.getElementById('signup-btn');
@@ -1378,7 +1378,11 @@ const FireApp = (() => {
     if (map) { try { map.remove(); } catch(e){} map = null; backupMarker = null; }
     const center = [job.unitLat || job.lat, job.unitLng || job.lng];
     map = L.map('incident-map', { zoomControl:true, attributionControl:false }).setView(center, 13);
-    const satL = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom:19 }), strL = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:19 });
+    // Satellite = Esri imagery + the place-name and border layer, as on every other GEAMS screen (imagery alone names nothing).
+    // vendor/geams-map.js caps the imagery detail level over Ghana and falls back to the street map, with a notice, if tiles will not load.
+    const satI = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom:19, maxNativeZoom:17 });
+    const satLab = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', { maxZoom:19, maxNativeZoom:17, opacity:0.75 });
+    const satL = L.layerGroup([satI, satLab]), strL = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:19 });
     let mode = 'sat'; try { mode = localStorage.getItem('geams-crew-map') || 'sat'; } catch (e) {}
     const ctl = L.control({ position: 'topright' });
     ctl.onAdd = () => {

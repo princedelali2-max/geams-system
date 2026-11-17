@@ -654,8 +654,8 @@ body{background:var(--bg-void);color:var(--text-bright);font-family:var(--font-u
     </div>
     <div class="login-field">
       <label class="login-label" for="su-pass">Create Password</label>
-      <input class="login-input" id="su-pass" type="password" placeholder="At least 6 characters" autocomplete="new-password">
-      <div class="login-error" id="su-err-pass">Password must be at least 6 characters</div>
+      <input class="login-input" id="su-pass" type="password" placeholder="At least 8 characters" autocomplete="new-password">
+      <div class="login-error" id="su-err-pass">Password must be at least 8 characters</div>
     </div>
     <div class="login-field" style="margin-bottom:4px">
       <label class="login-label" for="su-pass2">Confirm Password</label>
@@ -4154,7 +4154,7 @@ const DispatchApp = (() => {
     if (!name) { document.getElementById('su-name')?.classList.add('error'); document.getElementById('su-err-name')?.classList.add('show'); valid = false; }
     if (!phone) { document.getElementById('su-phone')?.classList.add('error'); document.getElementById('su-err-phone')?.classList.add('show'); valid = false; }
     if (!lcrId) { document.getElementById('su-lcr')?.classList.add('error'); document.getElementById('su-err-lcr')?.classList.add('show'); valid = false; }
-    if (!pass || pass.length < 6) { document.getElementById('su-pass')?.classList.add('error'); document.getElementById('su-err-pass')?.classList.add('show'); valid = false; }
+    if (!pass || pass.length < 8) { document.getElementById('su-pass')?.classList.add('error'); document.getElementById('su-err-pass')?.classList.add('show'); valid = false; }
     if (pass !== pass2) { document.getElementById('su-pass2')?.classList.add('error'); document.getElementById('su-err-pass2')?.classList.add('show'); valid = false; }
     if (!valid) return;
 
