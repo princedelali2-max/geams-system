@@ -482,3 +482,16 @@ Still true, and worth knowing for the pilot:
   - Tokens are signed and stay valid until they expire; a disabled account loses access on its next request, but a copied token
     for an account that is not disabled keeps working until expiry or until the owner rotates tokens (HQ menu).
   - Phones and browsers must be online to sync; polling is every few seconds, not push.
+
+
+CONTROL ROOM POSITION (Hohoe showing as Ho)
+-------------------------------------------
+Cause: creating a control room without an exact position silently used the centre of the region. The centre of Volta is Ho, so
+a Hohoe station was placed, and its jurisdiction drawn, on Ho.
+Now: with no position given, HQ looks the town up inside Ghana and shows the match (latitude and longitude filled in) for you to
+check; you press Create again to confirm. A near-miss (Ho for Hohoe) is not accepted. If the town cannot be found, HQ explains the
+region-centre problem and creates the station on the centre only if you agree.
+Fix an existing station: the 📍 button on its row in HQ > Stations opens a position dialog (search, paste coordinates, or use this
+device); it saves for everyone and the maps and jurisdiction follow at once. A position the control room itself confirmed on site
+(Settings > Verify Station Location) is not overwritten from HQ. Built-in sample stations have no editable record.
+Test: t_stationpos.js (13 checks).
