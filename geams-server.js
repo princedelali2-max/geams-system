@@ -1341,7 +1341,8 @@ const server = http.createServer(async (req, res) => {
       if (String(b.password || '').length < 8) return json(res, 400, { error: 'Password must be at least 8 characters' });
       const list = Array.isArray(kvGet(U.key, null)) ? kvGet(U.key, []).slice() : [];
       const pendList = Object.values(kvGet(UNIT_PENDING, {})).filter(x => x.kind === kind).map(x => x.cred);
-      if (list.concat(pendList).some(x => x.phone === phone)) return json(res, 409, { error: 'An account is already registered with this phone number.' });
+      if (pendList.some(x => x.phone === phone)) return json(res, 409, { error: 'You have already registered with this phone number and are waiting for ' + approverName(kind) + ' to approve you. Do not register again; ask them to approve you, then sign in.' });
+      if (list.some(x => x.phone === phone)) return json(res, 409, { error: 'An account is already registered with this phone number. Use Sign In instead.' });
       if (list.concat(pendList).some(x => String(x.name).toLowerCase() === name.toLowerCase())) return json(res, 409, { error: 'An account with this name already exists. Add a middle name or initial.' });
       let badge; do { badge = U.prefix + (20000 + crypto.randomInt(0, 79999)); } while (list.some(x => x.badge === badge));
       const cred = { badge, [U.idf]: U.idp + (5000 + crypto.randomInt(0, 4999)), name, rank: clean(c.rank, 40), lcrId, vehicle: clean(c.vehicle, 60) || 'Unassigned', phone };

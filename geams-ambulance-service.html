@@ -501,6 +501,7 @@ const AmbulanceData = (() => {
   // LCRs created by HQ join the station directory (crew sign-up, nearby stations, mutual aid).
   function applyDynamicStations(map) {
     if (!map) return;
+    try { setTimeout(refreshSignupList, 0); } catch (e) {}
     Object.values(map).forEach(r => {
       if (!r || !r.id) return;
       const i = STATION_DIRECTORY.findIndex(x => x.id === r.id);
@@ -511,9 +512,18 @@ const AmbulanceData = (() => {
       if (window.GEAMS_CONFIG && window.GEAMS_CONFIG.demoStations === false) {   // real deployment: the built-in demo stations are not live
         const live = new Set(Object.values(map).filter(r => r && r.id && !r.disabled).map(r => r.id));
         for (let i = STATION_DIRECTORY.length - 1; i >= 0; i--) if (!live.has(STATION_DIRECTORY[i].id)) STATION_DIRECTORY.splice(i, 1);
-        const sel = document.getElementById('su-lcr');
-        if (sel && sel.dataset.filled) sel.innerHTML = '<option value="">— Select jurisdiction —</option>' + STATION_DIRECTORY.map(s => `<option value="${s.id}">${s.name} LCR</option>`).join('');
       }
+  }
+  // Keep the sign-up control-room list current WITHOUT resetting what the crew member already picked
+  // (the list is re-checked every few seconds; rebuilding it blindly cleared their choice mid-form).
+  function refreshSignupList() {
+    const sel = document.getElementById('su-lcr'); if (!sel || !sel.dataset.filled) return;
+    const sig = STATION_DIRECTORY.map(s => s.id + '|' + s.name).join(',');
+    if (sel.dataset.sig === sig) return;
+    const keep = sel.value;
+    sel.innerHTML = '<option value="">— Select jurisdiction —</option>' + STATION_DIRECTORY.map(s => `<option value="${s.id}">${s.name} LCR</option>`).join('');
+    sel.dataset.sig = sig;
+    if (keep && STATION_DIRECTORY.some(s => s.id === keep)) sel.value = keep;
   }
   GeamsSync.getShared('registry:stations', {}).then(applyDynamicStations);
   GeamsSync.watch('registry:stations', {}, applyDynamicStations, 4000);
