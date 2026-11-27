@@ -3967,16 +3967,16 @@ const GeamsMap = (() => {
     const latLines = [5,6,7,8,9,10,11].map(lat => {
       const [,y] = toSVG(0, lat);
       return `
-        <line x1="35" y1="${y}" x2="765" y2="${y}" stroke="#0c1e30" stroke-width="0.5" stroke-dasharray="4,10"/>
-        <text x="28" y="${y+3}" font-size="7.5" fill="#162a3d" font-family="monospace" text-anchor="end">${lat}°N</text>
+        <line x1="35" y1="${y}" x2="765" y2="${y}" stroke="#17324d" stroke-width="0.6" stroke-dasharray="4,10"/>
+        <text x="28" y="${y+3}" font-size="8" fill="#4f7396" font-family="monospace" text-anchor="end">${lat}°N</text>
       `;
     }).join('');
 
     const lonLines = [-3,-2,-1,0,1].map(lon => {
       const [x,] = toSVG(lon, 0);
       return `
-        <line x1="${x}" y1="45" x2="${x}" y2="855" stroke="#0c1e30" stroke-width="0.5" stroke-dasharray="4,10"/>
-        <text x="${x}" y="872" font-size="7.5" fill="#162a3d" font-family="monospace" text-anchor="middle">${lon < 0 ? Math.abs(lon)+'°W' : lon === 0 ? '0°' : lon+'°E'}</text>
+        <line x1="${x}" y1="45" x2="${x}" y2="855" stroke="#17324d" stroke-width="0.6" stroke-dasharray="4,10"/>
+        <text x="${x}" y="872" font-size="8" fill="#4f7396" font-family="monospace" text-anchor="middle">${lon < 0 ? Math.abs(lon)+'°W' : lon === 0 ? '0°' : lon+'°E'}</text>
       `;
     }).join('');
 
@@ -3984,11 +3984,19 @@ const GeamsMap = (() => {
     const regionLabels = REGIONS.map(r => {
       const lines = r.name.split('\n');
       return lines.map((line, i) =>
-        `<text x="${r.x}" y="${r.y + i * 10}" font-size="8" fill="#172d44"
+        `<text x="${r.x}" y="${r.y + i * 10}" font-size="9" fill="#6b92b6"
           font-family="'Share Tech Mono',monospace" text-anchor="middle"
           letter-spacing="0.5" font-weight="600">${line}</text>`
       ).join('');
     }).join('\n');
+
+    // Say plainly what is (not) on the map instead of showing an empty outline
+    const _all = GeamsData.stations || [];
+    const _unplaced = _all.filter(s => !posOfStation(s));
+    let mapNoticeText = '';
+    if (!_all.length) mapNoticeText = '<b>No control rooms yet.</b> Create one under <b>Stations</b> and it appears here as soon as it has a position.';
+    else if (_unplaced.length) mapNoticeText = '<b>' + _unplaced.length + ' of ' + _all.length + ' control room' + (_all.length === 1 ? '' : 's') + ' not plotted</b>: no position yet. Open <b>Stations</b> and use the 📍 button to set one.';
+    const mapNotice = mapNoticeText ? `<div style="position:absolute;left:50%;bottom:16px;transform:translateX(-50%);z-index:30;max-width:min(520px,80%);text-align:center;font-size:.74rem;line-height:1.45;color:#cfe3f7;background:rgba(2,6,13,.92);border:1px solid #2a4a6c;border-radius:8px;padding:9px 14px">${mapNoticeText}</div>` : '';
 
     container.innerHTML = `
       <div id="map-frame" style="position:absolute">
@@ -4045,7 +4053,7 @@ const GeamsMap = (() => {
 
         <!-- LAKE VOLTA (blue fill) -->
         <path d="${LAKE_VOLTA}" fill="#0a2540" stroke="#1a4060" stroke-width="0.8" opacity="0.7"/>
-        <text x="645" y="490" font-size="7" fill="#1a4060" font-family="monospace" text-anchor="middle" transform="rotate(-70, 645, 490)">LAKE VOLTA</text>
+        <text x="645" y="490" font-size="8" fill="#5a86ab" font-family="monospace" text-anchor="middle" transform="rotate(-70, 645, 490)">LAKE VOLTA</text>
 
         <!-- RIVERS -->
         ${RIVERS.map(d =>
@@ -4099,6 +4107,7 @@ const GeamsMap = (() => {
       ${incidentPinsHTML}
       </div>
 
+      ${mapNotice}
       <!-- TITLE OVERLAY -->
       <div style="position:absolute;top:10px;left:10px;
         font-family:var(--font-mono);font-size:0.62rem;letter-spacing:2px;
